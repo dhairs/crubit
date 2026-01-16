@@ -133,7 +133,8 @@ def _generate_bindings(ctx, target, basename, inputs, args, rustc_env, proto_cra
 
     crubit_args.add("--crubit-support-path-format", "\"support/{header}\"")
 
-    crubit_args.add("--clang-format-exe-path", ctx.executable._clang_format)
+    if ctx.executable._clang_format:
+        crubit_args.add("--clang-format-exe-path", ctx.executable._clang_format)
     crubit_args.add("--rustfmt-exe-path", ctx.file._rustfmt)
     crubit_args.add("--rustfmt-config-path", ctx.file._rustfmt_cfg)
 
