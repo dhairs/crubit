@@ -152,3 +152,166 @@ pub mod fn_must_use_tests {
         x + y
     }
 }
+
+pub mod generic_fn_tests {
+    pub mod into_trait_tests {
+        pub fn basic_test(arg: impl Into<i32>) -> i32 {
+            arg.into()
+        }
+
+        pub fn where_clause<T>(x: T) -> i32
+        where
+            T: Into<i32>,
+        {
+            x.into()
+        }
+
+        pub fn reused_generic_param<T: Into<i32>>(x: T, y: T) -> i32 {
+            x.into() + y.into()
+        }
+
+        pub fn multiple_generic_params(x: impl Into<i32>, y: impl Into<i32>) -> i32 {
+            x.into() + y.into()
+        }
+
+        pub fn return_type<T: Into<i32> + Default>() -> T {
+            T::default()
+        }
+
+        /// This test was initially added to cover/verify the call to
+        /// `super_visit_with` from an `impl` of `GenericParamsFinder` in
+        /// `get_generic_args.rs`.
+        pub fn generic_param_nested_deeper_in_param_ty<T: Into<i32>>(xs: [T; 3]) -> i32 {
+            xs.into_iter().map(Into::into).sum()
+        }
+
+        /// Bindings for `fn unused_generic_param` are not supported, because
+        /// currently we don't spell out the generic type arguments in the
+        /// generated code (depending on type inference instead).  This doesn't
+        /// work for generic unused generic type parameters - e.g.:
+        ///
+        /// ```txt
+        /// error[E0283]: type annotations needed
+        ///
+        /// unsafe { ::functions::generic_fn_tests::into_trait_tests::unused_generic_param() }
+        ///          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+        /// cannot infer type of the type parameter `T` declared on the function `unused_generic_param`
+        /// ...
+        /// help: consider specifying the generic argument
+        ///
+        /// unsafe { ::functions::generic_fn_tests::into_trait_tests::unused_generic_param::<T>() }
+        /// ```
+        pub fn unused_generic_param<T: Into<i32>>() {}
+    }
+
+    pub mod as_ref_trait_tests {
+        pub fn slice_ref_sum(arg: impl AsRef<[i32]>) -> i32 {
+            arg.as_ref().iter().sum()
+        }
+
+        /// The substitution `impl AsRef<[i32]>` => `&[u32]` needs to "conjure" a new, late-bound
+        /// lifetime/region.  The test below is an ad-hoc attempt to test that the new region
+        /// doesn't somehow clobber/conflict with existing implicit or explicit lifetimes.
+        /// `impl AsRef<[i32]>` is "sandwiched" in the middle to increase the chances that
+        /// a conflict would be caught somehow.  The test never failed, so it's unclear how
+        /// useful it is.
+        #[allow(clippy::needless_lifetimes)]
+        pub fn diverse_lifetimes<'a, 'b>(
+            arg1: &[i32],
+            arg2: &'a [i32],
+            arg3: impl AsRef<[i32]>,
+            result: &'b mut [i32],
+        ) {
+            let sums = arg1
+                .iter()
+                .zip(arg2.iter())
+                .map(|(x, y)| x + y)
+                .zip(arg3.as_ref().iter())
+                .map(|(x, y)| x + y);
+            for (sum, result) in sums.zip(result.iter_mut()) {
+                *result = sum;
+            }
+        }
+
+        /// This is an attempt to trigger an error seen in
+        /// https://play.rust-lang.org/?version=stable&mode=debug&edition=2024&gist=42303eaaafe4a3538ad259e9e9b67f05
+        ///
+        /// Today the error doesn't happen in Crubit, because the thunks explicitly
+        /// declare all their lifetimes as `'static` - see `fn replace_all_regions_with_static`.
+        pub fn static_lifetime_requirement<T>(arg: T) -> i32
+        where
+            T: AsRef<[i32]> + 'static,
+        {
+            arg.as_ref().iter().sum()
+        }
+
+        #[repr(transparent)]
+        pub struct MyStruct(i32);
+
+        impl MyStruct {
+            pub fn new(x: i32) -> Self {
+                MyStruct(x)
+            }
+        }
+
+        impl AsRef<MyStruct> for MyStruct {
+            fn as_ref(&self) -> &MyStruct {
+                self
+            }
+        }
+
+        pub fn struct_ref(arg: impl AsRef<MyStruct>) -> i32 {
+            arg.as_ref().0
+        }
+    }
+
+    pub mod as_mut_trait_tests {
+        pub fn prefix_sums(mut arg: impl AsMut<[i32]>) {
+            let mut sum = 0;
+            for x in arg.as_mut() {
+                sum += *x;
+                *x = sum;
+            }
+        }
+    }
+
+    pub mod ctor_trait_tests {
+        use crubit_annotate::must_bind;
+        use ctor::Ctor;
+        use std::marker::PhantomPinned;
+
+        #[must_bind]
+        pub struct NonMovable {
+            pub value: i32,
+            _pinned: PhantomPinned,
+        }
+
+        impl NonMovable {
+            pub fn new(value: i32) -> Self {
+                NonMovable { value, _pinned: PhantomPinned }
+            }
+        }
+
+        impl<'a> ::ctor::CtorNew<::ctor::RvalueReference<'a, Self>> for NonMovable {
+            type CtorType = ::ctor::RvalueReference<'a, Self>;
+            type Error = i32;
+            fn ctor_new(
+                args: ::ctor::RvalueReference<'a, Self>,
+            ) -> ::ctor::RvalueReference<'a, Self> {
+                args
+            }
+        }
+
+        pub fn accept_ctor(_c: impl Ctor<Output = NonMovable>) -> i32 {
+            42
+        }
+
+        pub struct Movable {
+            pub value: i32,
+        }
+
+        pub fn accept_ctor_movable(_c: impl Ctor<Output = Movable>) -> i32 {
+            42
+        }
+    }
+}

@@ -20,7 +20,7 @@ _EXPERIMENTAL_CLIENTS = [
 # A feature set containing all supported Crubit features.
 # Add this to the `aspect_hints` of a `cc_library` to generate Rust bindings for that library.
 #
-# See <internal link>
+# See crubit.rs-features#supported
 crubit_feature_hint(
     name = "supported",
     compatible_with = ["//buildenv/target:non_prod"],
@@ -30,13 +30,12 @@ crubit_feature_hint(
 
 _WRAPPER_FEATURES = [
     "wrapper",
-    "non_unpin_ctor",
 ]
 
 # A feature set containing wrapper-library Crubit features, in addition to the officially supported
 # features.
 #
-# See <internal link>
+# See crubit.rs-features#wrapper
 crubit_feature_hint(
     name = "wrapper",
     compatible_with = ["//buildenv/target:non_prod"],
@@ -44,56 +43,137 @@ crubit_feature_hint(
     visibility = _EXPERIMENTAL_CLIENTS,
 )
 
-# A feature set which specifically std::vector support.
+# A rust_api_from_cpp feature which only enables bindings for types.
 #
-# See <internal link>
+# If `types` is enabled, but `supported` is not, then named functions and methods will not receive
+# bindings. However, constructors, destructors, and operators will still receive bindings, as these
+# are essential for working with values of the provided type.
 crubit_feature_hint(
-    name = "std_vector",
+    name = "types",
     compatible_with = ["//buildenv/target:non_prod"],
-    crubit_features = SUPPORTED_FEATURES,
+    crubit_features = ["types"],
     visibility = ["//visibility:public"],
 )
 
-# A feature set which specifically enables std::unique_ptr support.
+# Explicitly disables assume_lifetimes for a target.
 #
-# See <internal link>
+# See crubit.rs-features#other
 crubit_feature_hint(
-    name = "std_unique_ptr",
+    name = "no_assume_lifetimes",
     compatible_with = ["//buildenv/target:non_prod"],
-    crubit_features = SUPPORTED_FEATURES + ["std_unique_ptr"],
+    crubit_features = SUPPORTED_FEATURES + ["no_assume_lifetimes"],
     visibility = ["//visibility:public"],
 )
 
-# A feature set which specifically enables non-`Unpin` type handling with the `ctor` crate.
+# A feature set enabling ergonomic lifetime defaults when interpreting lifetime annotations.
 #
-# See <internal link>
+# See crubit.rs-features#other
 crubit_feature_hint(
-    name = "non_unpin_ctor",
+    name = "assume_lifetimes",
     compatible_with = ["//buildenv/target:non_prod"],
-    crubit_features = SUPPORTED_FEATURES + ["non_unpin_ctor"],
-    visibility = ["//visibility:public"],
-)
-
-# A feature set enabling emitting `ffi_11` types in bindings.
-#
-# See <internal link>
-crubit_feature_hint(
-    name = "custom_ffi_types",
-    compatible_with = ["//buildenv/target:non_prod"],
-    crubit_features = SUPPORTED_FEATURES + ["custom_ffi_types"],
+    crubit_features = SUPPORTED_FEATURES + ["assume_lifetimes"],
     visibility = ["//visibility:public"],
 )
 
 # A feature set containing experimental Crubit features, in addition to the officially supported
 # features.
 #
-# See <internal link>
+# See crubit.rs-features#experimental
 crubit_feature_hint(
     name = "experimental",
     compatible_with = ["//buildenv/target:non_prod"],
     # TODO(b/409128537): Add _WRAPPER_FEATURES on next binary release.
     crubit_features = ["all"],
     visibility = _EXPERIMENTAL_CLIENTS,
+)
+
+# A feature set enabling the `this` pointer to be interpreted as a reference.
+#
+# See crubit.rs-features#other
+crubit_feature_hint(
+    name = "assume_this_lifetimes",
+    compatible_with = ["//buildenv/target:non_prod"],
+    crubit_features = SUPPORTED_FEATURES + ["assume_this_lifetimes"],
+    visibility = ["//visibility:public"],
+)
+
+crubit_feature_hint(
+    name = "callables",
+    compatible_with = ["//buildenv/target:non_prod"],
+    crubit_features = SUPPORTED_FEATURES + ["callables"],
+    visibility = ["//visibility:public"],
+)
+
+# A feature set enabling bindings generation via Protobuf IR rather than JSON IR.
+#
+# See crubit.rs-features#other
+crubit_feature_hint(
+    name = "use_protobuf_ir",
+    compatible_with = ["//buildenv/target:non_prod"],
+    crubit_features = SUPPORTED_FEATURES + ["use_protobuf_ir"],
+    visibility = ["//visibility:public"],
+)
+
+# A feature set marking C++ classes with `[[gsl::Pointer]]` as unsafe.
+#
+# See crubit.rs-features#other
+crubit_feature_hint(
+    name = "unsafe_view",
+    compatible_with = ["//buildenv/target:non_prod"],
+    crubit_features = SUPPORTED_FEATURES + ["unsafe_view"],
+    visibility = ["//visibility:public"],
+)
+
+# A feature set where  C++ default constructors are checked to fully initialize all public fields.
+#
+# See crubit.rs-features#other
+crubit_feature_hint(
+    name = "check_default_initialized",
+    compatible_with = ["//buildenv/target:non_prod"],
+    crubit_features = SUPPORTED_FEATURES + ["check_default_initialized"],
+    visibility = ["//visibility:public"],
+)
+
+# A feature set enabling leading colons for C++ type paths in annotations.
+#
+# See crubit.rs-features#other
+crubit_feature_hint(
+    name = "leading_colons_for_cpp_type",
+    compatible_with = ["//buildenv/target:non_prod"],
+    crubit_features = SUPPORTED_FEATURES + ["leading_colons_for_cpp_type"],
+    visibility = ["//visibility:public"],
+)
+
+# A feature set enabling bindings for arbitrary template instantiations.
+#
+# See crubit.rs-features#other
+crubit_feature_hint(
+    name = "template_instantiation",
+    compatible_with = ["//buildenv/target:non_prod"],
+    crubit_features = SUPPORTED_FEATURES + ["template_instantiation"],
+    visibility = ["//visibility:public"],
+)
+
+# A feature set enabling generating `rs_std::Tuple` everywhere.
+#
+# See crubit.rs-features#other
+crubit_feature_hint(
+    name = "layout_compat_tuple",
+    compatible_with = ["//buildenv/target:non_prod"],
+    crubit_features = SUPPORTED_FEATURES + ["layout_compat_tuple"],
+    visibility = ["//visibility:public"],
+)
+
+# A feature set enabling specialization of standard library generics (like Option/Result)
+# everywhere instead of composable bridging. This flag only impacts cpp_api_from_rust users,
+# and has no impact on rust_api_from_cpp users.
+#
+# See crubit.rs-features#other
+crubit_feature_hint(
+    name = "always_specialize_generics_in_cpp_api_from_rust",
+    compatible_with = ["//buildenv/target:non_prod"],
+    crubit_features = SUPPORTED_FEATURES + ["always_specialize_generics_in_cpp_api_from_rust"],
+    visibility = ["//visibility:public"],
 )
 
 # Implementation details follow.

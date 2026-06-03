@@ -4,26 +4,36 @@
 
 extern crate std;
 
+use crate::lossy_utf8::LossyUtf8Display;
 use crate::slice_ptr::get_raw_parts;
 use crate::std::raw_string_view;
+use core::fmt::Display;
+use core::hash::{Hash, Hasher};
+use core::ops::Deref;
 use core::ptr;
+use core::str::Utf8Chunks;
 
 #[cfg(unix)]
 use std::os::unix::ffi::{OsStrExt, OsStringExt};
 
-/// Live type for std::string_view bindings.
+/// A C++ `std::string_view` which is live and immutable for the lifetime `'a`.
 ///
-/// This is a raw_string_view wrapper with an associated lifetime.
+/// This type is similar to `&str` or `&[u8]`. It refers to an immutable slice of bytes, and
+/// commonly refers to text. Conceptually, this is quite similar to the `ByteStr` type, but is
+/// guaranteed to have the same in-memory layout as C++'s `std::string_view`.
 ///
-/// # Invariants
+/// Unlike `&str`, `string_view` data may not be valid UTF-8.
+/// For this reason, `string_view` does not implement `Display` directly, though it does provide a
+/// `.display()` method which will replace invalid UTF-8 with the Unicode replacement character
+/// U+FFFD (`�`).
 ///
-/// * The contained raw_string_view is valid for lifetime `'a`.
-/// * This does **not** make any guarantees about mutable aliasing.
+/// This type is distinct from the `raw_string_view` type, which does not have a lifetime and
+/// cannot be used directly in safe Rust code.
 #[allow(non_camel_case_types)]
 #[repr(transparent)]
 #[doc = "CRUBIT_ANNOTATE: cpp_type=std::string_view"]
 #[doc = "CRUBIT_ANNOTATE: include_path=<string_view>"]
-#[derive(Debug)]
+#[derive(Copy, Clone)]
 pub struct string_view<'a> {
     raw: raw_string_view,
     phantom_data: core::marker::PhantomData<&'a ()>,
@@ -43,41 +53,34 @@ impl<'a> string_view<'a> {
     }
 
     ///  Returns a Rust byte slice referring to the string_view's data.
-    ///
-    /// # Safety
-    ///
-    /// The viewed memory must NOT be mutated by any C++ code during `'a`.
-    /// The returned `&'a [u8]` requires this immutability. While C++ `std::string_view`
-    /// itself provides read-only access, the C++ code owning the viewed data must
-    /// not modify it via other aliases for the duration of `'a`.
-    pub unsafe fn as_bytes(&self) -> &'a [u8] {
+    pub fn as_bytes(&self) -> &'a [u8] {
         // SAFETY (internal dereference): The method's SAFETY contract (see above) ensures
         // `self.raw` points to memory that is valid and immutable for lifetime `'a`.
         // `self.raw.as_raw_bytes()` provides a `*const [u8]`, correctly handling
         // empty/null cases for dereferencing to an empty slice. Thus, `&*` is safe.
-        &*self.raw.as_raw_bytes()
+        unsafe { &*self.raw.as_raw_bytes() }
+    }
+
+    /// Returns an [`Iterator`] over the utf-8 chunks.
+    pub fn utf8_chunks(&self) -> Utf8Chunks<'a> {
+        self.as_bytes().utf8_chunks()
+    }
+
+    /// Returns an owned `Vec<u8>` containing the same data as the string_view.
+    pub fn to_vec(&self) -> std::vec::Vec<u8> {
+        std::vec::Vec::from(self.as_bytes())
     }
 
     /// Returns an OsStr referring to the string_view's data.
-    ///
-    /// # Safety
-    ///
-    /// The viewed memory must NOT be mutated by any C++ code during `'a`.
-    /// The returned `ffi::OsStr` requires this immutability. While C++ `std::string_view`
-    /// itself provides read-only access, the C++ code owning the viewed data must
-    /// not modify it via other aliases for the duration of `'a`.
     #[cfg(unix)]
-    pub unsafe fn as_os_str(&self) -> &'a std::ffi::OsStr {
-        // SAFETY: we forward the safety contract upward.
-        unsafe { std::ffi::OsStr::from_bytes(self.as_bytes()) }
+    pub fn as_os_str(&self) -> &'a std::ffi::OsStr {
+        std::ffi::OsStr::from_bytes(self.as_bytes())
     }
 
-    /// Returns a Rust OsString referring to the string_view's data.
+    /// Returns an owned Rust OsString containing the same data as the string_view.
     #[cfg(unix)]
     pub fn to_os_string(self) -> std::ffi::OsString {
-        // SAFETY: the string is valid, and if it is mutably aliased, we do not use any aliases
-        // here.
-        unsafe { std::ffi::OsString::from_vec(std::vec::Vec::from(&*self.raw.as_raw_bytes())) }
+        std::ffi::OsString::from_vec(self.to_vec())
     }
 
     pub fn len(&self) -> usize {
@@ -85,29 +88,118 @@ impl<'a> string_view<'a> {
         unsafe { self.raw.len() }
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
     /// Perform UTF-8 validation and returns a &str view of the underlying C++ string if validation
     /// succeeds. Returns an Utf8Error otherwise.
-    ///
-    /// # Safety
-    ///
-    /// The viewed memory must NOT be mutated by any C++ code during lifetime `'a`.
-    /// The returned `&'a str` (on `Ok`) requires this immutability. While C++
-    /// `std::string_view` itself provides read-only access, the C++ code owning the
-    /// viewed data must not modify it via other aliases for the duration of `'a`.
-    pub unsafe fn to_str(&self) -> Result<&'a str, core::str::Utf8Error> {
-        // SAFETY (internal dereference in map):
-        // The method's main SAFETY contract (see above) ensures `self.raw` points to
-        // memory that is valid and immutable for `'a`. `self.raw.to_str()` (itself unsafe)
-        // attempts UTF-8 conversion, yielding a `*const str` if valid. Dereferencing
-        // this pointer via `&*s` is safe given the outer contract and successful UTF-8 check.
-        self.raw.to_str().map(|s| &*s)
+    pub fn to_str(&self) -> Result<&'a str, core::str::Utf8Error> {
+        str::from_utf8(self.as_bytes())
     }
 
     /// Perform UTF-8 validation and returns an owned String. Returns an Utf8Error otherwise.
     pub fn to_string(&self) -> Result<std::string::String, core::str::Utf8Error> {
-        // SAFETY: The memory is valid and will not be mutated during this short borrow, as
-        // we do not call into any C++ code that might mutably alias the string.
-        unsafe { self.raw.to_str().map(|s| (*s).into()) }
+        self.to_str().map(std::string::String::from)
+    }
+
+    pub fn contains(&self, x: &u8) -> bool {
+        self.as_bytes().contains(x)
+    }
+
+    /// Returns an object that implements `Display` for safely printing string views that may
+    /// contain non-Unicode data. The Display implementation replaces invalid UTF-8 with the Unicode
+    /// replacement character (�), and is potentially lossy.
+    ///
+    /// The caller should immediately use the returned value, and *must not* retain it further.
+    pub fn display(&self) -> impl Display + use<'a> {
+        LossyUtf8Display(self.as_bytes())
+    }
+}
+
+impl<'a> AsRef<[u8]> for string_view<'a> {
+    fn as_ref(&self) -> &[u8] {
+        self.as_bytes()
+    }
+}
+
+/// Presents the bytes as a normal string, with invalid UTF-8 presented as hex escape sequences.
+impl<'a> core::fmt::Debug for string_view<'a> {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        // This implementation is the same as that of ByteStr:
+        //   https://doc.rust-lang.org/beta/std/bstr/struct.ByteStr.html#impl-Debug-for-ByteStr
+        write!(f, "\"")?;
+        for chunk in self.utf8_chunks() {
+            for c in chunk.valid().chars() {
+                match c {
+                    '\0' => write!(f, "\\0")?,
+                    '\x01'..='\x7f' => write!(f, "{}", (c as u8).escape_ascii())?,
+                    _ => write!(f, "{}", c.escape_debug())?,
+                }
+            }
+            write!(f, "{}", chunk.invalid().escape_ascii())?;
+        }
+        write!(f, "\"")?;
+        Ok(())
+    }
+}
+
+impl Deref for string_view<'_> {
+    type Target = [u8];
+    fn deref(&self) -> &Self::Target {
+        self.as_bytes()
+    }
+}
+
+// `string_view` is comparable to `&str` and `&[u8]`:
+
+impl PartialEq for string_view<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl Eq for string_view<'_> {}
+
+impl PartialEq<str> for string_view<'_> {
+    fn eq(&self, other: &str) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl PartialEq<string_view<'_>> for str {
+    fn eq(&self, other: &string_view<'_>) -> bool {
+        self.as_bytes() == other.as_bytes()
+    }
+}
+
+impl PartialEq<[u8]> for string_view<'_> {
+    fn eq(&self, other: &[u8]) -> bool {
+        self.as_bytes() == other
+    }
+}
+
+impl PartialEq<string_view<'_>> for [u8] {
+    fn eq(&self, other: &string_view<'_>) -> bool {
+        self == other.as_bytes()
+    }
+}
+
+impl PartialOrd for string_view<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<core::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for string_view<'_> {
+    fn cmp(&self, other: &Self) -> core::cmp::Ordering {
+        self.as_bytes().cmp(other.as_bytes())
+    }
+}
+
+impl Hash for string_view<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.as_bytes().hash(state);
     }
 }
 
@@ -147,25 +239,42 @@ impl<'a> From<&'a core::ffi::CStr> for string_view<'a> {
     }
 }
 
+/// `raw_string_view` is a special name for a struct generated by Crubit from an instantiation of
+/// the `std::string_view` template in C++. Its struct definition isn't in this file, but we add
+/// methods to it here. See http://b/482222550#comment6 for the current answer of how to see its
+/// definition as of 2026-03.
+///
+/// Like `std::string_view` is is logically a reference to an array of bytes: a base pointer and a
+/// length. This is isomorphic to `*const [u8] in Rust. Therefore it is in turn isomorphic to
+/// `&[u8]`, but without an associated lifetime during which the array is guaranteed to exist and be
+/// accessible for reads. Because of the lack of a Rust-visible lifetime, the bytes can only be
+/// accessed through unsafe code.
 impl raw_string_view {
-    /// Returns an equivalent Rust slice pointer.
+    /// Returns a raw pointer for an equivalent Rust slice.
     ///
-    /// The resulting slice pointer is valid for the lifetime of the pointed-to
-    /// object.
+    /// The resulting slice is safe to use under the same conditions it would be safe to access the
+    /// bytes referred to by the raw string view. In particular, the allocation backing the bytes
+    /// must still exist, must not be concurrently modified within the range being accessed, and
+    /// must not be referred to by an exclusive reference. These are exactly the rules for accessing
+    /// `*const [u8]` in plain Rust code.
     ///
-    /// Note: For empty strings, the address of the slice pointer may not be the
-    /// same as the address of the raw_string_view. Null pointers are converted
-    /// to valid, but dangling, pointers.
+    /// Note: for empty strings, the address of the bytes in the slice may not be the same as the
+    /// address of the array referenced by the `raw_string_view`. Null pointers within the string
+    /// view are converted to valid, but dangling, pointers.
     #[inline(always)]
     pub fn as_raw_bytes(self) -> *const [u8] {
         self.into()
     }
 
-    /// Converts a `raw_string_view` containing valid UTF-8 to a `*const str`.
+    /// Converts a raw string view to a pointer to a `str`, failing if the bytes referenced by the
+    /// raw string view are not valid UTF-8.
+    ///
+    /// The returned pointer refers directly to the bytes referred to the raw string view, and is
+    /// valid under the same conditions as the slice returned by `as_raw_bytes`.
     ///
     /// # Safety
     ///
-    /// Behavior is undefined if the `raw_string_view` has an invalid pointer.
+    /// Behavior is undefined if accessing the result of `as_raw_bytes` would be undefined.
     pub unsafe fn to_str(&self) -> Result<*const str, core::str::Utf8Error> {
         let bytes: &[u8] = unsafe { &*self.as_raw_bytes() };
         let res: *const str = core::str::from_utf8(bytes)?;
@@ -176,7 +285,9 @@ impl raw_string_view {
     ///
     /// # Safety
     ///
-    /// Behavior is undefined if the `raw_string_view` has an invalid pointer.
+    /// Behavior is undefined if the `raw_string_view` was not constructed with a valid (base,
+    /// length) pair for a real allocation.
+    #[allow(unused_unsafe)] // raw_string_view::{begin, end}
     pub unsafe fn len(&self) -> usize {
         // TODO(b/249376862): use size(), which does not have the soundness issue below.
         // let size = unsafe {raw_string_view::size(&sv)};
@@ -189,31 +300,44 @@ impl raw_string_view {
             - unsafe { raw_string_view::begin(self) } as usize
     }
 
-    /// Get string_view with lifetime linked to self.
+    /// Returns a `string_view` with a lifetime linked to the lifetime of a reference to a raw
+    /// string view.
     ///
     /// # Safety
     ///
-    /// The data referred to by `self` must be valid, and the resulting `string_view` is subject to
-    /// the same rules as a reference constructed from a raw pointer: it must not be accessed after
-    /// the underlying memory becomes invalid or aliased by a unique reference. Careful choice of
-    /// lifetime can enforce this.
+    /// It must be safe to access the result of `as_raw_bytes` for the lifetime `'s`.
+    ///
+    /// Note that despite the API here, it is not sufficient for the string view itself to exist for
+    /// the lifetime `'s`! A string view can easily refer to an array that has already been
+    /// destroyed. The use of a lifetime here is not actually a protection against unsoundness.
+    ///
+    /// Similarly, the use of `&self` is not actually a protection against the bytes being
+    /// concurrently modified.
     pub unsafe fn as_live<'s>(&'s self) -> string_view<'s> {
         string_view { raw: *self, phantom_data: core::marker::PhantomData }
     }
 
-    /// Get a string_view with static lifetime.
+    /// Returns a `string_view` with static lifetime.
     ///
     /// # Safety
     ///
-    /// The data referred to by `self` must be valid, and the resulting `string_view` is subject to
-    /// the same rules as a reference constructed from a raw pointer: it must not be accessed after
-    /// the underlying memory becomes invalid or aliased by a unique reference.
+    /// It must be safe to access the result of `as_raw_bytes` for the rest of the process's
+    /// lifetime.
+    ///
+    /// Note that despite the API here, it is not sufficient for the string view itself to exist for
+    /// the rest of the process's lifetime! A string view can easily refer to an array that has
+    /// already been destroyed. The use of a lifetime here is not actually a protection against
+    /// unsoundness.
+    ///
+    /// Similarly, the use of `&self` is not actually a protection against the bytes being
+    /// concurrently modified.
     pub unsafe fn as_static_live(&'static self) -> string_view<'static> {
-        self.as_live()
+        unsafe { self.as_live() }
     }
 }
 
 /// Equivalent to `as_raw_bytes()`.
+#[allow(unused_unsafe)] // raw_string_view::data(&sv)
 impl From<raw_string_view> for *const [u8] {
     fn from(sv: raw_string_view) -> Self {
         // SAFETY: `&sv` is a valid pointer. `data()` does not dereference the

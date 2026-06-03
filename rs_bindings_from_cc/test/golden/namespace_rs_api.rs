@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:namespace_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 pub mod test_namespace_bindings {
@@ -19,7 +20,7 @@ pub mod test_namespace_bindings {
     #[repr(C)]
     ///CRUBIT_ANNOTATE: cpp_type=test_namespace_bindings :: S
     pub struct S {
-        pub i: ::core::ffi::c_int,
+        pub i: ::ffi_11::c_int,
     }
     impl !Send for S {}
     impl !Sync for S {}
@@ -41,27 +42,9 @@ pub mod test_namespace_bindings {
         }
     }
 
-    // Error while generating bindings for constructor 'S::S':
-    // Can't generate bindings for S::S, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::S (the type of __param_0 (parameter #1): references are not supported)
-
-    // Error while generating bindings for constructor 'S::S':
-    // Can't generate bindings for S::S, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::S (the type of __param_0 (parameter #1): references are not supported)
-
-    // Error while generating bindings for function 'S::operator=':
-    // Can't generate bindings for S::operator=, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::operator= (return type: references are not supported)
-    // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-    // Error while generating bindings for function 'S::operator=':
-    // Can't generate bindings for S::operator=, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::operator= (return type: references are not supported)
-    // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::operator= (the type of __param_0 (parameter #1): references are not supported)
-
     /// Free comment inside namespace
     #[inline(always)]
-    pub fn f(mut s: crate::test_namespace_bindings::S) -> ::core::ffi::c_int {
+    pub fn f(mut s: crate::test_namespace_bindings::S) -> ::ffi_11::c_int {
         unsafe { crate::detail::__rust_thunk___ZN23test_namespace_bindings1fENS_1SE(&mut s) }
     }
 
@@ -85,12 +68,13 @@ pub mod test_namespace_bindings {
 #[inline(always)]
 pub fn identity(mut s: crate::test_namespace_bindings::S) -> crate::test_namespace_bindings::S {
     unsafe {
-        let mut __return = ::core::mem::MaybeUninit::<crate::test_namespace_bindings::S>::uninit();
+        let mut __crubit_return =
+            ::core::mem::MaybeUninit::<crate::test_namespace_bindings::S>::uninit();
         crate::detail::__rust_thunk___Z8identityN23test_namespace_bindings1SE(
-            &raw mut __return as *mut ::core::ffi::c_void,
+            &raw mut __crubit_return as *mut ::core::ffi::c_void,
             &mut s,
         );
-        __return.assume_init()
+        __crubit_return.assume_init()
     }
 }
 
@@ -136,24 +120,6 @@ pub mod test_namespace_bindings_reopened {
             }
         }
 
-        // Error while generating bindings for constructor 'S::S':
-        // Can't generate bindings for S::S, because of missing required features (<internal link>):
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::S (the type of __param_0 (parameter #1): references are not supported)
-
-        // Error while generating bindings for constructor 'S::S':
-        // Can't generate bindings for S::S, because of missing required features (<internal link>):
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::S (the type of __param_0 (parameter #1): references are not supported)
-
-        // Error while generating bindings for function 'S::operator=':
-        // Can't generate bindings for S::operator=, because of missing required features (<internal link>):
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::operator= (return type: references are not supported)
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-        // Error while generating bindings for function 'S::operator=':
-        // Can't generate bindings for S::operator=, because of missing required features (<internal link>):
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::operator= (return type: references are not supported)
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for S::operator= (the type of __param_0 (parameter #1): references are not supported)
-
         #[inline(always)]
         pub fn z(mut s: crate::test_namespace_bindings_reopened::inner::S) {
             unsafe {
@@ -196,24 +162,6 @@ pub mod test_namespace_bindings_inline {
                 }
             }
         }
-
-        // Error while generating bindings for constructor 'StructInInlineNamespace::StructInInlineNamespace':
-        // Can't generate bindings for StructInInlineNamespace::StructInInlineNamespace, because of missing required features (<internal link>):
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for StructInInlineNamespace::StructInInlineNamespace (the type of __param_0 (parameter #1): references are not supported)
-
-        // Error while generating bindings for constructor 'StructInInlineNamespace::StructInInlineNamespace':
-        // Can't generate bindings for StructInInlineNamespace::StructInInlineNamespace, because of missing required features (<internal link>):
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for StructInInlineNamespace::StructInInlineNamespace (the type of __param_0 (parameter #1): references are not supported)
-
-        // Error while generating bindings for function 'StructInInlineNamespace::operator=':
-        // Can't generate bindings for StructInInlineNamespace::operator=, because of missing required features (<internal link>):
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for StructInInlineNamespace::operator= (return type: references are not supported)
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for StructInInlineNamespace::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-        // Error while generating bindings for function 'StructInInlineNamespace::operator=':
-        // Can't generate bindings for StructInInlineNamespace::operator=, because of missing required features (<internal link>):
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for StructInInlineNamespace::operator= (return type: references are not supported)
-        // //rs_bindings_from_cc/test/golden:namespace_cc needs [//features:experimental] for StructInInlineNamespace::operator= (the type of __param_0 (parameter #1): references are not supported)
     }
     #[allow(unused_imports)]
     pub use inner::*;
@@ -261,7 +209,7 @@ mod detail {
         );
         pub(crate) unsafe fn __rust_thunk___ZN23test_namespace_bindings1fENS_1SE(
             s: &mut crate::test_namespace_bindings::S,
-        ) -> ::core::ffi::c_int;
+        ) -> ::ffi_11::c_int;
         pub(crate) unsafe fn __rust_thunk___ZN23test_namespace_bindings15inline_functionEv();
         #[link_name = "_ZN23test_namespace_bindings5inner1iEv"]
         pub(crate) unsafe fn __rust_thunk___ZN23test_namespace_bindings5inner1iEv();

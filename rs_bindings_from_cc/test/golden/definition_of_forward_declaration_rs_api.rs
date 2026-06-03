@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:definition_of_forward_declaration_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]

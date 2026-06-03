@@ -5,8 +5,13 @@
 [workspace]
 members = [
   "cargo/cc_bindings_from_rs/cc_bindings_from_rs",
+  "cargo/cc_bindings_from_rs/cargo-cpp_api_from_rust",
   "cargo/rs_bindings_from_cc/rs_bindings_from_cc",
   "support/ffi_11",
+]
+exclude = [
+  "cargo/cc_bindings_from_rs/cargo-cpp_api_from_rust/tests/test_project",
+  "examples/build_systems/cmake/rust_lib",
 ]
 resolver = "2"
 
@@ -17,14 +22,19 @@ resolver = "2"
 anyhow = "1"
 base64 = "0.22"
 clap = { version = "4", features = [ "derive" ] }
+clap-cargo = "0.18"
+clap_cargo = { package = "clap-cargo", version = "0.18", features = [ "clap", "cargo_metadata" ] }
+cargo_metadata = "0.23"
 either = "1"
 flagset = "0.4"
 googletest = "0.14"
 heck = "0.5"
 itertools = "0.13"
 indenter = "0.3"
+once_cell = "1.21.3"
 phf = { version = "0.11", features = [ "macros" ] }
 proc-macro2 = "1"
+protobuf = "3.2.0"
 quote = "1"
 regex = "1"
 rustversion = "1"
@@ -38,7 +48,7 @@ unicode-ident = "1"
 
 [workspace.package]
 
-edition = "2021"
+edition = "2024"
 license-file = "LICENSE"
 repository = "https://github.com/google/crubit"
 categories = ["development-tools::ffi"]

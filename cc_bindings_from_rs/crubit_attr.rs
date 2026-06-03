@@ -20,12 +20,11 @@ use rustc_hir::def::DefKind;
 use rustc_middle::ty::TyCtxt;
 use rustc_span::def_id::DefId;
 use rustc_span::symbol::Symbol;
-use std::str::FromStr;
 
-#[rustversion::before(2025-05-26)]
+#[rustversion::all(before(1.94), before(2025-05-26))]
 use rustc_span::symbol::kw;
 
-#[rustversion::since(2025-05-26)]
+#[rustversion::any(since(1.94), since(2025-05-26))]
 use rustc_span::symbol::sym;
 
 /// A collection of attributes applied via `#[crubit_annotate::...]`.
@@ -54,6 +53,10 @@ pub struct CrubitAttrs {
     ///   #[doc="CRUBIT_ANNOTATE: cpp_type=std::basic_string<char>"]
     ///   #[doc="CRUBIT_ANNOTATE: include_path=<string>]`
     pub include_path: Option<Symbol>,
+
+    /// Whether the annotated item is a specialization of another generic
+    /// layout-compatible type. For example, `StatusOr<()>` mapping to C++ `absl::Status`.
+    pub specializes_cpp_type: bool,
 
     /// The C++ name of the item. This allows us to rename Rust function names
     /// that are not C++-compatible like `new`.
@@ -118,34 +121,12 @@ pub struct CrubitAttrs {
     /// pub fn new() -> i32 {...}
     /// ```
     pub must_bind: bool,
-
-    /// An unique item that Crubit has builtin knowledge about. The motivating example of this
-    /// is the `status::absl::StatusError` type, such that when Crubit sees a
-    /// `Result<T, StatusError>` as a function input or output, it can generate C++ bindings that
-    /// bridge to a C++ `absl::Status` or `absl::StatusOr`.
-    pub builtin: Option<Symbol>,
 }
 
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-pub enum Builtin {
-    AbslStatusError,
-}
-
-impl FromStr for Builtin {
-    type Err = ();
-
-    fn from_str(s: &str) -> Result<Self, ()> {
-        match s {
-            "absl_status_error" => Ok(Self::AbslStatusError),
-            _ => Err(()),
-        }
-    }
-}
-
-#[rustversion::before(2025-05-26)]
+#[rustversion::all(before(1.94), before(2025-05-26))]
 const EMPTY_SYMBOL: Symbol = kw::Empty;
 
-#[rustversion::since(2025-05-26)]
+#[rustversion::any(since(1.94), since(2025-05-26))]
 const EMPTY_SYMBOL: Symbol = sym::empty;
 
 impl CrubitAttrs {
@@ -158,9 +139,9 @@ impl CrubitAttrs {
     pub const BRIDGE_ABI_RUST: &'static str = "bridge_abi_rust";
     pub const BRIDGE_ABI_CPP: &'static str = "bridge_abi_cpp";
     pub const MUST_BIND: &'static str = "must_bind";
-    pub const BUILTIN: &'static str = "builtin";
+    pub const SPECIALIZES_CPP_TYPE: &'static str = "specializes_cpp_type";
 
-    fn get_attr(&self, name: &str) -> Result<Option<Symbol>> {
+    pub fn get_attr(&self, name: &str) -> Result<Option<Symbol>> {
         Ok(match name {
             CrubitAttrs::CPP_TYPE => self.cpp_type,
             CrubitAttrs::CPP_NAME => self.cpp_name,
@@ -172,7 +153,7 @@ impl CrubitAttrs {
             CrubitAttrs::BRIDGE_ABI_CPP => self.bridge_abi_cpp,
             // MUST_BIND is a boolean attribute, so it does not have a Symbol value.
             CrubitAttrs::MUST_BIND => self.must_bind.then_some(EMPTY_SYMBOL),
-            CrubitAttrs::BUILTIN => self.builtin,
+            CrubitAttrs::SPECIALIZES_CPP_TYPE => self.specializes_cpp_type.then_some(EMPTY_SYMBOL),
             _ => bail!("Invalid attribute name: \"{name}\""),
         })
     }
@@ -188,14 +169,10 @@ impl CrubitAttrs {
             CrubitAttrs::BRIDGE_ABI_RUST => self.bridge_abi_rust = symbol,
             CrubitAttrs::BRIDGE_ABI_CPP => self.bridge_abi_cpp = symbol,
             CrubitAttrs::MUST_BIND => self.must_bind = true,
-            CrubitAttrs::BUILTIN => self.builtin = symbol,
+            CrubitAttrs::SPECIALIZES_CPP_TYPE => self.specializes_cpp_type = true,
             _ => bail!("Invalid CRUBIT_ANNOTATE key: \"{name}\""),
         }
         Ok(())
-    }
-
-    pub fn builtin(&self) -> Option<Builtin> {
-        self.builtin?.as_str().parse().ok()
     }
 
     /// Returns the Crubit attributes that specify a bridging strategy,
@@ -318,6 +295,10 @@ pub enum BridgingAttrs {
 // Ideally we could call https://github.com/rust-lang/rust/blob/2aaa62b89d22b570e560731b03e3d2d6f5c3bbce/compiler/rustc_metadata/src/rmeta/encoder.rs#L937 directly, but that method is not publicly available.
 // It does not suffice to call `tcx.has_attrs` on our DefId because that will call `get_all_attrs` under the hood and panic if given an unsupported DefId.
 pub fn supports_attrs(def_kind: DefKind) -> bool {
+    // Const and AssocConst switch between unit variant and struct variant in nightly 2026-03-01. We
+    // use a struct variant to cover both cases and supress the warning on versions where it's a
+    // unit variant.
+    #[allow(clippy::unneeded_struct_pattern)]
     match def_kind {
         DefKind::Mod
         | DefKind::Struct
@@ -330,10 +311,10 @@ pub fn supports_attrs(def_kind: DefKind) -> bool {
         | DefKind::TraitAlias
         | DefKind::AssocTy
         | DefKind::Fn
-        | DefKind::Const
+        | DefKind::Const { .. }
         | DefKind::Static { nested: false, .. }
         | DefKind::AssocFn
-        | DefKind::AssocConst
+        | DefKind::AssocConst { .. }
         | DefKind::Macro(_)
         | DefKind::Field
         | DefKind::Impl { .. }
@@ -370,6 +351,10 @@ pub fn get_attrs(tcx: TyCtxt, did: DefId) -> Result<CrubitAttrs> {
         //   right: Ctor
         return Ok(crubit_attrs);
     }
+    // This method has been deprecated to direct folks towards `find_attr!`. But our use case is not
+    // met by `find_attr!`. There are no plans to remove the `get_all_attrs` method, so we silence
+    // the warning here.
+    #[allow(deprecated)]
     for attr in tcx.get_all_attrs(did) {
         let Some(comment) = attr.doc_str() else { continue };
         let Some((_, key_value)) = comment.as_str().split_once("CRUBIT_ANNOTATE:") else {

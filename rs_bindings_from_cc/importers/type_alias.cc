@@ -19,6 +19,7 @@
 #include "rs_bindings_from_cc/ast_util.h"
 #include "rs_bindings_from_cc/ir.h"
 #include "clang/AST/ASTContext.h"
+#include "clang/AST/Attrs.inc"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclCXX.h"
@@ -79,7 +80,7 @@ std::optional<IR::Item> crubit::TypeAliasImporter::Import(
       return ExistingRustType{
           .rs_name = ProtoEnumToRustName(*decl),
           .cc_name = decl->getQualifiedNameAsString(),
-          .type_parameters = {},
+          .unique_name = ictx_.GetUniqueName(*decl),
           .owning_target = ictx_.GetOwningTarget(decl),
           .size_align = std::nullopt,
           // To be paranoid, assume Rust proto enums are not ABI compatible.
@@ -107,11 +108,16 @@ std::optional<IR::Item> crubit::TypeAliasImporter::Import(
         tag_decl->getName() == decl->getName()) {
       return ictx_.ImportUnsupportedItem(
           *decl, std::nullopt,
-          FormattedError::Static(
-              "Typedef only used to introduce a name in C. Not importing."));
+          {FormattedError::Static(
+              "Typedef only used to introduce a name in C. Not importing.")});
     }
   } else if (auto* using_decl = clang::dyn_cast<clang::UsingShadowDecl>(decl)) {
     clang::NamedDecl* target = using_decl->getTargetDecl();
+    if (auto* function_decl = clang::dyn_cast<clang::FunctionDecl>(target)) {
+      return ictx_.ImportUnsupportedItem(
+          *decl, std::nullopt,
+          {FormattedError::Static("Function aliases are not yet supported.")});
+    }
     auto* target_type = clang::dyn_cast<clang::TypeDecl>(target);
     if (target_type == nullptr) {
       // Not a type.
@@ -130,60 +136,63 @@ std::optional<IR::Item> crubit::TypeAliasImporter::Import(
   if (!identifier.ok()) {
     return ictx_.ImportUnsupportedItem(
         *decl, std::nullopt,
-        FormattedError::PrefixedStrCat("Type alias name is not supported",
-                                       identifier.status().message()));
+        {FormattedError::PrefixedStrCat("Type alias name is not supported",
+                                        identifier.status().message())});
   }
 
   auto enclosing_item_id = ictx_.GetEnclosingItemId(decl);
   if (!enclosing_item_id.ok()) {
     return ictx_.ImportUnsupportedItem(
         *decl, std::nullopt,
-        FormattedError::FromStatus(std::move(enclosing_item_id.status())));
+        {FormattedError::FromStatus(std::move(enclosing_item_id.status()))});
   }
 
   clang::tidy::lifetimes::ValueLifetimes* no_lifetimes = nullptr;
   // TODO(mboehme): Once lifetime_annotations supports retrieving lifetimes in
   // type aliases, pass these to ConvertQualType().
-  absl::StatusOr<CcType> underlying_type =
-      ictx_.ConvertQualType(underlying_qualtype, no_lifetimes);
+  absl::StatusOr<CcType> underlying_type = ictx_.ConvertQualType(
+      underlying_qualtype, no_lifetimes, /*nullable=*/true,
+      ictx_.AreAssumedLifetimesEnabledForTarget(ictx_.GetOwningTarget(decl)));
 
   if (!underlying_type.ok()) {
     return ictx_.ImportUnsupportedItem(
         *decl,
         UnsupportedItem::Path{.ident = (*identifier).cc_identifier,
                               .enclosing_item_id = *enclosing_item_id},
-        FormattedError::FromStatus(std::move(underlying_type.status())));
+        {FormattedError::FromStatus(std::move(underlying_type.status()))});
   }
   ictx_.MarkAsSuccessfullyImported(decl);
 
-  // C++'s std::string_view becomes cc_std::std::raw_string_view, as the
-  // type name string_view is reserved for a version of
-  // string_view with a lifetime.
-  const bool is_string_view =
-      decl->getQualifiedNameAsString() == "std::string_view";
-  Identifier rs_name = is_string_view ? Identifier("raw_string_view")
-                                      : (*identifier).rs_identifier();
-
+  std::optional<std::string> deprecated;
   absl::StatusOr<std::optional<std::string>> unknown_attr =
-      CollectUnknownAttrs(*decl);
+      CollectUnknownAttrs(*decl, [&](const clang::Attr& attr) {
+        if (auto* deprecated_attr =
+                clang::dyn_cast<clang::DeprecatedAttr>(&attr)) {
+          deprecated.emplace(deprecated_attr->getMessage());
+          return true;
+        }
+        return false;
+      });
   if (!unknown_attr.ok()) {
     return ictx_.ImportUnsupportedItem(
         *decl,
         UnsupportedItem::Path{.ident = (*identifier).cc_identifier,
                               .enclosing_item_id = *enclosing_item_id},
-        FormattedError::FromStatus(std::move(unknown_attr.status())));
+        {FormattedError::FromStatus(std::move(unknown_attr.status()))});
   }
 
   return TypeAlias{
-      .cc_name = (*identifier).cc_identifier,
-      .rs_name = rs_name,
+      .cc_name = identifier->cc_identifier,
+      .rs_name = identifier->rs_identifier(),
+      .unique_name = ictx_.GetUniqueName(*decl),
       .id = ictx_.GenerateItemId(decl),
       .owning_target = ictx_.GetOwningTarget(decl),
       .doc_comment = ictx_.GetComment(decl),
       .unknown_attr = std::move(*unknown_attr),
       .underlying_type = *underlying_type,
-      .source_loc = ictx_.ConvertSourceLocation(decl->getBeginLoc()),
+      .source_loc = ictx_.ConvertSourceLocation(decl->getBeginLoc(), nullptr),
       .enclosing_item_id = *std::move(enclosing_item_id),
+      .deprecated = std::move(deprecated),
   };
 }
 

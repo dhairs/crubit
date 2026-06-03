@@ -1,6 +1,5 @@
 # Integration tests for nullability verification.
 
-load("@bazel_tools//tools/build_defs/cc:cc_embed_data.bzl", "cc_embed_data")
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
@@ -14,7 +13,7 @@ cc_library(
     srcs = ["check_diagnostics.cc"],
     hdrs = ["check_diagnostics.h"],
     deps = [
-        ":test_headers",
+        ":mock_headers",
         "//nullability:pointer_nullability_diagnosis",
         "//nullability:pragma",
         "@llvm-project//clang:analysis",
@@ -56,7 +55,7 @@ cc_binary(
     testonly = 1,
     srcs = ["nullability_test.cc"],
     deps = [
-        ":test_headers",
+        ":mock_headers",
         "//nullability:pointer_nullability",
         "//nullability:pointer_nullability_analysis",
         "//nullability:pointer_nullability_lattice",
@@ -79,19 +78,17 @@ sh_test(
     data = [":nullability_test"],
 )
 
-cc_test(
-    name = "arrays",
-    srcs = ["arrays.cc"],
-    deps = [
-        ":check_diagnostics",
-        "@llvm-project//third-party/unittest:gtest",
-        "@llvm-project//third-party/unittest:gtest_main",
-    ],
+cc_library(
+    name = "mock_headers",
+    srcs = ["mock_headers.cc"],
+    hdrs = ["mock_headers.h"],
+    visibility = ["//nullability:__subpackages__"],
+    deps = ["@llvm-project//llvm:Support"],
 )
 
 cc_test(
-    name = "aliases",
-    srcs = ["aliases.cc"],
+    name = "arrays",
+    srcs = ["arrays.cc"],
     deps = [
         ":check_diagnostics",
         "@llvm-project//third-party/unittest:gtest",
@@ -140,6 +137,16 @@ nullability_test(
 nullability_test(
     name = "comparisons",
     srcs = ["comparisons.cc"],
+)
+
+cc_test(
+    name = "consistent_annotations",
+    srcs = ["consistent_annotations.cc"],
+    deps = [
+        ":check_diagnostics",
+        "@llvm-project//third-party/unittest:gtest",
+        "@llvm-project//third-party/unittest:gtest_main",
+    ],
 )
 
 cc_test(
@@ -253,16 +260,6 @@ nullability_test(
     srcs = ["initialization.cc"],
 )
 
-cc_test(
-    name = "initialization_diagnosis",
-    srcs = ["initialization_diagnosis.cc"],
-    deps = [
-        ":check_diagnostics",
-        "@llvm-project//third-party/unittest:gtest",
-        "@llvm-project//third-party/unittest:gtest_main",
-    ],
-)
-
 nullability_test(
     name = "join",
     srcs = ["join.cc"],
@@ -276,6 +273,16 @@ cc_test(
         "@llvm-project//llvm:Support",
         "@llvm-project//third-party/unittest:gtest",
         "@llvm-project//third-party/unittest:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "nested",
+    srcs = ["nested.cc"],
+    deps = [
+        ":check_diagnostics",
+        "@llvm-project//clang:basic",
+        "@llvm-project//third-party/unittest:gtest",
     ],
 )
 
@@ -325,6 +332,26 @@ cc_test(
 )
 
 nullability_test(
+    name = "pragma",
+    srcs = [
+        "pragma.cc",
+        "pragma_none.h",
+        "pragma_nonnull.h",
+        "pragma_support.h",
+    ],
+)
+
+cc_test(
+    name = "pragma_diagnosis",
+    srcs = ["pragma_diagnosis.cc"],
+    deps = [
+        ":check_diagnostics",
+        "@llvm-project//third-party/unittest:gtest",
+        "@llvm-project//third-party/unittest:gtest_main",
+    ],
+)
+
+nullability_test(
     name = "resugaring",
     srcs = ["resugaring.cc"],
 )
@@ -347,6 +374,16 @@ nullability_test(
 cc_test(
     name = "smart_pointers_diagnosis",
     srcs = ["smart_pointers_diagnosis.cc"],
+    deps = [
+        ":check_diagnostics",
+        "@llvm-project//third-party/unittest:gtest",
+        "@llvm-project//third-party/unittest:gtest_main",
+    ],
+)
+
+cc_test(
+    name = "struct_initialization",
+    srcs = ["struct_initialization.cc"],
     deps = [
         ":check_diagnostics",
         "@llvm-project//third-party/unittest:gtest",
@@ -389,9 +426,29 @@ cc_test(
     ],
 )
 
+cc_test(
+    name = "type_aliases",
+    srcs = ["type_aliases.cc"],
+    deps = [
+        ":check_diagnostics",
+        "@llvm-project//third-party/unittest:gtest",
+        "@llvm-project//third-party/unittest:gtest_main",
+    ],
+)
+
 nullability_test(
     name = "types",
     srcs = ["types.cc"],
+)
+
+cc_test(
+    name = "variable_aliasing",
+    srcs = ["variable_aliasing.cc"],
+    deps = [
+        ":check_diagnostics",
+        "@llvm-project//third-party/unittest:gtest",
+        "@llvm-project//third-party/unittest:gtest_main",
+    ],
 )
 
 cc_test(
@@ -401,67 +458,5 @@ cc_test(
         ":check_diagnostics",
         "@llvm-project//third-party/unittest:gtest",
         "@llvm-project//third-party/unittest:gtest_main",
-    ],
-)
-
-nullability_test(
-    name = "pragma",
-    srcs = [
-        "pragma.cc",
-        "pragma_none.h",
-        "pragma_nonnull.h",
-        "pragma_support.h",
-    ],
-)
-
-cc_test(
-    name = "pragma_diagnosis",
-    srcs = ["pragma_diagnosis.cc"],
-    deps = [
-        ":check_diagnostics",
-        "@llvm-project//third-party/unittest:gtest",
-        "@llvm-project//third-party/unittest:gtest_main",
-    ],
-)
-
-cc_embed_data(
-    name = "test_headers",
-    srcs = [
-        "nullability_annotations.h",
-        "nullability_test.h",
-        "check.h",
-        "check_diagnostics_preamble.h",
-        "new",
-        "memory",
-        "optional",
-        "type_traits",
-        "utility",
-    ],
-    outs = [
-        "test_headers.cc",
-        "test_headers.h",
-        "test_headers.o",
-    ],
-    embedopts = ["--namespace=clang::tidy::nullability"],
-    visibility = ["//nullability:__subpackages__"],
-)
-
-cc_test(
-    name = "consistent_annotations",
-    srcs = ["consistent_annotations.cc"],
-    deps = [
-        ":check_diagnostics",
-        "@llvm-project//third-party/unittest:gtest",
-        "@llvm-project//third-party/unittest:gtest_main",
-    ],
-)
-
-cc_test(
-    name = "nested",
-    srcs = ["nested.cc"],
-    deps = [
-        ":check_diagnostics",
-        "@llvm-project//clang:basic",
-        "@llvm-project//third-party/unittest:gtest",
     ],
 )

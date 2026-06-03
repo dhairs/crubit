@@ -11,6 +11,22 @@ For each feature we use, we document the following:
 *   **Use case:** What do we use the feature for?
 *   **Exit strategy:** What would happen if the feature went away?
 
+### `auto_traits`
+
+*   **Crubit feature:** `supported`
+
+*   **Use case:** To allow defining a deferred pininit trait, `Ctor`, which
+    accepts all existing Rust-movable types by value, without any overlapping
+    trait impls.
+
+*   **Exit strategy:** Change to just `impl<T: Unpin> RustMove for T {}`. We can
+    go back to the old strategy of abusing the `Unpin` trait to try to capture
+    "most types". Any callers which were using Rust-movable non-`Unpin` types
+    would need to either add an explicit `impl Ctor for MyType {type
+    Output=Self; ...}`, or manually use `RustMoveCtor(x)` (which implements
+    `Ctor`) when a `Ctor` is requested for `x` but `x` doesn't itself implement
+    `Ctor<Output=Self, ...>`.
+
 ### `custom_inner_attributes`
 
 *   **Crubit feature:** `supported`
@@ -21,22 +37,13 @@ For each feature we use, we document the following:
 ### `negative_impls`
 
 *   **Crubit feature:** `supported`
-*   **Use case:** Used to implement `ctor` / nontrivial intialization, so that
-    we can dispatch on the existence of the `Unpin` trait (which is not possible
-    with `PhantomPinned`). Also used so that we can pin/unpin a type without
-    adding a field (which is not possible with `PhantomPinned`).
-*   **Exit strategy:** For dispatch, we can define a new auto trait (also an
-    unstable feature) or use specialization (also an unstable feature). For the
-    fields, this is a compatibility break, and we'd need to add a PhantomData
-    field to all C++ types to mark them as `!Send`, `!Unpin`, etc.
-
-### `vec_into_raw_parts`
-
-*   **Crubit feature:** `experimental`
-*   **Use case:** Used for conversions of vectors of forward-declared objects,
-    which is not yet released.
-*   **Exit strategy:** We could delete this if we had to. Hopefully low-risk,
-    people love raw parts.
+*   **Use case:** Used to implement `ctor` / nontrivial initialization, so that
+    we can dispatch on the existence of the `SelfCtor` trait. Also used so that
+    we can pin/unpin a type without adding a field (which is not possible with
+    `PhantomPinned`).
+*   **Exit strategy:** For the fields, this is a compatibility break, and we'd
+    need to add a `PhantomData` field to all C++ types to mark them as `!Send`,
+    `!Unpin`, etc.
 
 ### `extern_types`
 
@@ -122,6 +129,13 @@ For each feature we use, we document the following:
     it changes in a future version, then the update has already completed
     successfully, so we can delete the usage (keeping the `cfg_accessible` usage
     that is currently used, and deleting the other one). Same for the rest.
+
+    For versions we must continue to support, we can use the `rustversion`
+    crate.
+
+    Finally, in some cases there may be workarounds we can deploy that are only
+    "worse", not infeasible. For example, to import a trait if it exists, we can
+    `use path::to::*` instead of `use path::to::Trait`.
 
 ### `unsized_const_params`, `adt_const_params`
 
@@ -237,10 +251,10 @@ https://github.com/rust-lang/rust/issues/20400.
 Not every C++ type supports the Rust move operation. For more on this, see
 [Classes and Structs](../cpp/classes_and_structs.md#rust_movable).
 
-Crubit (in `experimental` mode) supports passing and returning these
-non-Rust-movable C++ objects by value. But since they are not Rust-movable, they
-cannot literally be returned in Rust by value: `pub fn foo() -> X` performs a
-Rust move of its return type by definition.
+Crubit supports passing and returning these non-Rust-movable C++ objects by
+value. But since they are not Rust-movable, they cannot literally be returned in
+Rust by value: `pub fn foo() -> X` performs a Rust move of its return type by
+definition.
 
 Instead, these objects support lazy construction, in the same style as
 [`moveit`](https://mcyoung.xyz/2021/04/26/move-ctors/). See
@@ -248,8 +262,8 @@ Instead, these objects support lazy construction, in the same style as
 results in, for example, the following API differences:
 
 `X` is rust-movable  | `X` is not rust-movable
--------------------- | ---------------------------------------
-`pub fn foo() -> X`  | `pub fn foo() -> impl Ctor<Output=X>`
+-------------------- | ------------------------------------------
+`pub fn foo() -> X`  | `pub fn foo() -> impl Ctor<Output=X, ...>`
 `impl Add<X> for &C` | `impl<T: Ctor<Output=X>> Add<T> for &C`
 
 The problem comes in with operator overloading: the following is valid:

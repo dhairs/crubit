@@ -6,16 +6,39 @@
 
 use arc_anyhow::Result;
 use ir::{Record, IR};
+use ir_testing::with_full_lifetime_macros;
 use multiplatform_testing::test_platform;
 
 pub fn ir_from_cc(header: &str) -> Result<IR> {
     ir_testing::ir_from_cc(test_platform(), header)
 }
 
+pub fn ir_from_cc_annotated(header: &str) -> Result<IR> {
+    ir_testing::ir_from_cc_annotated(test_platform(), header)
+}
+
 pub fn ir_from_cc_dependency(header: &str, dep_header: &str) -> Result<IR> {
-    ir_testing::ir_from_cc_dependency(test_platform(), header, dep_header)
+    ir_testing::ir_from_cc_dependency(
+        test_platform(),
+        header,
+        dep_header,
+        None,
+        /*kythe_annotations=*/ false,
+    )
 }
 
 pub fn ir_record(name: &str) -> Record {
     ir_testing::ir_record(test_platform(), name)
+}
+
+pub fn ir_from_assumed_lifetimes_cc(program: &str) -> Result<IR> {
+    let mut full_program = with_full_lifetime_macros();
+    full_program.push_str(program);
+    ir_testing::ir_from_cc_dependency(
+        test_platform(),
+        &full_program,
+        "// empty header",
+        Some("assume_lifetimes"),
+        /*kythe_annotations=*/ false,
+    )
 }

@@ -262,6 +262,17 @@ pub fn make_rs_ident(ident: &str) -> Ident {
     }
 }
 
+/// Makes a 'Lifetime' to be used in the Rust source code as a lifetime name.
+/// Panics if `ident` is empty or is otherwise an invalid identifier.
+///
+/// Hyphens are converted to underscores in the identifier.
+pub fn make_rs_lifetime_ident(ident: &str) -> syn::Lifetime {
+    if ident == "_" || ident == "static" {
+        return syn::Lifetime::new(&format!("'{ident}"), proc_macro2::Span::call_site());
+    }
+    syn::Lifetime { apostrophe: proc_macro2::Span::call_site(), ident: make_rs_ident(ident) }
+}
+
 pub fn check_valid_cc_name(name: &str) -> Result<()> {
     // C++ doesn't have an equivalent of
     // https://doc.rust-lang.org/rust-by-example/compatibility/raw_identifiers.html and therefore
@@ -339,17 +350,27 @@ pub struct NamespaceQualifier {
     pub namespaces: Vec<Rc<str>>,
     // Outer to innermost. Paired as (rs_name, cc_name)
     pub nested_records: Vec<(Rc<str>, Rc<str>)>,
+    /// Whether to prepend `::` when formatting for C++.
+    // TODO(b/502939407): Remove this field (it will always be true).
+    pub use_leading_colons: bool,
 }
 
 impl NamespaceQualifier {
     /// Constructs a new `NamespaceQualifier` from a sequence of names.
-    pub fn new<T: Into<Rc<str>>>(iter: impl IntoIterator<Item = T>) -> Self {
+    pub fn new<T: Into<Rc<str>>>(
+        iter: impl IntoIterator<Item = T>,
+        use_leading_colons: bool,
+    ) -> Self {
         // TODO(b/258265044): Catch most (all if possible) error conditions early.  For
         // example:
         // - Panic early if any strings are empty, or are not Rust identifiers
         // - Report an error early if any strings are C++ reserved keywords
         // This may make `format_for_cc` and `format_namespace_bound_cc_tokens` infallible.
-        Self { namespaces: iter.into_iter().map(Into::into).collect(), nested_records: vec![] }
+        Self {
+            namespaces: iter.into_iter().map(Into::into).collect(),
+            nested_records: vec![],
+            use_leading_colons,
+        }
     }
 
     pub fn is_empty(&self) -> bool {
@@ -378,12 +399,30 @@ impl NamespaceQualifier {
 
     /// Returns `foo::bar::baz::` (reporting errors for C++ keywords).
     pub fn format_for_cc(&self) -> Result<TokenStream> {
-        let namespace_cc_idents = self.cc_idents()?;
-        Ok(quote! { #(#namespace_cc_idents::)* })
+        let mut path = if self.use_leading_colons {
+            quote! { :: }
+        } else {
+            quote! {}
+        };
+        for namespace in &self.namespaces {
+            let namespace = format_cc_ident(namespace)?;
+            path.extend(quote! { #namespace :: });
+        }
+        for (_rs_name, cc_name) in &self.nested_records {
+            let cc_name = format_cc_type_name(cc_name)?;
+            path.extend(quote! { #cc_name ::});
+        }
+        Ok(path)
     }
 
-    pub fn cc_idents(&self) -> Result<Vec<Ident>> {
-        self.parts().map(|ns| format_cc_ident(ns)).collect()
+    /// Returns `foo::bar::baz::` (never reporting errors).
+    pub fn format_for_cc_debug(&self) -> String {
+        let mut path = String::new();
+        for part in self.parts() {
+            path.push_str(part);
+            path.push_str("::");
+        }
+        path
     }
 }
 
@@ -423,6 +462,13 @@ impl CcInclude {
         Self::SystemHeader("cstdint".into())
     }
 
+    /// Creates a `CcInclude` that represents `#include <cstring>` and provides
+    /// C++ methods like `std::memcpy`.
+    /// https://en.cppreference.com/w/cpp/header/cstring
+    pub fn cstring() -> Self {
+        Self::SystemHeader("cstring".into())
+    }
+
     /// Creates a `CcInclude` that represents `#include <memory>`.
     /// See https://en.cppreference.com/w/cpp/header/memory
     pub fn memory() -> Self {
@@ -448,6 +494,13 @@ impl CcInclude {
     /// See https://en.cppreference.com/w/cpp/header/optional
     pub fn optional() -> Self {
         Self::SystemHeader("optional".into())
+    }
+
+    /// Creates a `CcInclude` that represents `#include <bit>` and provides
+    /// C++ functions like `std::bit_cast`.
+    /// See https://en.cppreference.com/w/cpp/header/bit
+    pub fn bit() -> Self {
+        Self::SystemHeader("bit".into())
     }
 
     /// Creates a `CcInclude` that represents `#include <type_traits>` and
@@ -715,34 +768,34 @@ pub mod tests {
 
     #[gtest]
     fn test_namespace_qualifier_empty() {
-        let ns = NamespaceQualifier::new::<&str>([]);
+        let ns = NamespaceQualifier::new::<&str>([], true);
         let actual_rs = ns.format_for_rs();
         assert!(actual_rs.is_empty());
         let actual_cc = ns.format_for_cc().unwrap();
-        assert!(actual_cc.is_empty());
+        assert_cc_matches!(actual_cc, quote! { :: });
     }
 
     #[gtest]
     fn test_namespace_qualifier_basic() {
-        let ns = NamespaceQualifier::new(["foo", "bar"]);
+        let ns = NamespaceQualifier::new(["foo", "bar"], true);
         let actual_rs = ns.format_for_rs();
         assert_rs_matches!(actual_rs, quote! { foo::bar:: });
         let actual_cc = ns.format_for_cc().unwrap();
-        assert_cc_matches!(actual_cc, quote! { foo::bar:: });
+        assert_cc_matches!(actual_cc, quote! { :: foo::bar:: });
     }
 
     #[gtest]
     fn test_namespace_qualifier_reserved_cc_keyword() {
-        let ns = NamespaceQualifier::new(["foo", "impl", "bar"]);
+        let ns = NamespaceQualifier::new(["foo", "impl", "bar"], true);
         let actual_rs = ns.format_for_rs();
         assert_rs_matches!(actual_rs, quote! { foo :: r#impl :: bar :: });
         let actual_cc = ns.format_for_cc().unwrap();
-        assert_cc_matches!(actual_cc, quote! { foo::impl::bar:: });
+        assert_cc_matches!(actual_cc, quote! { :: foo::impl::bar:: });
     }
 
     #[gtest]
     fn test_namespace_qualifier_reserved_rust_keyword() {
-        let ns = NamespaceQualifier::new(["foo", "reinterpret_cast", "bar"]);
+        let ns = NamespaceQualifier::new(["foo", "reinterpret_cast", "bar"], true);
         let actual_rs = ns.format_for_rs();
         assert_rs_matches!(actual_rs, quote! { foo :: reinterpret_cast :: bar :: });
         let cc_error = ns.format_for_cc().unwrap_err();

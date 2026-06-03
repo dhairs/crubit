@@ -4,33 +4,32 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // structs_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_STRUCTS_STRUCTS_GOLDEN
 #define THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_STRUCTS_STRUCTS_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 #include "support/internal/slot.h"
 #include "support/rs_std/char.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 #include <utility>
 
-namespace structs {
-
-namespace abi_classification {
+namespace structs::abi_classification {
 
 // CRUBIT_ANNOTATE: must_bind=
-//
 //  Expected ABI classification: SSE.  (For indirect confirmation, see the
-//
 //  disassembly at https://godbolt.org/z/b7eeGcrGn).
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=141
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: abi_classification :: StructFloat") alignas(8)
     [[clang::trivial_abi]] StructFloat final {
@@ -49,38 +48,25 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   StructFloat(const StructFloat&) = delete;
   StructFloat& operator=(const StructFloat&) = delete;
   StructFloat(::crubit::UnsafeRelocateTag, StructFloat&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
   // CRUBIT_ANNOTATE: must_bind=
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/structs/structs.rs;l=174
   static ::structs::abi_classification::StructFloat create(float f);
 
   // CRUBIT_ANNOTATE: must_bind=
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/structs/structs.rs;l=178
   static ::structs::abi_classification::StructFloat multiply(
       ::structs::abi_classification::StructFloat x,
       ::structs::abi_classification::StructFloat y);
 
   // CRUBIT_ANNOTATE: must_bind=
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/structs/structs.rs;l=184
   static float inspect(::structs::abi_classification::StructFloat s);
 
  private:
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=142
     double __field0;
   };
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=143
     float __field1;
   };
   unsigned char __padding1[4];
@@ -90,13 +76,8 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
 };
 
 // CRUBIT_ANNOTATE: must_bind=
-//
 //  Expected ABI classification: integer.  (For indirect confirmation, see
-//
 //  the disassembly at https://godbolt.org/z/b7eeGcrGn).
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=136
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: abi_classification :: StructInteger") alignas(4)
     [[clang::trivial_abi]] StructInteger final {
@@ -115,34 +96,23 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   StructInteger(const StructInteger&) = delete;
   StructInteger& operator=(const StructInteger&) = delete;
   StructInteger(::crubit::UnsafeRelocateTag, StructInteger&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
   // CRUBIT_ANNOTATE: must_bind=
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/structs/structs.rs;l=159
-  static ::structs::abi_classification::StructInteger create(std::int32_t i);
+  static ::structs::abi_classification::StructInteger create(::std::int32_t i);
 
   // CRUBIT_ANNOTATE: must_bind=
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/structs/structs.rs;l=163
   static ::structs::abi_classification::StructInteger multiply(
       ::structs::abi_classification::StructInteger x,
       ::structs::abi_classification::StructInteger y);
 
   // CRUBIT_ANNOTATE: must_bind=
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/structs/structs.rs;l=167
-  static std::int32_t inspect(::structs::abi_classification::StructInteger s);
+  static ::std::int32_t inspect(::structs::abi_classification::StructInteger s);
 
  private:
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=136
-    std::int32_t __field0;
+    ::std::int32_t __field0;
   };
 
  private:
@@ -150,13 +120,8 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
 };
 
 // CRUBIT_ANNOTATE: must_bind=
-//
 //  Expected ABI classification: memory.  (For indirect confirmation, see
-//
 //  the disassembly at https://godbolt.org/z/b7eeGcrGn).
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=152
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: abi_classification :: StructMemory") alignas(1)
     [[clang::trivial_abi]] __attribute__((packed)) StructMemory final {
@@ -175,53 +140,37 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   StructMemory(const StructMemory&) = delete;
   StructMemory& operator=(const StructMemory&) = delete;
   StructMemory(::crubit::UnsafeRelocateTag, StructMemory&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
   // CRUBIT_ANNOTATE: must_bind=
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/structs/structs.rs;l=192
-  static ::structs::abi_classification::StructMemory create(std::int32_t i);
+  static ::structs::abi_classification::StructMemory create(::std::int32_t i);
 
   // CRUBIT_ANNOTATE: must_bind=
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/structs/structs.rs;l=196
   static ::structs::abi_classification::StructMemory multiply(
       ::structs::abi_classification::StructMemory x,
       ::structs::abi_classification::StructMemory y);
 
   // CRUBIT_ANNOTATE: must_bind=
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/structs/structs.rs;l=200
-  static std::int32_t inspect(::structs::abi_classification::StructMemory s);
+  static ::std::int32_t inspect(::structs::abi_classification::StructMemory s);
 
  private:
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=153
-    std::uint8_t _padding;
+    ::std::uint8_t _padding;
   };
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=154
-    std::int32_t i;
+    ::std::int32_t i;
   };
 
  private:
   static void __crubit_field_offset_assertions();
 };
 
-}  // namespace abi_classification
+}  // namespace structs::abi_classification
 
-namespace default_repr {
+namespace structs::default_repr {
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=39
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: default_repr :: Point") alignas(4)
     [[clang::trivial_abi]] Point final {
@@ -238,17 +187,13 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   Point(const Point&) = delete;
   Point& operator=(const Point&) = delete;
   Point(::crubit::UnsafeRelocateTag, Point&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=40
-    std::int32_t x;
+    ::std::int32_t x;
   };
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=41
-    std::int32_t y;
+    ::std::int32_t y;
   };
 
  private:
@@ -256,34 +201,25 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
 };
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=45
-::structs::default_repr::Point create(std::int32_t x, std::int32_t y);
+::structs::default_repr::Point create(::std::int32_t x, ::std::int32_t y);
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=50
-std::int32_t get_x(::structs::default_repr::Point p);
+::std::int32_t get_x(::structs::default_repr::Point p);
 
-}  // namespace default_repr
+}  // namespace structs::default_repr
 
-namespace dynamically_sized_type {
+namespace structs::dynamically_sized_type {
 
-// Error generating bindings for
-// `dynamically_sized_type::DynamicallySizedStruct` defined at
+// Error generating bindings for struct
+// `structs_golden::dynamically_sized_type::DynamicallySizedStruct` defined at
 // cc_bindings_from_rs/test/structs/structs.rs;l=309:
 // Bindings for dynamically sized types are not supported.
 
 }
 
-namespace interior_mutability {
+namespace structs::interior_mutability {
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=360
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: interior_mutability :: SomeStruct") alignas(4)
     [[clang::trivial_abi]] SomeStruct final {
@@ -301,26 +237,23 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   SomeStruct(const SomeStruct&) = delete;
   SomeStruct& operator=(const SomeStruct&) = delete;
   SomeStruct(::crubit::UnsafeRelocateTag, SomeStruct&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
  private:
   // Field type has been replaced with a blob of bytes: Generic types are not
   // supported yet (b/259749095)
-  unsigned char field[4];
+  ::std::array<unsigned char, 4> field;
 
  private:
   static void __crubit_field_offset_assertions();
 };
 
-}  // namespace interior_mutability
+}  // namespace structs::interior_mutability
 
-namespace keyword_named_fields_and_methods {
+namespace structs::keyword_named_fields_and_methods {
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=390
 struct
     CRUBIT_INTERNAL_RUST_TYPE(
         ":: structs_golden :: keyword_named_fields_and_methods :: "
@@ -340,34 +273,26 @@ struct
   AField(const AField&) = delete;
   AField& operator=(const AField&) = delete;
   AField(::crubit::UnsafeRelocateTag, AField&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
   // CRUBIT_ANNOTATE: must_bind=
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/structs/structs.rs;l=395
-  std::int32_t operator_() const;
+  ::std::int32_t operator_() const;
 
  private:
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=391
-    std::int32_t operator__;
+    ::std::int32_t operator__;
   };
 
  private:
   static void __crubit_field_offset_assertions();
 };
 
-}  // namespace keyword_named_fields_and_methods
+}  // namespace structs::keyword_named_fields_and_methods
 
-namespace nested_ptr_type_mutability_qualifiers {
+namespace structs::nested_ptr_type_mutability_qualifiers {
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=321
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: nested_ptr_type_mutability_qualifiers :: "
     "SomeStruct") alignas(8) [[clang::trivial_abi]] SomeStruct final {
@@ -385,16 +310,12 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   SomeStruct(const SomeStruct&) = delete;
   SomeStruct& operator=(const SomeStruct&) = delete;
   SomeStruct(::crubit::UnsafeRelocateTag, SomeStruct&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=322
     float const** mut_const_ptr;
   };
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=323
     float* const* const_mut_ptr;
   };
 
@@ -402,14 +323,11 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   static void __crubit_field_offset_assertions();
 };
 
-}  // namespace nested_ptr_type_mutability_qualifiers
+}  // namespace structs::nested_ptr_type_mutability_qualifiers
 
-namespace non_cpp_movable {
+namespace structs::non_cpp_movable {
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=60
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: non_cpp_movable :: Point") alignas(4)
     [[clang::trivial_abi]] Point final {
@@ -422,26 +340,22 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   ~Point();
 
   // C++ move operations are unavailable for this type. See
-  // http://<internal link>/rust/movable_types for an explanation of Rust types that
+  // http://crubit.rs/rust/movable_types for an explanation of Rust types that
   // are C++ movable.
   Point(Point&&) = delete;
-  Point& operator=(Point&&) = delete;
+  ::structs::non_cpp_movable::Point& operator=(Point&&) = delete;
   // `structs_golden::non_cpp_movable::Point` doesn't implement the `Clone`
   // trait
   Point(const Point&) = delete;
   Point& operator=(const Point&) = delete;
   Point(::crubit::UnsafeRelocateTag, Point&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=61
-    std::int32_t x;
+    ::std::int32_t x;
   };
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=62
-    std::int32_t y;
+    ::std::int32_t y;
   };
 
  private:
@@ -449,25 +363,16 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
 };
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=73
-::structs::non_cpp_movable::Point create(std::int32_t x, std::int32_t y);
+::structs::non_cpp_movable::Point create(::std::int32_t x, ::std::int32_t y);
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=79
-std::int32_t get_x(::structs::non_cpp_movable::Point const& p);
+::std::int32_t get_x(::structs::non_cpp_movable::Point const& p);
 
-}  // namespace non_cpp_movable
+}  // namespace structs::non_cpp_movable
 
-namespace repr_c {
+namespace structs::repr_c {
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=14
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: repr_c :: Point") alignas(4) [[clang::trivial_abi]]
 Point final {
@@ -484,17 +389,13 @@ Point final {
   Point(const Point&) = delete;
   Point& operator=(const Point&) = delete;
   Point(::crubit::UnsafeRelocateTag, Point&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=15
-    std::int32_t x;
+    ::std::int32_t x;
   };
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=16
-    std::int32_t y;
+    ::std::int32_t y;
   };
 
  private:
@@ -502,25 +403,16 @@ Point final {
 };
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=20
-::structs::repr_c::Point create(std::int32_t x, std::int32_t y);
+::structs::repr_c::Point create(::std::int32_t x, ::std::int32_t y);
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=25
-std::int32_t get_x(::structs::repr_c::Point p);
+::std::int32_t get_x(::structs::repr_c::Point p);
 
-}  // namespace repr_c
+}  // namespace structs::repr_c
 
-namespace struct_by_float_passing_with_no_cc_definition {
+namespace structs::struct_by_float_passing_with_no_cc_definition {
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=220
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: struct_by_float_passing_with_no_cc_definition :: "
     "StructFloat") alignas(8) [[clang::trivial_abi]] StructFloat final {
@@ -539,18 +431,14 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   StructFloat(const StructFloat&) = delete;
   StructFloat& operator=(const StructFloat&) = delete;
   StructFloat(::crubit::UnsafeRelocateTag, StructFloat&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
  private:
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=221
     double __field0;
   };
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=222
     float __field1;
   };
 
@@ -559,36 +447,24 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
 };
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=229
 ::structs::struct_by_float_passing_with_no_cc_definition::StructFloat
 no_mangle_create(float f);
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=243
 float no_mangle_inspect(
     ::structs::struct_by_float_passing_with_no_cc_definition::StructFloat s);
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=235
 ::structs::struct_by_float_passing_with_no_cc_definition::StructFloat
 no_mangle_multiply(
     ::structs::struct_by_float_passing_with_no_cc_definition::StructFloat x,
     ::structs::struct_by_float_passing_with_no_cc_definition::StructFloat y);
 
-}  // namespace struct_by_float_passing_with_no_cc_definition
+}  // namespace structs::struct_by_float_passing_with_no_cc_definition
 
-namespace struct_by_float_passing_with_no_thunk {
+namespace structs::struct_by_float_passing_with_no_thunk {
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=264
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: struct_by_float_passing_with_no_thunk :: "
     "StructFloat") alignas(8) [[clang::trivial_abi]] StructFloat final {
@@ -606,21 +482,18 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   StructFloat(const StructFloat&);
 
   // Clone::clone_from
-  StructFloat& operator=(const StructFloat&);
+  ::structs::struct_by_float_passing_with_no_thunk::StructFloat& operator=(
+      const StructFloat&);
 
   StructFloat(::crubit::UnsafeRelocateTag, StructFloat&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
  private:
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=265
     double __field0;
   };
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=266
     float __field1;
   };
 
@@ -629,36 +502,24 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
 };
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=281
 ::structs::struct_by_float_passing_with_no_thunk::StructFloat thunkless_create(
     float f);
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=295
 float thunkless_inspect(
     ::structs::struct_by_float_passing_with_no_thunk::StructFloat s);
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=287
 ::structs::struct_by_float_passing_with_no_thunk::StructFloat
 thunkless_multiply(
     ::structs::struct_by_float_passing_with_no_thunk::StructFloat x,
     ::structs::struct_by_float_passing_with_no_thunk::StructFloat y);
 
-}  // namespace struct_by_float_passing_with_no_thunk
+}  // namespace structs::struct_by_float_passing_with_no_thunk
 
-namespace unsupported_types {
+namespace structs::unsupported_types {
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=373
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: unsupported_types :: SomeStruct") alignas(4)
     [[clang::trivial_abi]] SomeStruct final {
@@ -676,18 +537,13 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   SomeStruct(const SomeStruct&) = delete;
   SomeStruct& operator=(const SomeStruct&) = delete;
   SomeStruct(::crubit::UnsafeRelocateTag, SomeStruct&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
   // CRUBIT_ANNOTATE: must_bind=
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/structs/structs.rs;l=379
   static ::structs::unsupported_types::SomeStruct create(rs_std::char_ x);
 
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=374
     rs_std::char_ unsupported_field;
   };
 
@@ -695,26 +551,26 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   static void __crubit_field_offset_assertions();
 };
 
-}  // namespace unsupported_types
+}  // namespace structs::unsupported_types
 
-namespace zst_fields {
+namespace structs::zst_fields {
 
-// Error generating bindings for `zst_fields::Zst1` defined at
+// Error generating bindings for struct `structs_golden::zst_fields::Zst1`
+// defined at
 // cc_bindings_from_rs/test/structs/structs.rs;l=88:
 // Zero-sized types (ZSTs) are not supported (b/258259459)
 
-// Error generating bindings for `zst_fields::Zst2` defined at
+// Error generating bindings for struct `structs_golden::zst_fields::Zst2`
+// defined at
 // cc_bindings_from_rs/test/structs/structs.rs;l=89:
 // Zero-sized types (ZSTs) are not supported (b/258259459)
 
-// Error generating bindings for `zst_fields::Zst3` defined at
+// Error generating bindings for struct `structs_golden::zst_fields::Zst3`
+// defined at
 // cc_bindings_from_rs/test/structs/structs.rs;l=90:
 // Zero-sized types (ZSTs) are not supported (b/258259459)
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=93
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: structs_golden :: zst_fields :: ZstFields") alignas(4)
     [[clang::trivial_abi]] ZstFields final {
@@ -732,12 +588,10 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   ZstFields(const ZstFields&) = delete;
   ZstFields& operator=(const ZstFields&) = delete;
   ZstFields(::crubit::UnsafeRelocateTag, ZstFields&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/structs/structs.rs;l=97
-    std::int32_t value;
+    ::std::int32_t value;
   };
   // Skipped bindings for field `zst1`: ZST fields are not supported
   // (b/258259459)
@@ -752,20 +606,14 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
 };
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=101
-::structs::zst_fields::ZstFields create(std::int32_t value);
+::structs::zst_fields::ZstFields create(::std::int32_t value);
 
 // CRUBIT_ANNOTATE: must_bind=
-//
-// Generated from:
-// cc_bindings_from_rs/test/structs/structs.rs;l=106
-std::int32_t get_value(::structs::zst_fields::ZstFields x);
+::std::int32_t get_value(::structs::zst_fields::ZstFields x);
 
-}  // namespace zst_fields
+}  // namespace structs::zst_fields
 
-namespace abi_classification {
+namespace structs::abi_classification {
 
 static_assert(
     sizeof(StructFloat) == 16,
@@ -773,9 +621,11 @@ static_assert(
 static_assert(
     alignof(StructFloat) == 8,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<StructFloat>);
-static_assert(std::is_trivially_move_constructible_v<StructFloat>);
-static_assert(std::is_trivially_move_assignable_v<StructFloat>);
+static_assert(::std::is_trivially_destructible_v<StructFloat>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::structs::abi_classification::StructFloat>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::structs::abi_classification::StructFloat>);
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_create(
     float, ::structs::abi_classification::StructFloat* __ret_ptr);
@@ -785,7 +635,7 @@ inline ::structs::abi_classification::StructFloat StructFloat::create(float f) {
       __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_create(f, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
@@ -801,7 +651,7 @@ inline ::structs::abi_classification::StructFloat StructFloat::multiply(
       __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_multiply(&x, &y, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
@@ -822,20 +672,22 @@ static_assert(
 static_assert(
     alignof(StructInteger) == 4,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<StructInteger>);
-static_assert(std::is_trivially_move_constructible_v<StructInteger>);
-static_assert(std::is_trivially_move_assignable_v<StructInteger>);
+static_assert(::std::is_trivially_destructible_v<StructInteger>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::structs::abi_classification::StructInteger>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::structs::abi_classification::StructInteger>);
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_create(
-    std::int32_t, ::structs::abi_classification::StructInteger* __ret_ptr);
+    ::std::int32_t, ::structs::abi_classification::StructInteger* __ret_ptr);
 }
 inline ::structs::abi_classification::StructInteger StructInteger::create(
-    std::int32_t i) {
+    ::std::int32_t i) {
   crubit::Slot<::structs::abi_classification::StructInteger>
       __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_create(i, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
@@ -851,14 +703,14 @@ inline ::structs::abi_classification::StructInteger StructInteger::multiply(
       __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_multiply(&x, &y, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_inspect(
+extern "C" ::std::int32_t __crubit_thunk_inspect(
     ::structs::abi_classification::StructInteger*);
 }
-inline std::int32_t StructInteger::inspect(
+inline ::std::int32_t StructInteger::inspect(
     ::structs::abi_classification::StructInteger s) {
   return __crubit_internal::__crubit_thunk_inspect(&s);
 }
@@ -871,20 +723,22 @@ static_assert(
 static_assert(
     alignof(StructMemory) == 1,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<StructMemory>);
-static_assert(std::is_trivially_move_constructible_v<StructMemory>);
-static_assert(std::is_trivially_move_assignable_v<StructMemory>);
+static_assert(::std::is_trivially_destructible_v<StructMemory>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::structs::abi_classification::StructMemory>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::structs::abi_classification::StructMemory>);
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_create(
-    std::int32_t, ::structs::abi_classification::StructMemory* __ret_ptr);
+    ::std::int32_t, ::structs::abi_classification::StructMemory* __ret_ptr);
 }
 inline ::structs::abi_classification::StructMemory StructMemory::create(
-    std::int32_t i) {
+    ::std::int32_t i) {
   crubit::Slot<::structs::abi_classification::StructMemory>
       __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_create(i, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
@@ -900,14 +754,14 @@ inline ::structs::abi_classification::StructMemory StructMemory::multiply(
       __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_multiply(&x, &y, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_inspect(
+extern "C" ::std::int32_t __crubit_thunk_inspect(
     ::structs::abi_classification::StructMemory*);
 }
-inline std::int32_t StructMemory::inspect(
+inline ::std::int32_t StructMemory::inspect(
     ::structs::abi_classification::StructMemory s) {
   return __crubit_internal::__crubit_thunk_inspect(&s);
 }
@@ -915,9 +769,9 @@ inline void StructMemory::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(StructMemory, _padding));
   static_assert(1 == offsetof(StructMemory, i));
 }
-}  // namespace abi_classification
+}  // namespace structs::abi_classification
 
-namespace default_repr {
+namespace structs::default_repr {
 
 static_assert(
     sizeof(Point) == 8,
@@ -925,36 +779,38 @@ static_assert(
 static_assert(
     alignof(Point) == 4,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<Point>);
-static_assert(std::is_trivially_move_constructible_v<Point>);
-static_assert(std::is_trivially_move_assignable_v<Point>);
+static_assert(::std::is_trivially_destructible_v<Point>);
+static_assert(
+    ::std::is_trivially_move_constructible_v<::structs::default_repr::Point>);
+static_assert(
+    ::std::is_trivially_move_assignable_v<::structs::default_repr::Point>);
 inline void Point::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(Point, x));
   static_assert(4 == offsetof(Point, y));
 }
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_create(
-    std::int32_t, std::int32_t, ::structs::default_repr::Point* __ret_ptr);
+    ::std::int32_t, ::std::int32_t, ::structs::default_repr::Point* __ret_ptr);
 }
-inline ::structs::default_repr::Point create(std::int32_t x, std::int32_t y) {
+inline ::structs::default_repr::Point create(::std::int32_t x,
+                                             ::std::int32_t y) {
   crubit::Slot<::structs::default_repr::Point> __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_create(x, y, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_get_ux(::structs::default_repr::Point*);
+extern "C" ::std::int32_t __crubit_thunk_get_ux(
+    ::structs::default_repr::Point*);
 }
-inline std::int32_t get_x(::structs::default_repr::Point p) {
+inline ::std::int32_t get_x(::structs::default_repr::Point p) {
   return __crubit_internal::__crubit_thunk_get_ux(&p);
 }
 
-}  // namespace default_repr
+}  // namespace structs::default_repr
 
-namespace dynamically_sized_type {}
-
-namespace interior_mutability {
+namespace structs::interior_mutability {
 
 static_assert(
     sizeof(SomeStruct) == 4,
@@ -966,18 +822,20 @@ namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(
     ::structs::interior_mutability::SomeStruct* __ret_ptr);
 }
-inline SomeStruct::SomeStruct() {
+inline ::structs::interior_mutability::SomeStruct::SomeStruct() {
   __crubit_internal::__crubit_thunk_default(this);
 }
-static_assert(std::is_trivially_destructible_v<SomeStruct>);
-static_assert(std::is_trivially_move_constructible_v<SomeStruct>);
-static_assert(std::is_trivially_move_assignable_v<SomeStruct>);
+static_assert(::std::is_trivially_destructible_v<SomeStruct>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::structs::interior_mutability::SomeStruct>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::structs::interior_mutability::SomeStruct>);
 inline void SomeStruct::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(SomeStruct, field));
 }
-}  // namespace interior_mutability
+}  // namespace structs::interior_mutability
 
-namespace keyword_named_fields_and_methods {
+namespace structs::keyword_named_fields_and_methods {
 
 static_assert(
     sizeof(AField) == 4,
@@ -985,23 +843,25 @@ static_assert(
 static_assert(
     alignof(AField) == 4,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<AField>);
-static_assert(std::is_trivially_move_constructible_v<AField>);
-static_assert(std::is_trivially_move_assignable_v<AField>);
+static_assert(::std::is_trivially_destructible_v<AField>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::structs::keyword_named_fields_and_methods::AField>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::structs::keyword_named_fields_and_methods::AField>);
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_operator(
+extern "C" ::std::int32_t __crubit_thunk_operator(
     ::structs::keyword_named_fields_and_methods::AField const&);
 }
-inline std::int32_t AField::operator_() const {
+inline ::std::int32_t AField::operator_() const {
   auto&& self = *this;
   return __crubit_internal::__crubit_thunk_operator(self);
 }
 inline void AField::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(AField, operator__));
 }
-}  // namespace keyword_named_fields_and_methods
+}  // namespace structs::keyword_named_fields_and_methods
 
-namespace nested_ptr_type_mutability_qualifiers {
+namespace structs::nested_ptr_type_mutability_qualifiers {
 
 static_assert(
     sizeof(SomeStruct) == 16,
@@ -1013,19 +873,22 @@ namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(
     ::structs::nested_ptr_type_mutability_qualifiers::SomeStruct* __ret_ptr);
 }
-inline SomeStruct::SomeStruct() {
+inline ::structs::nested_ptr_type_mutability_qualifiers::SomeStruct::
+    SomeStruct() {
   __crubit_internal::__crubit_thunk_default(this);
 }
-static_assert(std::is_trivially_destructible_v<SomeStruct>);
-static_assert(std::is_trivially_move_constructible_v<SomeStruct>);
-static_assert(std::is_trivially_move_assignable_v<SomeStruct>);
+static_assert(::std::is_trivially_destructible_v<SomeStruct>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::structs::nested_ptr_type_mutability_qualifiers::SomeStruct>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::structs::nested_ptr_type_mutability_qualifiers::SomeStruct>);
 inline void SomeStruct::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(SomeStruct, mut_const_ptr));
   static_assert(8 == offsetof(SomeStruct, const_mut_ptr));
 }
-}  // namespace nested_ptr_type_mutability_qualifiers
+}  // namespace structs::nested_ptr_type_mutability_qualifiers
 
-namespace non_cpp_movable {
+namespace structs::non_cpp_movable {
 
 static_assert(
     sizeof(Point) == 8,
@@ -1043,27 +906,28 @@ inline void Point::__crubit_field_offset_assertions() {
 }
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_create(
-    std::int32_t, std::int32_t, ::structs::non_cpp_movable::Point* __ret_ptr);
+    ::std::int32_t, ::std::int32_t,
+    ::structs::non_cpp_movable::Point* __ret_ptr);
 }
-inline ::structs::non_cpp_movable::Point create(std::int32_t x,
-                                                std::int32_t y) {
+inline ::structs::non_cpp_movable::Point create(::std::int32_t x,
+                                                ::std::int32_t y) {
   crubit::Slot<::structs::non_cpp_movable::Point> __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_create(x, y, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_get_ux(
+extern "C" ::std::int32_t __crubit_thunk_get_ux(
     ::structs::non_cpp_movable::Point const&);
 }
-inline std::int32_t get_x(::structs::non_cpp_movable::Point const& p) {
+inline ::std::int32_t get_x(::structs::non_cpp_movable::Point const& p) {
   return __crubit_internal::__crubit_thunk_get_ux(p);
 }
 
-}  // namespace non_cpp_movable
+}  // namespace structs::non_cpp_movable
 
-namespace repr_c {
+namespace structs::repr_c {
 
 static_assert(
     sizeof(Point) == 8,
@@ -1071,34 +935,35 @@ static_assert(
 static_assert(
     alignof(Point) == 4,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<Point>);
-static_assert(std::is_trivially_move_constructible_v<Point>);
-static_assert(std::is_trivially_move_assignable_v<Point>);
+static_assert(::std::is_trivially_destructible_v<Point>);
+static_assert(
+    ::std::is_trivially_move_constructible_v<::structs::repr_c::Point>);
+static_assert(::std::is_trivially_move_assignable_v<::structs::repr_c::Point>);
 inline void Point::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(Point, x));
   static_assert(4 == offsetof(Point, y));
 }
 namespace __crubit_internal {
-extern "C" void __crubit_thunk_create(std::int32_t, std::int32_t,
+extern "C" void __crubit_thunk_create(::std::int32_t, ::std::int32_t,
                                       ::structs::repr_c::Point* __ret_ptr);
 }
-inline ::structs::repr_c::Point create(std::int32_t x, std::int32_t y) {
+inline ::structs::repr_c::Point create(::std::int32_t x, ::std::int32_t y) {
   crubit::Slot<::structs::repr_c::Point> __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_create(x, y, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_get_ux(::structs::repr_c::Point*);
+extern "C" ::std::int32_t __crubit_thunk_get_ux(::structs::repr_c::Point*);
 }
-inline std::int32_t get_x(::structs::repr_c::Point p) {
+inline ::std::int32_t get_x(::structs::repr_c::Point p) {
   return __crubit_internal::__crubit_thunk_get_ux(&p);
 }
 
-}  // namespace repr_c
+}  // namespace structs::repr_c
 
-namespace struct_by_float_passing_with_no_cc_definition {
+namespace structs::struct_by_float_passing_with_no_cc_definition {
 
 static_assert(
     sizeof(StructFloat) == 16,
@@ -1106,9 +971,13 @@ static_assert(
 static_assert(
     alignof(StructFloat) == 8,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<StructFloat>);
-static_assert(std::is_trivially_move_constructible_v<StructFloat>);
-static_assert(std::is_trivially_move_assignable_v<StructFloat>);
+static_assert(::std::is_trivially_destructible_v<StructFloat>);
+static_assert(
+    ::std::is_trivially_move_constructible_v<
+        ::structs::struct_by_float_passing_with_no_cc_definition::StructFloat>);
+static_assert(
+    ::std::is_trivially_move_assignable_v<
+        ::structs::struct_by_float_passing_with_no_cc_definition::StructFloat>);
 inline void StructFloat::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(StructFloat, __field0));
   static_assert(8 == offsetof(StructFloat, __field1));
@@ -1127,7 +996,7 @@ no_mangle_create(float f) {
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_no_umangle_ucreate(f,
                                                        __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
@@ -1156,12 +1025,12 @@ no_mangle_multiply(
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_no_umangle_umultiply(
       &x, &y, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
-}  // namespace struct_by_float_passing_with_no_cc_definition
+}  // namespace structs::struct_by_float_passing_with_no_cc_definition
 
-namespace struct_by_float_passing_with_no_thunk {
+namespace structs::struct_by_float_passing_with_no_thunk {
 
 static_assert(
     sizeof(StructFloat) == 16,
@@ -1169,9 +1038,11 @@ static_assert(
 static_assert(
     alignof(StructFloat) == 8,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<StructFloat>);
-static_assert(std::is_trivially_move_constructible_v<StructFloat>);
-static_assert(std::is_trivially_move_assignable_v<StructFloat>);
+static_assert(::std::is_trivially_destructible_v<StructFloat>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::structs::struct_by_float_passing_with_no_thunk::StructFloat>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::structs::struct_by_float_passing_with_no_thunk::StructFloat>);
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_clone(
     ::structs::struct_by_float_passing_with_no_thunk::StructFloat const&,
@@ -1182,10 +1053,13 @@ extern "C" void __crubit_thunk_clone_ufrom(
     ::structs::struct_by_float_passing_with_no_thunk::StructFloat&,
     ::structs::struct_by_float_passing_with_no_thunk::StructFloat const&);
 }
-inline StructFloat::StructFloat(const StructFloat& other) {
+inline ::structs::struct_by_float_passing_with_no_thunk::StructFloat::
+    StructFloat(const StructFloat& other) {
   __crubit_internal::__crubit_thunk_clone(other, this);
 }
-inline StructFloat& StructFloat::operator=(const StructFloat& other) {
+inline ::structs::struct_by_float_passing_with_no_thunk::StructFloat& ::
+structs::struct_by_float_passing_with_no_thunk::StructFloat::operator=(
+    const StructFloat& other) {
   if (this != &other) {
     __crubit_internal::__crubit_thunk_clone_ufrom(*this, other);
   }
@@ -1209,7 +1083,7 @@ thunkless_create(float f) {
   __crubit_internal::
       __crubit_thunk_struct_uby_ufloat_upassing_uwith_uno_uthunk_u_uthunkless_ucreate(
           f, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
@@ -1241,12 +1115,12 @@ thunkless_multiply(
   __crubit_internal::
       __crubit_thunk_struct_uby_ufloat_upassing_uwith_uno_uthunk_u_uthunkless_umultiply(
           &x, &y, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
-}  // namespace struct_by_float_passing_with_no_thunk
+}  // namespace structs::struct_by_float_passing_with_no_thunk
 
-namespace unsupported_types {
+namespace structs::unsupported_types {
 
 static_assert(
     sizeof(SomeStruct) == 4,
@@ -1258,12 +1132,14 @@ namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(
     ::structs::unsupported_types::SomeStruct* __ret_ptr);
 }
-inline SomeStruct::SomeStruct() {
+inline ::structs::unsupported_types::SomeStruct::SomeStruct() {
   __crubit_internal::__crubit_thunk_default(this);
 }
-static_assert(std::is_trivially_destructible_v<SomeStruct>);
-static_assert(std::is_trivially_move_constructible_v<SomeStruct>);
-static_assert(std::is_trivially_move_assignable_v<SomeStruct>);
+static_assert(::std::is_trivially_destructible_v<SomeStruct>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::structs::unsupported_types::SomeStruct>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::structs::unsupported_types::SomeStruct>);
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_create(
     rs_std::char_, ::structs::unsupported_types::SomeStruct* __ret_ptr);
@@ -1274,14 +1150,14 @@ inline ::structs::unsupported_types::SomeStruct SomeStruct::create(
       __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_create(x, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 inline void SomeStruct::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(SomeStruct, unsupported_field));
 }
-}  // namespace unsupported_types
+}  // namespace structs::unsupported_types
 
-namespace zst_fields {
+namespace structs::zst_fields {
 
 static_assert(
     sizeof(ZstFields) == 4,
@@ -1289,32 +1165,34 @@ static_assert(
 static_assert(
     alignof(ZstFields) == 4,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<ZstFields>);
-static_assert(std::is_trivially_move_constructible_v<ZstFields>);
-static_assert(std::is_trivially_move_assignable_v<ZstFields>);
+static_assert(::std::is_trivially_destructible_v<ZstFields>);
+static_assert(
+    ::std::is_trivially_move_constructible_v<::structs::zst_fields::ZstFields>);
+static_assert(
+    ::std::is_trivially_move_assignable_v<::structs::zst_fields::ZstFields>);
 inline void ZstFields::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(ZstFields, value));
 }
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_create(
-    std::int32_t, ::structs::zst_fields::ZstFields* __ret_ptr);
+    ::std::int32_t, ::structs::zst_fields::ZstFields* __ret_ptr);
 }
-inline ::structs::zst_fields::ZstFields create(std::int32_t value) {
+inline ::structs::zst_fields::ZstFields create(::std::int32_t value) {
   crubit::Slot<::structs::zst_fields::ZstFields> __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_create(value, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_get_uvalue(
+extern "C" ::std::int32_t __crubit_thunk_get_uvalue(
     ::structs::zst_fields::ZstFields*);
 }
-inline std::int32_t get_value(::structs::zst_fields::ZstFields x) {
+inline ::std::int32_t get_value(::structs::zst_fields::ZstFields x) {
   return __crubit_internal::__crubit_thunk_get_uvalue(&x);
 }
 
-}  // namespace zst_fields
+}  // namespace structs::zst_fields
 
-}  // namespace structs
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_STRUCTS_STRUCTS_GOLDEN

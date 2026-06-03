@@ -4,7 +4,6 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/annotations:owned_ptr
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #include "support/internal/cxx20_backports.h"
 #include "support/internal/offsetof.h"
@@ -32,6 +31,22 @@ extern "C" void __rust_thunk___ZN5Thing5CloseEv(struct Thing* __this) {
   __this->Close();
 }
 
-static_assert((void (::Thing::*)())&Thing::Close);
+static_assert((void (::Thing::*)()) & ::Thing::Close);
+
+static_assert(CRUBIT_SIZEOF(struct CustomThing) == 4);
+static_assert(alignof(struct CustomThing) == 4);
+static_assert(CRUBIT_OFFSET_OF(value, struct CustomThing) == 0);
+
+extern "C" void __rust_thunk___ZN11CustomThingC1Ei(struct CustomThing* __this,
+                                                   int32_t value) {
+  crubit::construct_at(__this, value);
+}
+
+extern "C" void __rust_thunk___ZN11CustomThing14CustomDropImplEv(
+    struct CustomThing* __this) {
+  __this->CustomDropImpl();
+}
+
+static_assert((void (::CustomThing::*)()) & ::CustomThing::CustomDropImpl);
 
 #pragma clang diagnostic pop

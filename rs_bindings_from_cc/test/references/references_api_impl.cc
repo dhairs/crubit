@@ -4,7 +4,6 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/references:references
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #include "support/internal/cxx20_backports.h"
 #include "support/internal/offsetof.h"
@@ -22,8 +21,18 @@
 static_assert(sizeof(class TypeWithPtrConstructor) == 1);
 static_assert(alignof(class TypeWithPtrConstructor) == 1);
 
+extern "C" void __rust_thunk___ZN22TypeWithPtrConstructorC1EPi(
+    class TypeWithPtrConstructor* __this, int* ptr) {
+  crubit::construct_at(__this, ptr);
+}
+
 static_assert(sizeof(class TypeWithNonNullPtrConstructor) == 1);
 static_assert(alignof(class TypeWithNonNullPtrConstructor) == 1);
+
+extern "C" void __rust_thunk___ZN29TypeWithNonNullPtrConstructorC1EPi(
+    class TypeWithNonNullPtrConstructor* __this, int* ptr) {
+  crubit::construct_at(__this, ptr);
+}
 
 static_assert(sizeof(class TypeWithReferenceConstructor) == 1);
 static_assert(alignof(class TypeWithReferenceConstructor) == 1);

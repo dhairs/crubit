@@ -4,15 +4,14 @@
 #![allow(clippy::collapsible_else_if)]
 
 use arc_anyhow::{Context, Result};
-use code_gen_utils::{expect_format_cc_type_name, make_rs_ident};
+use code_gen_utils::{expect_format_cc_type_name, make_rs_ident, make_rs_lifetime_ident};
 use cpp_type_name::{cpp_tagless_type_name_for_record, cpp_type_name_for_record};
 use database::code_snippet::{
-    ApiSnippets, AssertableTrait, Assertion, BitPadding, BitfieldComment, DeriveAttr,
-    DocCommentAttr, Feature, FieldDefinition, FieldType, GeneratedItem, MustUseAttr,
-    NoUniqueAddressAccessor, RecursivelyPinnedAttr, SizeofImpl, StructOrUnion, Thunk, ThunkImpl,
-    UpcastImpl, UpcastImplBody, Visibility,
+    ApiSnippets, AssertableTrait, Assertion, BitPadding, BitfieldComment, DeleteImpl,
+    DeprecatedAttr, DeriveAttr, DisplayImpl, DocCommentAttr, Feature, FieldDefinition, FieldType,
+    GeneratedItem, MustUseAttr, NoUniqueAddressAccessor, RecursivelyPinnedAttr, SizeofImpl,
+    StructOrUnion, Thunk, ThunkImpl, UpcastImpl, UpcastImplBody, Visibility,
 };
-use database::db;
 use database::rs_snippet::{should_derive_clone, RsTypeKind};
 use database::BindingsGenerator;
 use error_report::{bail, ensure};
@@ -20,6 +19,7 @@ use flagset::FlagSet;
 use generate_comment::generate_doc_comment;
 use ir::*;
 use itertools::Itertools;
+use lifetime_defaults_transform::lifetime_defaults_transform_record;
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
 use quote::ToTokens;
@@ -54,16 +54,18 @@ fn needs_manually_drop(ty: &RsTypeKind) -> bool {
 
 /// Generates Rust source code for a given incomplete record declaration.
 pub fn generate_incomplete_record(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     incomplete_record: Rc<IncompleteRecord>,
 ) -> Result<ApiSnippets> {
+    db.errors().add_category(error_report::Category::NonMovable);
+
     // If the record won't have bindings, we default to `public` to keep going anyway.
     let visibility = db
         .has_bindings(ir::Item::IncompleteRecord(incomplete_record.clone()))
         .unwrap_or_default()
         .visibility;
     let cc_type = expect_format_cc_type_name(incomplete_record.cc_name.identifier.as_ref());
-    let namespace_qualifier = db.ir().namespace_qualifier(&incomplete_record).format_for_cc()?;
+    let namespace_qualifier = db.namespace_qualifier(&incomplete_record).format_for_cc()?;
     Ok(ApiSnippets {
         generated_items: HashMap::from([(
             incomplete_record.id,
@@ -99,50 +101,50 @@ fn make_rs_field_ident(field: &Field, field_index: usize) -> Ident {
 ///
 /// See docs/struct_layout
 fn get_field_rs_type_kind_for_layout(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     record: &Record,
     field: &Field,
 ) -> Result<RsTypeKind> {
     if field.is_no_unique_address {
         bail!("`[[no_unique_address]]` attribute was present.");
     }
+    let ir = db.ir();
     match &field.unknown_attr {
         Err(e) => bail!("{e}"),
         Ok(None) => (),
         Ok(Some(unknown_attr)) => {
             // Both the template definition and its instantiation should enable experimental
             // features.
-            for target in record.defining_target().into_iter().chain([&record.owning_target]) {
-                let enabled_features = db.ir().target_crubit_features(target);
+            for target in
+                db.defining_target(record.id()).as_ref().into_iter().chain([&record.owning_target])
+            {
+                let enabled_features = ir.target_crubit_features(target);
                 ensure!(
                     enabled_features.contains(crubit_feature::CrubitFeature::Experimental),
-                    "unknown field attributes are only supported with experimental features \
+                    "crubit.rs/errors/unknown_attribute: unknown field attributes are only \
+                    supported with experimental features \
                     enabled on {target}\nUnknown attribute: {unknown_attr}`"
                 );
             }
         }
     }
-    let type_kind = match &field.type_ {
-        Ok(t) => db.rs_type_kind(t.clone())?,
-        Err(e) => bail!("{e}"),
-    };
+    let type_kind = db.rs_type_kind(field.type_.clone())?;
 
     if let RsTypeKind::Error { error, .. } = type_kind {
         return Err(error.clone());
     }
 
     if type_kind.is_bridge_type() {
-        bail!("Bridge-by-value types are not supported in struct fields.")
+        bail!("crubit.rs/errors/bridge_field: '{}' is a bridge type, but fields must be layout compatible between Rust and C++.",
+            type_kind.display(db))
     }
 
-    for target in record.defining_target().into_iter().chain([&record.owning_target]) {
-        let enabled_features = db.ir().target_crubit_features(target);
-        let (missing_features, reason) = type_kind.required_crubit_features(db, enabled_features);
-        ensure!(
-            missing_features.is_empty(),
-            "missing features: [{missing_features}]: {reason}",
-            missing_features = missing_features.into_iter().map(|f| f.aspect_hint()).join(", ")
-        );
+    for target in
+        db.defining_target(record.id()).as_ref().into_iter().chain([&record.owning_target])
+    {
+        let enabled_features = ir.target_crubit_features(target);
+        let reasons = type_kind.missing_feature_descriptions_of_type(target, enabled_features);
+        ensure!(reasons.is_empty(), reasons.join(", "));
     }
 
     // In supported, we replace nontrivial fields with opaque blobs.
@@ -151,8 +153,10 @@ fn get_field_rs_type_kind_for_layout(
     //
     // Users can still work around this with accessor functions.
     if record.should_implement_drop() && !record.is_union() && needs_manually_drop(&type_kind) {
-        for target in record.defining_target().into_iter().chain([&record.owning_target]) {
-            let enabled_features = db.ir().target_crubit_features(target);
+        for target in
+            db.defining_target(record.id()).as_ref().into_iter().chain([&record.owning_target])
+        {
+            let enabled_features = ir.target_crubit_features(target);
             ensure!(
                 enabled_features.contains(crubit_feature::CrubitFeature::Experimental),
                 "nontrivial fields would be destroyed in the wrong order"
@@ -163,15 +167,14 @@ fn get_field_rs_type_kind_for_layout(
 }
 
 fn collect_unqualified_member_functions_from_all_bases(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     record: &Record,
 ) -> Rc<[Rc<Func>]> {
-    let ir = db.ir();
     record
         .unambiguous_public_bases
         .iter()
         .flat_map(|base_class| {
-            let Ok(item) = ir.find_decl::<Item>(base_class.base_record_id) else {
+            let Ok(item) = db.find_decl::<Item>(base_class.base_record_id) else {
                 return vec![];
             };
 
@@ -187,22 +190,21 @@ fn collect_unqualified_member_functions_from_all_bases(
 
 /// Implementation of `BindingsGenerator::collect_unqualified_member_functions`.
 pub fn collect_unqualified_member_functions(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     record: Rc<Record>,
 ) -> Rc<[Rc<Func>]> {
-    let ir = db.ir();
     record
         .child_item_ids
         .iter()
         .filter_map(|id| {
-            let Ok(child_item) = ir.find_decl::<Item>(*id) else {
+            let Ok(child_item) = db.find_decl::<Item>(*id) else {
                 return None;
             };
 
-            if let Item::Func(member_function) = child_item {
-                if let UnqualifiedIdentifier::Identifier(_) = &member_function.rs_name {
-                    return Some(member_function.clone());
-                }
+            if let Item::Func(member_function) = child_item
+                && let UnqualifiedIdentifier::Identifier(_) = &member_function.rs_name
+            {
+                return Some(member_function.clone());
             }
 
             None
@@ -215,7 +217,7 @@ pub fn collect_unqualified_member_functions(
 /// Ambiguous functions are functions that have the same name as a function in
 /// the base class.
 fn filter_out_ambiguous_member_functions(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     derived_record: Rc<Record>,
     inherited_functions: Rc<[Rc<Func>]>,
 ) -> Rc<[Rc<Func>]> {
@@ -248,7 +250,7 @@ fn filter_out_ambiguous_member_functions(
 
 #[allow(clippy::too_many_arguments)]
 fn field_definition(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     record: &Record,
     field: Option<&ir::Field>,
     field_index: usize,
@@ -259,6 +261,9 @@ fn field_definition(
     override_alignment: &mut bool,
     fields_that_must_be_copy: &mut Vec<TokenStream>,
 ) -> Result<FieldDefinition> {
+    // TODO(b/481405536): we should do this unconditionally.
+    let internally_mutable_unknown_fields = !record.should_derive_copy();
+
     // opaque blob representations are always unaligned, even though the actual C++
     // field might be aligned. To put the current field at the right offset, we
     // might need to insert some extra padding.
@@ -273,11 +278,12 @@ fn field_definition(
     {
         0
     } else {
-        let padding_start = (prev_end + 7) / 8 * 8; // round up to byte boundary
+        let padding_start = prev_end.div_ceil(8) * 8; // round up to byte boundary
         offset - padding_start
     };
 
-    let padding = NonZeroUsize::new(padding_size_in_bits).map(BitPadding);
+    let padding = NonZeroUsize::new(padding_size_in_bits)
+        .map(|size| BitPadding { size, internally_mutable: internally_mutable_unknown_fields });
 
     // Bitfields get represented by private padding to ensure overall
     // struct layout is compatible.
@@ -287,17 +293,25 @@ fn field_definition(
             field_index,
             desc: desc.to_vec(),
             padding,
-            bits: BitPadding(
-                NonZeroUsize::new(end - offset)
+            bits: BitPadding {
+                size: NonZeroUsize::new(end - offset)
                     .expect("Bit padding should always be greater than 0"),
-            ),
+                internally_mutable: internally_mutable_unknown_fields,
+            },
         });
     };
 
+    let deprecated_attr = field.deprecated.clone().map(DeprecatedAttr);
     let ident = make_rs_field_ident(field, field_index);
     let field_rs_type_kind = get_field_rs_type_kind_for_layout(db, record, field);
     let doc_comment = match &field_rs_type_kind {
-        Ok(_) => generate_doc_comment(field.doc_comment.as_deref(), None, db.environment()),
+        Ok(_) => generate_doc_comment(
+            field.doc_comment.as_deref(),
+            None,
+            None,
+            db.is_golden_test(),
+            db.kythe_annotations(),
+        ),
         Err(msg) => {
             use std::fmt::Write;
 
@@ -310,11 +324,17 @@ fn field_definition(
                 &mut new_text,
                 "Reason for representing this field as a blob of bytes:\n{msg:#}"
             );
-            generate_doc_comment(Some(new_text.as_str()), None, db.environment())
+            generate_doc_comment(
+                Some(new_text.as_str()),
+                None,
+                None,
+                db.is_golden_test(),
+                db.kythe_annotations(),
+            )
         }
     };
     let visibility = if field.access == AccessSpecifier::Public && field_rs_type_kind.is_ok() {
-        db::type_visibility(db, &record.owning_target, field_rs_type_kind.clone().unwrap())
+        db.type_visibility(&record.owning_target, field_rs_type_kind.clone().unwrap())
             .unwrap_or_default()
     } else {
         Visibility::PubCrate
@@ -323,10 +343,11 @@ fn field_definition(
     let field_type = match field_rs_type_kind {
         Err(_) => {
             *override_alignment = true;
-            FieldType::Erased(BitPadding(
-                NonZeroUsize::new(end - field.offset)
+            FieldType::Erased(BitPadding {
+                size: NonZeroUsize::new(end - field.offset)
                     .expect("Bit padding should always be greater than 0"),
-            ))
+                internally_mutable: internally_mutable_unknown_fields,
+            })
         }
         Ok(type_kind) => {
             let ty = type_kind.to_token_stream(db);
@@ -345,28 +366,49 @@ fn field_definition(
         }
     };
 
-    Ok(FieldDefinition::Field { field_index, padding, doc_comment, visibility, ident, field_type })
+    Ok(FieldDefinition::Field {
+        field_index,
+        padding,
+        doc_comment,
+        deprecated_attr,
+        visibility,
+        ident,
+        field_type,
+    })
 }
 
 /// Implementation of `BindingsGenerator::generate_record`.
-pub fn generate_record(db: &dyn BindingsGenerator, record: Rc<Record>) -> Result<ApiSnippets> {
+pub fn generate_record(db: &BindingsGenerator, record: Rc<Record>) -> Result<ApiSnippets> {
+    use error_report::Category;
+    db.errors().add_category(Category::Type);
+    let record_safety = db.record_safety(record.clone());
+    if record_safety.is_some() {
+        db.errors().add_category(Category::Unsafe);
+    }
+    if !record.is_unpin() {
+        db.errors().add_category(Category::NonMovable);
+    }
+    if record.template_specialization.is_some() {
+        db.errors().add_category(Category::GenericInstantiation);
+    }
+
     let record_rs_type_kind = db.rs_type_kind(record.as_ref().into())?;
     if matches!(
         &record_rs_type_kind,
         RsTypeKind::Record { uniform_repr_template_type: Some(_), .. }
     ) {
-        return Ok(ApiSnippets::default());
-    }
-    if record_rs_type_kind.as_c9_co().is_some() {
+        db.errors().add_category(Category::GenericInstantiation);
         return Ok(ApiSnippets::default());
     }
     if record_rs_type_kind.is_bridge_type() {
+        db.errors().add_category(Category::Bridge);
         return Ok(ApiSnippets::default());
     }
+
     let ir = db.ir();
     let crate_root_path = ir.crate_root_path_tokens();
     let ident = make_rs_ident(record.rs_name.identifier.as_ref());
-    let namespace_qualifier = ir.namespace_qualifier(&record).format_for_rs();
+    let namespace_qualifier = db.namespace_qualifier(&record).format_for_rs();
     let qualified_ident = {
         quote! { #crate_root_path:: #namespace_qualifier #ident }
     };
@@ -530,7 +572,7 @@ pub fn generate_record(db: &dyn BindingsGenerator, record: Rc<Record>) -> Result
 
     api_snippets.cc_details.push(cc_struct_layout_assertion(db, &record)?);
 
-    let fully_qualified_cc_name = cpp_tagless_type_name_for_record(&record, ir)?.to_string();
+    let fully_qualified_cc_name = cpp_tagless_type_name_for_record(&record, db)?.to_string();
 
     let mut items = vec![];
     let mut nested_items = vec![];
@@ -544,6 +586,7 @@ pub fn generate_record(db: &dyn BindingsGenerator, record: Rc<Record>) -> Result
     }
 
     let mut indirect_functions = vec![];
+    let mut operator_delete_impl = None;
     filter_out_ambiguous_member_functions(
         db,
         record.clone(),
@@ -551,7 +594,8 @@ pub fn generate_record(db: &dyn BindingsGenerator, record: Rc<Record>) -> Result
     )
     .iter()
     .filter_map(|unambiguous_base_class_member_function| -> Option<ApiSnippets> {
-        let item = ir.find_untyped_decl(unambiguous_base_class_member_function.id);
+        let item = db.find_untyped_decl(unambiguous_base_class_member_function.id);
+        let _scope = db.error_scope(item.id());
         let Item::Func(ir_func) = item else { panic!("Unexpected item type: {:?}", item) };
         let generated_func =
             db.generate_function(ir_func.clone(), Some(record.clone())).ok().flatten()?;
@@ -577,26 +621,67 @@ pub fn generate_record(db: &dyn BindingsGenerator, record: Rc<Record>) -> Result
     // Both the template definition and its instantiation should enable experimental
     // features.
     let mut crubit_features = ir.target_crubit_features(&record.owning_target);
-    if let Some(defining_target) = record.defining_target() {
-        crubit_features |= ir.target_crubit_features(defining_target);
+    if let Some(defining_target) = db.defining_target(record.id()) {
+        crubit_features |= ir.target_crubit_features(&defining_target);
     }
     let mut upcast_impls = vec![];
+    let assume_lifetimes = crubit_features.contains(crubit_feature::CrubitFeature::AssumeLifetimes);
+    let record = if assume_lifetimes {
+        Rc::new(lifetime_defaults_transform_record(db, &record)?)
+    } else {
+        record
+    };
+    let mut lifetime_params = vec![];
+    if assume_lifetimes {
+        lifetime_params =
+            record.lifetime_inputs.iter().map(|id| make_rs_lifetime_ident(id)).collect();
+    }
     if crubit_features.contains(crubit_feature::CrubitFeature::Experimental) {
         let (new_upcast_impls, thunks, thunk_impls) = cc_struct_upcast_impl(db, &record, ir)?;
         upcast_impls = new_upcast_impls;
         api_snippets.thunks.extend(thunks);
         api_snippets.cc_details.extend(thunk_impls);
     }
+    if record.overloads_operator_delete && record.destructor != SpecialMemberFunc::Unavailable {
+        let (delete, thunk, thunk_impl) = cc_struct_operator_delete_impl(db, &record)?;
+        api_snippets.thunks.push(thunk);
+        api_snippets.cc_details.push(thunk_impl);
+        operator_delete_impl = Some(delete);
+    }
+    let display_impl = if record.detected_formatter {
+        let fmt_fn_name = make_rs_ident(&format!(
+            "__crubit_fmt__{type_name}_{odr_suffix}",
+            type_name = record.mangled_cc_name,
+            odr_suffix = record.owning_target.convert_to_cc_identifier(),
+        ));
+        let thunk =
+            Thunk::Fmt { fmt_fn_name: fmt_fn_name.clone(), param_type: qualified_ident.clone() };
+        api_snippets.thunks.push(thunk);
+        api_snippets.cc_details.push(ThunkImpl::Fmt {
+            fmt_fn_name: fmt_fn_name.clone(),
+            param_type: cpp_type_name_for_record(&record, db)?,
+        });
+        Some(DisplayImpl { type_name: ident.clone(), fmt_fn_name })
+    } else {
+        None
+    };
     let no_unique_address_accessors =
         if crubit_features.contains(crubit_feature::CrubitFeature::Experimental) {
             cc_struct_no_unique_address_impl(db, &record)?
         } else {
             vec![]
         };
+    let stubbed_lifetime_params = if lifetime_params.is_empty() {
+        quote! {}
+    } else {
+        let anonymous_lifetime = quote! { '_ };
+        let stubs = lifetime_params.iter().map(|_| &anonymous_lifetime).collect::<Vec<_>>();
+        quote! { < #( #stubs ),* > }
+    };
     let incomplete_definition = if crubit_features.contains(crubit_feature::CrubitFeature::Wrapper)
     {
         Some(quote! {
-            forward_declare::unsafe_define!(forward_declare::symbol!(#fully_qualified_cc_name), #qualified_ident);
+            forward_declare::unsafe_define!(forward_declare::symbol!(#fully_qualified_cc_name), #qualified_ident #stubbed_lifetime_params);
         })
     } else {
         None
@@ -617,23 +702,35 @@ pub fn generate_record(db: &dyn BindingsGenerator, record: Rc<Record>) -> Result
         })
     };
 
-    let owned_type_name = record.owned_ptr_type.as_ref().map(|opt| make_rs_ident(opt.as_ref()));
+    let owned_ptr_config =
+        record.owned_ptr_config.as_ref().map(|cfg| database::code_snippet::OwnedPtrConfig {
+            owned_type_name: make_rs_ident(cfg.owned_ptr_type.as_ref()),
+            drop_impl: make_rs_ident(cfg.drop_impl.as_ref()),
+        });
     let member_methods = api_snippets.member_functions.remove(&record.id).unwrap_or_default();
+    let free_functions = api_snippets.free_functions.remove(&record.id).unwrap_or_default();
 
     let record_tokens = database::code_snippet::Record {
         doc_comment_attr: generate_doc_comment(
             record.doc_comment.as_deref(),
+            record_safety.as_deref(),
             Some(&record.source_loc),
-            db.environment(),
+            db.is_golden_test(),
+            db.kythe_annotations(),
         ),
         derive_attr: generate_derives(&record),
         recursively_pinned_attr,
         must_use_attr: record.nodiscard.clone().map(MustUseAttr),
-        align: if override_alignment && record.size_align.alignment > 1 {
+        deprecated_attr: record.deprecated.clone().map(DeprecatedAttr),
+        // Thread-safe types always need explicit alignment because the opaque
+        // UnsafeCell<[MaybeUninit<u8>; N]> body has alignment 1.
+        align: if (override_alignment || record.is_thread_safe) && record.size_align.alignment > 1 {
             Some(record.size_align.alignment)
         } else {
             None
         },
+        // TODO(b/481405536): we should do this unconditionally.
+        internally_mutable_unknown_fields: !record.should_derive_copy(),
         crubit_annotation: DocCommentAttr(
             format!("CRUBIT_ANNOTATE: cpp_type={fully_qualified_cc_name}").into(),
         ),
@@ -647,6 +744,7 @@ pub fn generate_record(db: &dyn BindingsGenerator, record: Rc<Record>) -> Result
             StructOrUnion::Struct
         },
         ident,
+        id: record.id,
         head_padding,
         field_definitions,
         implements_send: record.trait_derives.send,
@@ -654,12 +752,18 @@ pub fn generate_record(db: &dyn BindingsGenerator, record: Rc<Record>) -> Result
         cxx_impl,
         incomplete_definition,
         upcast_impls,
+        display_impl,
         no_unique_address_accessors,
         items,
         nested_items,
         indirect_functions,
-        owned_type_name,
+        owned_ptr_config,
         member_methods,
+        free_functions,
+        delete: operator_delete_impl,
+        lifetime_params,
+        is_thread_safe: record.is_thread_safe,
+        size: record.size_align.size,
     };
 
     api_snippets.features |= Feature::negative_impls;
@@ -691,14 +795,18 @@ pub fn generate_record(db: &dyn BindingsGenerator, record: Rc<Record>) -> Result
 
     api_snippets.assertions.push(rs_size_align_assertions(qualified_ident, &record.size_align));
     api_snippets.assertions.push(record_trait_assertions);
-    api_snippets.assertions.push(field_offset_assertions);
-    api_snippets.assertions.extend(fields_that_must_be_copy.into_iter().map(
-        |formatted_field_type| Assertion::Impls {
-            type_name: formatted_field_type,
-            all_of: AssertableTrait::Copy.into(),
-            none_of: FlagSet::empty(),
-        },
-    ));
+    // For thread-safe types, the struct body is opaque (UnsafeCell), so the original
+    // field names don't exist. Skip field offset assertions and field copy assertions.
+    if !record.is_thread_safe {
+        api_snippets.assertions.push(field_offset_assertions);
+        api_snippets.assertions.extend(fields_that_must_be_copy.into_iter().map(
+            |formatted_field_type| Assertion::Impls {
+                type_name: formatted_field_type,
+                all_of: AssertableTrait::Copy.into(),
+                none_of: FlagSet::empty(),
+            },
+        ));
+    }
 
     api_snippets.generated_items.insert(record.id, GeneratedItem::Record(Box::new(record_tokens)));
     Ok(api_snippets)
@@ -708,10 +816,10 @@ pub fn generate_record(db: &dyn BindingsGenerator, record: Rc<Record>) -> Result
 /// whether each child item should be nested in a module.
 pub fn child_items<'a, 'db>(
     record: &'a Record,
-    db: &'a dyn BindingsGenerator<'db>,
+    db: &'a BindingsGenerator<'db>,
 ) -> impl Iterator<Item = ChildItem<'db>> + use<'a, 'db> {
-    record.child_item_ids.iter().map(|&child_item_id| {
-        let item = db.ir().find_untyped_decl(child_item_id);
+    record.child_item_ids.iter().map(move |&child_item_id| {
+        let item = db.find_untyped_decl(child_item_id);
         let is_nested = item.place_in_nested_module_if_nested_in_record()
             && db.has_bindings(item.clone()).is_ok();
         ChildItem { is_nested, item }
@@ -731,13 +839,23 @@ pub fn rs_size_align_assertions(type_name: TokenStream, size_align: &ir::SizeAli
 }
 
 pub fn generate_derives(record: &Record) -> DeriveAttr {
+    // Thread-safe types wrap their fields in UnsafeCell<[MaybeUninit<u8>; N]>.
+    // This opaque byte array doesn't support useful standard derives, and Clone/Copy
+    // are explicitly prevented to support interior mutability anyway.
+    if record.is_thread_safe {
+        return DeriveAttr(vec![]);
+    }
     let mut derives = vec![];
     if should_derive_clone(record) {
         derives.push(quote! { Clone });
     }
     if record.should_derive_copy() {
         derives.push(quote! { Copy });
-        derives.push(quote! { ::ctor::MoveAndAssignViaCopy });
+        if record.lifetime_inputs.is_empty() {
+            // TODO(b/491917803): Workaround for assume_lifetimes while MoveAndAssignViaCopy doesn't
+            // support lifetime parameters.
+            derives.push(quote! { ::ctor::MoveAndAssignViaCopy });
+        }
     }
     if record.trait_derives.debug == TraitImplPolarity::Positive {
         derives.push(quote! { Debug });
@@ -749,8 +867,8 @@ pub fn generate_derives(record: &Record) -> DeriveAttr {
     DeriveAttr(derives)
 }
 
-fn cc_struct_layout_assertion(db: &dyn BindingsGenerator, record: &Record) -> Result<ThunkImpl> {
-    let namespace_qualifier = db.ir().namespace_qualifier(record).format_for_cc()?;
+fn cc_struct_layout_assertion(db: &BindingsGenerator, record: &Record) -> Result<ThunkImpl> {
+    let namespace_qualifier = db.namespace_qualifier(record).format_for_cc()?;
     let fields_and_expected_offsets: Vec<(TokenStream, usize)> = record
         .fields
         .iter()
@@ -787,7 +905,7 @@ fn cc_struct_layout_assertion(db: &dyn BindingsGenerator, record: &Record) -> Re
     };
 
     Ok(ThunkImpl::LayoutAssertion {
-        tag_kind: if record.is_anon_record_with_typedef { None } else { Some(record.record_type) },
+        tag_kind: if record.is_canonical_alias { None } else { Some(record.record_type) },
         namespace_qualifier,
         record_ident: record.cc_name.identifier.clone(),
         sizeof_impl,
@@ -799,7 +917,7 @@ fn cc_struct_layout_assertion(db: &dyn BindingsGenerator, record: &Record) -> Re
 
 /// Returns the accessor functions for no_unique_address member variables.
 fn cc_struct_no_unique_address_impl(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     record: &Record,
 ) -> Result<Vec<NoUniqueAddressAccessor>> {
     let mut no_unique_address_accessors = vec![];
@@ -815,17 +933,19 @@ fn cc_struct_no_unique_address_impl(
         // Can't use `get_field_rs_type_kind_for_layout` here, because we want to dig
         // into no_unique_address fields, despite laying them out as opaque
         // blobs of bytes.
-        let Ok(cpp_type) = field.type_.as_ref() else {
-            continue;
-        };
-
-        let type_ident = db.rs_type_kind(cpp_type.clone()).with_context(|| {
+        let type_ident = db.rs_type_kind(field.type_.clone()).with_context(|| {
             format!("Failed to format type for field {field:?} on record {record:?}")
         })?;
         no_unique_address_accessors.push(NoUniqueAddressAccessor {
             doc_comment: if field.size == 0 {
                 // These fields are not generated at all, so they need to be documented here.
-                generate_doc_comment(field.doc_comment.as_deref(), None, db.environment())
+                generate_doc_comment(
+                    field.doc_comment.as_deref(),
+                    None,
+                    None,
+                    db.is_golden_test(),
+                    db.kythe_annotations(),
+                )
             } else {
                 // all other fields already have a doc-comment at the point they were defined.
                 None
@@ -849,7 +969,7 @@ type UpcastImplResult = Result<UpcastImpl, String>;
 /// Returns the implementation of base class conversions, for converting a type
 /// to its unambiguous public base classes.
 fn cc_struct_upcast_impl(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     record: &Rc<Record>,
     ir: &IR,
 ) -> Result<(Vec<UpcastImplResult>, Vec<Thunk>, Vec<ThunkImpl>)> {
@@ -858,7 +978,7 @@ fn cc_struct_upcast_impl(
     let mut upcast_impls = vec![];
     let derived_name = db.rs_type_kind(record.as_ref().into())?.to_token_stream(db);
     for base in &record.unambiguous_public_bases {
-        let base_record: &Rc<Record> = ir
+        let base_record: &Rc<Record> = db
             .find_decl(base.base_record_id)
             .with_context(|| format!("Can't find a base record of {:?}", record))?;
         let Ok(base_type) = db.rs_type_kind(base_record.as_ref().into()) else {
@@ -887,8 +1007,8 @@ fn cc_struct_upcast_impl(
                 base = base_record.mangled_cc_name,
                 odr_suffix = record.owning_target.convert_to_cc_identifier(),
             ));
-            let base_cc_name = cpp_type_name_for_record(base_record.as_ref(), ir)?;
-            let derived_cc_name = cpp_type_name_for_record(record.as_ref(), ir)?;
+            let base_cc_name = cpp_type_name_for_record(base_record.as_ref(), db)?;
+            let derived_cc_name = cpp_type_name_for_record(record.as_ref(), db)?;
 
             thunks.push(Thunk::Upcast {
                 cast_fn_name: cast_fn_name.clone(),
@@ -915,4 +1035,42 @@ fn cc_struct_upcast_impl(
     }
 
     Ok((upcast_impls, thunks, thunk_impls))
+}
+
+fn cc_struct_operator_delete_impl(
+    db: &BindingsGenerator,
+    record: &Rc<Record>,
+) -> Result<(DeleteImpl, Thunk, ThunkImpl)> {
+    let ir = db.ir();
+    let crate_root_path = ir.crate_root_path_tokens();
+    let record_type = db.rs_type_kind(record.as_ref().into())?.to_token_stream(db);
+
+    let thunk_ident = make_rs_ident(&format!(
+        "__crubit_operator_delete__{}_{}",
+        record.mangled_cc_name,
+        record.owning_target.convert_to_cc_identifier(),
+    ));
+
+    let thunk = Thunk::Function {
+        mangled_name: None,
+        thunk_ident: thunk_ident.clone(),
+        generic_params: quote! {},
+        param_idents: vec![make_rs_ident("ptr")],
+        param_types: vec![quote! { *mut #record_type }],
+        return_type_fragment: None,
+    };
+
+    let cc_record_name = cpp_type_name_for_record(record.as_ref(), db)?;
+    let thunk_impl = ThunkImpl::Function {
+        return_type_name: quote! { void },
+        thunk_ident: thunk_ident.clone(),
+        param_types: vec![quote! { #cc_record_name* }],
+        param_idents: vec![make_rs_ident("ptr")],
+        conversion_stmts: quote! {},
+        return_stmt: quote! { delete ptr },
+    };
+
+    let operator_delete = DeleteImpl { record_type, thunk_ident, crate_root_path };
+
+    Ok((operator_delete, thunk, thunk_impl))
 }

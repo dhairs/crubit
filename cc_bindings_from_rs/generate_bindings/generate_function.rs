@@ -9,19 +9,18 @@ use crate::generate_function_thunk::{
 };
 use crate::{
     format_param_types_for_cc, format_region_as_cc_lifetime, format_ret_ty_for_cc,
-    generate_deprecated_tag, is_bridged_type, is_c_abi_compatible_by_value,
-    liberate_and_deanonymize_late_bound_regions, BridgedType, CcType, RsSnippet,
+    format_top_level_ns_for_crate, generate_deprecated_tag, is_bridged_type,
+    is_c_abi_compatible_by_value, liberate_and_deanonymize_late_bound_regions, BridgedType, CcType,
+    RsSnippet,
 };
 use arc_anyhow::{Context, Result};
 use code_gen_utils::{
-    escape_non_identifier_chars, expect_format_cc_ident, format_cc_type_name, make_rs_ident,
-    CcInclude,
+    escape_non_identifier_chars, expect_format_cc_ident, make_rs_ident, CcInclude,
 };
 use crubit_abi_type::{CrubitAbiTypeToCppExprTokens, CrubitAbiTypeToCppTokens};
 use database::code_snippet::{ApiSnippets, CcPrerequisites, CcSnippet};
-use database::BindingsGenerator;
-use database::{SugaredTy, TypeLocation};
-use error_report::{anyhow, bail, ensure};
+use database::{BindingsGenerator, StaticMethodMode, TypeLocation};
+use error_report::{anyhow, bail};
 use itertools::Itertools;
 use proc_macro2::{Ident, Literal, TokenStream};
 use query_compiler::{is_copy, post_analysis_typing_env};
@@ -29,61 +28,97 @@ use quote::quote;
 use rustc_hir::attrs::AttributeKind;
 use rustc_hir::{self as hir, def::DefKind};
 use rustc_middle::mir::Mutability;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, TraitRef, Ty, TyCtxt};
 use rustc_span::def_id::DefId;
 use rustc_span::symbol::Symbol;
 use std::collections::BTreeSet;
 
 #[derive(Debug, Eq, PartialEq)]
-enum FunctionKind {
+enum FunctionKind<'tcx> {
     /// Free function (i.e. not a method).
     Free,
 
     /// Non-method associated function (i.e. the first parameter is not named `self`).
-    AssociatedFn,
+    AssociatedFn { self_ty: Ty<'tcx> },
 
     /// Instance method taking `self` by value (i.e. `self: Self`).
-    MethodTakingSelfByValue,
+    MethodTakingSelfByValue { self_ty: Ty<'tcx> },
 
     /// Instance method taking `self` by reference (i.e. `&self` or `&mut
     /// self`).
-    MethodTakingSelfByRef,
+    MethodTakingSelfByRef { self_ty: Ty<'tcx> },
 }
 
-impl FunctionKind {
+impl<'tcx> FunctionKind<'tcx> {
+    /// Whether the function takes `self` as a parameter.
+    /// Note that this is distinct from whether `self_ty` is present.
     fn has_self_param(&self) -> bool {
+        use FunctionKind::*;
         match self {
-            FunctionKind::MethodTakingSelfByValue | FunctionKind::MethodTakingSelfByRef => true,
-            FunctionKind::Free | FunctionKind::AssociatedFn => false,
+            MethodTakingSelfByValue { .. } | MethodTakingSelfByRef { .. } => true,
+            Free | AssociatedFn { .. } => false,
+        }
+    }
+
+    /// `Self` type (present both for static and instance methods).
+    fn self_ty(&self) -> Option<Ty<'tcx>> {
+        match self {
+            FunctionKind::AssociatedFn { self_ty }
+            | FunctionKind::MethodTakingSelfByValue { self_ty }
+            | FunctionKind::MethodTakingSelfByRef { self_ty } => Some(*self_ty),
+            FunctionKind::Free => None,
         }
     }
 }
 
 fn thunk_name(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     def_id: DefId,
     export_name: Option<Symbol>,
     needs_thunk: bool,
 ) -> String {
     let tcx = db.tcx();
-    let symbol_name = if db.no_thunk_name_mangling() {
+    let symbol_name = if db.is_golden_test() {
         if let Some(export_name) = export_name {
             export_name.to_string()
         } else {
-            db.symbol_unqualified_name(def_id)
+            let def_name = db
+                .symbol_unqualified_name(def_id)
                 .map(|name| name.rs_name)
                 .unwrap_or_else(|| panic!("Functions are assumed to always have a name {def_id:?}"))
-                .to_string()
+                .to_string();
+            tcx.trait_impl_of_assoc(def_id)
+                .map(|impl_id| {
+                    let trait_id = crate::normalize_ty(
+                        tcx,
+                        tcx.param_env(impl_id),
+                        tcx.impl_trait_ref(impl_id).instantiate_identity(),
+                    )
+                    .def_id;
+                    let trait_name = db
+                        .symbol_unqualified_name(trait_id)
+                        .map(|name| name.rs_name)
+                        .unwrap_or_else(|| {
+                            panic!("Traits are assumed to always have a name {trait_id:?}")
+                        })
+                        .to_string();
+                    format!("{}_{}", trait_name, def_name)
+                })
+                .unwrap_or(def_name)
         }
     } else {
-        // Call to `mono` is ok - `generics_of` have been checked above.
-        let instance = ty::Instance::mono(tcx, def_id);
+        // `expect` and `expect_resolve` are used because `fn get_generic_args`
+        // should be called earlier to reject cases with unsupported generics.
+        let typing_env = ty::TypingEnv::non_body_analysis(tcx, def_id);
+        let args = db.get_generic_args(def_id).expect("Generics should be checked earlier");
+        let span = tcx.def_span(def_id);
+        let instance = ty::Instance::expect_resolve(tcx, typing_env, def_id, args, span);
         tcx.symbol_name(instance).name.to_string()
     };
-    let target_path_mangled_hash = if db.no_thunk_name_mangling() {
+    let target_path_mangled_hash = if db.is_golden_test() {
         "".to_string()
     } else {
-        format!("{}_", tcx.crate_hash(db.source_crate_num()).to_hex())
+        format!("{:x}_", tcx.stable_crate_id(db.source_crate_num()))
     };
     if needs_thunk {
         format!(
@@ -113,16 +148,16 @@ fn ident_for_each(prefix: &str, n: usize) -> Vec<Ident> {
 ///
 /// Returns a `TokenStream` containing an expression that evaluates to the
 /// C-ABI-compatible version of the type.
-fn cc_param_to_c_abi<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+pub(crate) fn cc_param_to_c_abi<'tcx>(
+    db: &BindingsGenerator<'tcx>,
     cc_ident: Ident,
-    ty: SugaredTy<'tcx>,
+    ty: Ty<'tcx>,
     post_analysis_typing_env: ty::TypingEnv<'tcx>,
     includes: &mut BTreeSet<CcInclude>,
     statements: &mut TokenStream,
 ) -> Result<TokenStream> {
     let tcx = db.tcx();
-    Ok(if let Some(bridged_type) = is_bridged_type(db, ty.mid())? {
+    Ok(if let Some(bridged_type) = is_bridged_type(db, ty)? {
         match bridged_type {
             BridgedType::Legacy { cpp_type, .. } => {
                 if let CcType::Pointer { .. } = cpp_type {
@@ -149,9 +184,20 @@ fn cc_param_to_c_abi<'tcx>(
                 quote! { #buffer_name }
             }
         }
-    } else if is_c_abi_compatible_by_value(tcx, ty.mid()) {
-        quote! { #cc_ident }
-    } else if let Some(tuple_tys) = ty.as_tuple(db) {
+    } else if is_c_abi_compatible_by_value(tcx, ty) {
+        if let ty::TyKind::Adt(adt, _) = ty.kind()
+            && crate::matches_qualified_name(db, adt.did(), &["ctor", "RvalueReference"])
+        {
+            includes.insert(code_gen_utils::CcInclude::utility());
+            quote! { ::std::move(#cc_ident) }
+        } else {
+            quote! { #cc_ident }
+        }
+    } else if let ty::TyKind::Tuple(tuple_tys) = ty.kind()
+        && !db
+            .crate_features(db.source_crate_num())
+            .contains(crubit_feature::CrubitFeature::LayoutCompatTuple)
+    {
         let n = tuple_tys.len();
         let c_abi_names = ident_for_each(&format!("{cc_ident}_cabi"), n);
 
@@ -166,17 +212,17 @@ fn cc_param_to_c_abi<'tcx>(
             // Needed to avoid `proc_macro2` interpolating `1usize` instead of `1`.
             let i_literal = Literal::usize_unsuffixed(i);
             statements.extend(quote! {
-                auto&& #tuple_element_name = std::get<#i_literal>(#cc_ident);
+                auto&& #tuple_element_name = ::std::get<#i_literal>(#cc_ident);
             });
             let converted_value = cc_param_to_c_abi(
                 db,
                 tuple_element_name.clone(),
-                tuple_tys.index(i),
+                tuple_tys[i],
                 post_analysis_typing_env,
                 includes,
                 statements,
             )?;
-            if matches!(tuple_tys.index(i).mid().kind(), ty::TyKind::Tuple(_)) {
+            if matches!(tuple_tys[i].kind(), ty::TyKind::Tuple(_)) {
                 // Elements which are arrays must be referenced again in order
                 // to properly convert them to pointers.
                 //
@@ -198,7 +244,7 @@ fn cc_param_to_c_abi<'tcx>(
         quote! {
             #result_name
         }
-    } else if !ty.mid().needs_drop(db.tcx(), post_analysis_typing_env) {
+    } else if !ty.needs_drop(db.tcx(), post_analysis_typing_env) {
         // As an optimization, if the type is trivially destructible, we don't
         // need to move it to a new NoDestructor location. We can directly copy the
         // bytes.
@@ -213,7 +259,7 @@ fn cc_param_to_c_abi<'tcx>(
         includes.insert(db.support_header("internal/slot.h"));
         let slot_name = &expect_format_cc_ident(&format!("{cc_ident}_slot"));
         statements.extend(quote! {
-            crubit::Slot #slot_name((std::move(#cc_ident)));
+            crubit::Slot #slot_name((::std::move(#cc_ident)));
         });
         quote! { #slot_name.Get() }
     })
@@ -228,9 +274,9 @@ struct ReturnConversion {
 }
 
 fn format_ty_for_cc_amending_prereqs<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
-    ty: SugaredTy<'tcx>,
-    prereqs: &mut CcPrerequisites,
+    db: &BindingsGenerator<'tcx>,
+    ty: Ty<'tcx>,
+    prereqs: &mut CcPrerequisites<'tcx>,
 ) -> Result<TokenStream> {
     let CcSnippet { tokens: cc_type, prereqs: ty_prereqs } =
         db.format_ty_for_cc(ty, TypeLocation::Other)?;
@@ -239,10 +285,10 @@ fn format_ty_for_cc_amending_prereqs<'tcx>(
 }
 
 fn cc_return_value_from_c_abi<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     ident: Ident,
-    ty: SugaredTy<'tcx>,
-    prereqs: &mut CcPrerequisites,
+    ty: Ty<'tcx>,
+    prereqs: &mut CcPrerequisites<'tcx>,
     storage_statements: &mut TokenStream,
     recursive: bool,
 ) -> Result<ReturnConversion> {
@@ -251,10 +297,12 @@ fn cc_return_value_from_c_abi<'tcx>(
     // TODO: b/459482188 - The order of this check must align with the order in `generate_thunk_decl`.
     // We should centralize this logic so that the order exists in a singular location used by both
     // places.
-    if let Some(bridged_type) = is_bridged_type(db, ty.mid())? {
+    if let Some(bridged_type) = is_bridged_type(db, ty)? {
         match bridged_type {
-            BridgedType::Legacy { cpp_type, .. } => {
-                let cpp_type = format_cc_type_name(cpp_type.as_ref())?;
+            BridgedType::Legacy { .. } => {
+                let cpp_type = db
+                    .format_ty_for_cc(ty, TypeLocation::FnReturn { is_constructor: false })?
+                    .into_tokens(prereqs);
                 // Below, we use a union to allocate uninitialized memory that fits cpp_type.
                 // The union prevents the type from being default constructed. It's
                 // the responsibility of the thunk to properly initialize the
@@ -265,7 +313,7 @@ fn cc_return_value_from_c_abi<'tcx>(
                 storage_statements.extend(quote! {
                     union #union_type {
                         constexpr #union_type() {}
-                        ~#union_type() { std::destroy_at(&this->val); }
+                        ~#union_type() { ::std::destroy_at(&this->val); }
                         #cpp_type val;
                     } #local_name;
                     auto* #storage_name = &#local_name.val;
@@ -273,7 +321,7 @@ fn cc_return_value_from_c_abi<'tcx>(
                 Ok(ReturnConversion {
                     storage_name: storage_name.clone(),
                     unpack_expr: quote! {
-                        std::move(#local_name.val)
+                        ::std::move(#local_name.val)
                     },
                 })
             }
@@ -295,7 +343,7 @@ fn cc_return_value_from_c_abi<'tcx>(
                 })
             }
         }
-    } else if is_c_abi_compatible_by_value(tcx, ty.mid()) {
+    } else if is_c_abi_compatible_by_value(tcx, ty) {
         let cc_type = &format_ty_for_cc_amending_prereqs(db, ty, prereqs)?;
         let local_name = &expect_format_cc_ident(&format!("__{ident}_ret_val_holder"));
         storage_statements.extend(quote! {
@@ -306,7 +354,11 @@ fn cc_return_value_from_c_abi<'tcx>(
             storage_name: storage_name.clone(),
             unpack_expr: quote! { *#storage_name },
         })
-    } else if let Some(tuple_tys) = ty.as_tuple(db) {
+    } else if let ty::TyKind::Tuple(tuple_tys) = ty.kind()
+        && !db
+            .crate_features(db.source_crate_num())
+            .contains(crubit_feature::CrubitFeature::LayoutCompatTuple)
+    {
         let n = tuple_tys.len();
         let mut storage_names = Vec::with_capacity(n);
         let mut unpack_exprs = Vec::with_capacity(n);
@@ -318,7 +370,7 @@ fn cc_return_value_from_c_abi<'tcx>(
             } = cc_return_value_from_c_abi(
                 db,
                 tuple_element_ident,
-                tuple_tys.index(i),
+                tuple_tys[i],
                 prereqs,
                 storage_statements,
                 /*recursive=*/ true,
@@ -331,16 +383,22 @@ fn cc_return_value_from_c_abi<'tcx>(
         });
         Ok(ReturnConversion {
             storage_name: storage_name.clone(),
-            unpack_expr: quote! { std::make_tuple(#(#unpack_exprs),*) },
+            unpack_expr: quote! { ::std::make_tuple(#(#unpack_exprs),*) },
         })
     } else {
-        if recursive {
-            if let Some(adt_def) = ty.mid().ty_adt_def() {
-                let core = db.generate_adt_core(adt_def.did())?;
-                // Note: the error here is an ApiSnippets which is not propagated.
-                db.generate_move_ctor_and_assignment_operator(core).map_err(|_| {
-                    anyhow!("Can't return a type by value inside a compound data type without a move constructor")
-                })?;
+        if recursive && let Some(adt_def) = ty.ty_adt_def() {
+            let always_specialize_generics = db
+                .crate_features(db.source_crate_num())
+                .contains(crubit_feature::CrubitFeature::AlwaysSpecializeGenericsInCppApiFromRust);
+            let def_id = if always_specialize_generics
+                && db.parse_rs_std_template_specialization(ty).is_some()
+            {
+                None
+            } else {
+                Some(adt_def.did())
+            };
+            if db.has_move_ctor_and_assignment_operator(def_id, ty).is_none() {
+                bail!("Can't return type `{ty}` by value inside a compound data type without a move constructor");
             }
         }
         let local_name = expect_format_cc_ident(&format!("__{ident}_ret_val_holder"));
@@ -354,7 +412,7 @@ fn cc_return_value_from_c_abi<'tcx>(
         Ok(ReturnConversion {
             storage_name: storage_name.clone(),
             unpack_expr: quote! {
-                std::move(#local_name).AssumeInitAndTakeValue()
+                ::std::move(#local_name).AssumeInitAndTakeValue()
             },
         })
     }
@@ -364,40 +422,43 @@ fn cc_return_value_from_c_abi<'tcx>(
 fn function_kind<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
-    self_ty: Option<Ty<'tcx>>,
-    param_types: &[Ty<'tcx>],
-) -> Result<FunctionKind> {
+    sig: &ty::FnSig<'tcx>,
+) -> Result<FunctionKind<'tcx>> {
     match tcx.def_kind(def_id) {
-        DefKind::Fn => return Ok(FunctionKind::Free),
-        DefKind::AssocFn => {}
-        other => panic!("Unexpected HIR node kind: {other:?}"),
-    }
-    if !tcx.associated_item(def_id).is_method() {
-        return Ok(FunctionKind::AssociatedFn);
-    }
-    let self_ty = self_ty.expect("ImplItem => non-None `self_ty`");
-    if param_types[0] == self_ty {
-        return Ok(FunctionKind::MethodTakingSelfByValue);
-    }
-    match param_types[0].kind() {
-        ty::TyKind::Ref(_, referent_ty, _) if *referent_ty == self_ty => {
-            Ok(FunctionKind::MethodTakingSelfByRef)
+        DefKind::Fn => Ok(FunctionKind::Free),
+        DefKind::AssocFn => {
+            let self_ty = self_ty_of_method(tcx, def_id);
+            if !tcx.associated_item(def_id).is_method() {
+                return Ok(FunctionKind::AssociatedFn { self_ty });
+            }
+            let param_types = sig.inputs();
+            if param_types[0] == self_ty {
+                return Ok(FunctionKind::MethodTakingSelfByValue { self_ty });
+            }
+            match param_types[0].kind() {
+                ty::TyKind::Ref(_, referent_ty, _) if *referent_ty == self_ty => {
+                    return Ok(FunctionKind::MethodTakingSelfByRef { self_ty })
+                }
+                _ => bail!("Unsupported `self` type `{}`", param_types[0]),
+            }
         }
-        _ => bail!("Unsupported `self` type `{}`", param_types[0]),
+        DefKind::Ctor { .. } => Ok(FunctionKind::AssociatedFn { self_ty: sig.output() }),
+        other => panic!("Unexpected HIR node kind: {other:?}"),
     }
 }
 
-fn self_ty_of_method<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<Ty<'tcx>> {
-    #[rustversion::before(2025-07-29)]
-    let impl_id = tcx.impl_of_method(def_id)?;
-    #[rustversion::since(2025-07-29)]
-    let impl_id = tcx.impl_of_assoc(def_id)?;
+fn self_ty_of_method<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Ty<'tcx> {
+    #[rustversion::all(before(1.94), before(2025-07-29))]
+    let impl_id = tcx.impl_of_method(def_id);
+    #[rustversion::any(since(1.94), since(2025-07-29))]
+    let impl_id = tcx.impl_of_assoc(def_id);
 
-    #[rustversion::since(2025-10-17)]
-    assert!(!tcx.impl_is_of_trait(impl_id), "Trait methods should be filtered by caller");
-    #[rustversion::before(2025-10-17)]
-    assert!(tcx.impl_trait_ref(impl_id).is_none(), "Trait methods should be filtered by caller");
-    Some(tcx.type_of(impl_id).instantiate_identity())
+    let impl_id = impl_id.expect("`def_id` is not a method or an associated function");
+    return crate::normalize_ty(
+        tcx,
+        tcx.param_env(impl_id),
+        tcx.type_of(impl_id).instantiate_identity(),
+    );
 }
 
 fn export_name_and_no_mangle_attrs_of<'tcx>(
@@ -406,6 +467,7 @@ fn export_name_and_no_mangle_attrs_of<'tcx>(
 ) -> (Option<Symbol>, bool) {
     let mut export_name: Option<Symbol> = None;
     let mut no_mangle = false;
+    #[allow(deprecated)]
     for attr in tcx.get_all_attrs(def_id) {
         match attr {
             hir::Attribute::Parsed(AttributeKind::ExportName { name, .. }) => {
@@ -425,6 +487,7 @@ pub(crate) struct MustUseAttr {
 }
 
 pub(crate) fn must_use_attr_of<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option<MustUseAttr> {
+    #[allow(deprecated)]
     for attr in tcx.get_all_attrs(def_id) {
         if let hir::Attribute::Parsed(AttributeKind::MustUse { reason, .. }) = attr {
             return Some(MustUseAttr { reason: *reason });
@@ -435,8 +498,8 @@ pub(crate) fn must_use_attr_of<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> Option
 
 pub(crate) struct Param<'tcx> {
     pub(crate) cc_name: Ident,
-    pub(crate) cpp_type: CcParamTy,
-    pub(crate) ty: SugaredTy<'tcx>,
+    pub(crate) cpp_type: CcParamTy<'tcx>,
+    pub(crate) ty: Ty<'tcx>,
 }
 
 fn can_shared_refs_to_ty_alias_mut_refs<'tcx>(tcx: TyCtxt<'tcx>, target_ty: Ty<'tcx>) -> bool {
@@ -466,7 +529,7 @@ struct RefsToCheckForAliasing<'a, 'tcx> {
 /// C++ does not have this requirement, so we insert checks in the generated bindings to ensure that
 /// this requirement is not violated.
 fn refs_to_check_for_aliasing<'tcx, 'a>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     params: &'a [Param<'tcx>],
 ) -> Option<RefsToCheckForAliasing<'a, 'tcx>> {
     let tcx = db.tcx();
@@ -477,7 +540,7 @@ fn refs_to_check_for_aliasing<'tcx, 'a>(
     // TODO: b/351876244 - Apply this check to reference-like types such as
     // `cpp_std::string_view` and `absl::Span`.
     for param in params {
-        if let ty::TyKind::Ref(_region, target_ty, mutability) = param.ty.mid().kind() {
+        if let ty::TyKind::Ref(_region, target_ty, mutability) = param.ty.kind() {
             if mutability.is_mut() {
                 refs.mutable.push(param);
             } else if !can_shared_refs_to_ty_alias_mut_refs(tcx, *target_ty) {
@@ -491,17 +554,54 @@ fn refs_to_check_for_aliasing<'tcx, 'a>(
     Some(refs)
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Receiver {
+    SelfByCopy,
+    SelfByRef,
+}
+
+/// Information about our self parameter from our function signature that we need when generating a
+/// thunk for that function.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ThunkSelfParameter {
+    pub is_trait_method: bool,
+    receiver: Option<Receiver>,
+}
+impl ThunkSelfParameter {
+    pub fn new(has_self: bool, by_copy: bool, is_trait_method: bool) -> Self {
+        Self {
+            is_trait_method,
+            receiver: has_self.then_some({
+                if by_copy {
+                    Receiver::SelfByCopy
+                } else {
+                    Receiver::SelfByRef
+                }
+            }),
+        }
+    }
+
+    // Inherent methods become methods on a class with access to `this` (unlike trait methods), so
+    // we handle them specially.
+    pub fn is_inherent_self_method(&self) -> bool {
+        self.receiver.is_some() && !self.is_trait_method
+    }
+
+    pub fn takes_self_by_copy(&self) -> bool {
+        self.receiver.is_some_and(|receiver| receiver == Receiver::SelfByCopy)
+    }
+}
+
 /// Generates the wrapping code to call a thunk and return its result.
 /// This can be checking parameter invariants or creating a slot to pass as an output pointer.
 pub(crate) fn generate_thunk_call<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     def_id: DefId,
     thunk_name: Ident,
-    rs_return_type: SugaredTy<'tcx>,
-    takes_self_by_copy: bool,
-    has_self_param: bool,
+    rs_return_type: Ty<'tcx>,
+    self_param: ThunkSelfParameter,
     params: &[Param<'tcx>],
-) -> Result<CcSnippet> {
+) -> Result<CcSnippet<'tcx>> {
     let tcx = db.tcx();
     let mut prereqs = CcPrerequisites::default();
     let mut tokens = TokenStream::new();
@@ -510,15 +610,15 @@ pub(crate) fn generate_thunk_call<'tcx>(
         .iter()
         .enumerate()
         .map(|(i, Param { cc_name, ty, .. })| {
-            if i == 0 && has_self_param {
-                if takes_self_by_copy {
+            if i == 0 && self_param.is_inherent_self_method() {
+                if self_param.takes_self_by_copy() {
                     // Self-by-copy methods are `const` qualified. The Rust thunk does not
                     // accept a const pointer, but we can just const_cast since underlying C++
                     // object is not modified: Rust copies the object before passing it into
                     // the by-value method.
                     tokens.extend(quote! {
                         auto& #cc_name = const_cast<
-                            std::remove_cvref_t<decltype(*this)>&>(*this);
+                            ::std::remove_cvref_t<decltype(*this)>&>(*this);
                     });
                 } else {
                     tokens.extend(quote! { auto&& #cc_name = *this; });
@@ -560,8 +660,20 @@ pub(crate) fn generate_thunk_call<'tcx>(
         });
     }
 
-    let return_body = if is_bridged_type(db, rs_return_type.mid())?.is_none()
-        && is_c_abi_compatible_by_value(tcx, rs_return_type.mid())
+    let qualifier = if self_param.is_trait_method {
+        // Trait implementations don't live alongside their callsite so we have to be more specific
+        // about namespaces when we invoke them.
+        let cpp_top_level_ns = format_top_level_ns_for_crate(db, db.source_crate_num())
+            .iter()
+            .map(|ns| db.format_cc_ident(*ns))
+            .collect::<Result<Vec<_>>>()?;
+        quote! { #(#cpp_top_level_ns)::* :: __crubit_internal }
+    } else {
+        quote! { __crubit_internal }
+    };
+
+    let return_body = if is_bridged_type(db, rs_return_type)?.is_none()
+        && is_c_abi_compatible_by_value(tcx, rs_return_type)
     {
         // C++ compilers can emit diagnostics if a function marked [[noreturn]] looks like it
         // might return. In this scenario, we just call the (also [[noreturn]]) thunk.
@@ -571,7 +683,7 @@ pub(crate) fn generate_thunk_call<'tcx>(
             quote! {return}
         };
         quote! {
-            #return_expr __crubit_internal::#thunk_name(#( #thunk_args ),*);
+            #return_expr #qualifier::#thunk_name(#( #thunk_args ),*);
         }
     } else {
         let ReturnConversion { storage_name, unpack_expr } = cc_return_value_from_c_abi(
@@ -586,7 +698,7 @@ pub(crate) fn generate_thunk_call<'tcx>(
         // We don't have to worry about the [[noreturn]] situation described above because all
         // [[noreturn]] functions will take that branch.
         quote! {
-            __crubit_internal::#thunk_name(#( #thunk_args ),*);
+            #qualifier::#thunk_name(#( #thunk_args ),*);
             return #unpack_expr;
         }
     };
@@ -595,18 +707,132 @@ pub(crate) fn generate_thunk_call<'tcx>(
     Ok(CcSnippet { prereqs, tokens })
 }
 
-/// Implementation of `BindingsGenerator::generate_function`.
-pub fn generate_function(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Result<ApiSnippets> {
-    let tcx = db.tcx();
-    ensure!(
-        !query_compiler::has_non_lifetime_generics(tcx, def_id),
-        "Generic functions are not supported yet (b/259749023)"
-    );
+pub(crate) fn fn_arg_idents(tcx: TyCtxt, def_id: DefId) -> Vec<Option<rustc_span::Ident>> {
+    match tcx.def_kind(def_id) {
+        DefKind::Ctor { .. } => {
+            // Documentation of `skip_binder` says that accessing generic args in the returned value
+            // is generally incorrect, but specifically points out that it should be okay to use
+            // it to get the number of arguments of an `FnSig`.
+            let arg_count = tcx.fn_sig(def_id).skip_binder().inputs().skip_binder().len();
+            vec![None; arg_count]
+        }
+        _ => tcx.fn_arg_idents(def_id).iter().cloned().collect_vec(),
+    }
+}
 
-    let (sig_mid, sig_hir) = get_fn_sig(tcx, def_id);
+pub(crate) fn format_variant_ctor_cc_name(variant_name: &str) -> String {
+    format!("Make{variant_name}")
+}
+
+fn get_function_cc_name(db: &BindingsGenerator, def_id: DefId) -> Result<Ident> {
+    let unqualified_fn_name = db
+        .symbol_unqualified_name(def_id)
+        .unwrap_or_else(|| panic!("`generate_function` called on unnamed function {def_id:?}"));
+    let cc_name = unqualified_fn_name.cpp_name.as_str();
+    match db.tcx().def_kind(def_id) {
+        DefKind::Ctor { .. } => format_cc_ident(db, &format_variant_ctor_cc_name(cc_name)),
+        _ => format_cc_ident(db, cc_name),
+    }
+    .context("Error formatting function name")
+}
+
+fn format_trait_ref_for_cc<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    trait_ref: &TraitRef<'tcx>,
+) -> Result<CcSnippet<'tcx>> {
+    let trait_name = db
+        .symbol_canonical_name(trait_ref.def_id)
+        .and_then(|fully_qualified_name| fully_qualified_name.format_for_cc(db).ok())
+        .expect("Generated trait method for a trait with an invalid cc name");
+    let mut trait_args = trait_ref.args[1..].iter().filter_map(|arg| arg.as_type()).peekable();
+    let mut prereqs = CcPrerequisites::default();
+    let tokens = if trait_args.peek().is_none() {
+        quote! { #trait_name }
+    } else {
+        let arg_tokens = trait_args
+            .map(|ty_arg| {
+                Ok(db.format_ty_for_cc(ty_arg, TypeLocation::Other)?.into_tokens(&mut prereqs))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        quote! { #trait_name<#(#arg_tokens),*> }
+    };
+    Ok(CcSnippet { prereqs, tokens })
+}
+
+fn format_trait_ref_for_rs<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    trait_ref: &TraitRef<'tcx>,
+) -> Result<TokenStream> {
+    let trait_name = db
+        .symbol_canonical_name(trait_ref.def_id)
+        .map(|fully_qualified_name| fully_qualified_name.format_for_rs())
+        .expect("Generated trait method for a trait with an invalid rs name");
+    let mut trait_args = trait_ref.args[1..].iter().filter_map(|arg| arg.as_type()).peekable();
+    if trait_args.peek().is_none() {
+        Ok(quote! { #trait_name })
+    } else {
+        let arg_tokens = trait_args
+            .map(|ty_arg| {
+                let static_ty_arg = crate::generate_function_thunk::replace_all_regions_with_static(
+                    db.tcx(),
+                    ty_arg,
+                );
+                db.format_ty_for_rs(static_ty_arg)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(quote! { #trait_name<#(#arg_tokens),*> })
+    }
+}
+
+/// Implementation of `BindingsGenerator::generate_function`.
+pub fn generate_function<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    def_id: DefId,
+    method_name_override: Option<&'static str>,
+    static_method_mode: StaticMethodMode,
+) -> Result<ApiSnippets<'tcx>> {
+    let tcx = db.tcx();
+
+    let sig_mid = {
+        let generic_args = db.get_generic_args(def_id)?;
+        let early_bound_fn_sig = tcx.fn_sig(def_id).instantiate(tcx, generic_args);
+        let is_trait_method = tcx.trait_impl_of_assoc(def_id).is_some();
+        let early_bound_fn_sig = if is_trait_method {
+            let fn_sig = query_compiler::try_normalize(
+                tcx,
+                ty::PseudoCanonicalInput {
+                    typing_env: ty::TypingEnv::non_body_analysis(tcx, def_id),
+                    value: crate::normalize_ty(tcx, tcx.param_env(def_id), early_bound_fn_sig),
+                },
+            )
+            .map_err(|_| anyhow!("Failed to normalize fn sig for {}", tcx.def_path_str(def_id)))?;
+            // We need this to line up the types going into `liberate_and_deanonymize_late_bound_regions`
+            // which expects a `ty::Unnormalized` input.
+            #[rustversion::since(2026-04-19)]
+            let fn_sig = ty::Unnormalized::new(fn_sig);
+            fn_sig
+        } else {
+            early_bound_fn_sig
+        };
+        liberate_and_deanonymize_late_bound_regions(tcx, early_bound_fn_sig, def_id)
+    };
     check_fn_sig(&sig_mid)?;
-    let self_ty = self_ty_of_method(tcx, def_id);
-    let function_kind = function_kind(tcx, def_id, self_ty, sig_mid.inputs())?;
+
+    let rs_return_type = sig_mid.output();
+    if tcx.asyncness(def_id).is_async() {
+        let return_ty = get_async_future_output_ty(tcx, rs_return_type)?;
+        // TODO(b/453897096): Support async functions.
+        bail!("async functions are not yet supported, consider manually wrapping with `DynFuture` instead and writing to an output `*mut {return_ty}` parameter instead.");
+    }
+
+    let trait_ref = tcx
+        .impl_of_assoc(def_id)
+        .and_then(|impl_id| tcx.impl_opt_trait_ref(impl_id))
+        .map(|trait_ref| {
+            crate::normalize_ty(tcx, tcx.param_env(def_id), trait_ref.instantiate_identity())
+        });
+    let function_kind = function_kind(tcx, def_id, &sig_mid)?;
+    let self_ty = function_kind.self_ty();
     // TODO(b/262904507): Don't require thunks for mangled extern "C" functions.
     let (export_name, has_no_mangle) = export_name_and_no_mangle_attrs_of(tcx, def_id);
     let has_export_name = export_name.is_some();
@@ -618,8 +844,13 @@ pub fn generate_function(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Resul
         .symbol_unqualified_name(def_id)
         .unwrap_or_else(|| panic!("`generate_function` called on unnamed function {def_id:?}"));
     let unqualified_rust_fn_name = unqualified_fn_name.rs_name;
-    let main_api_fn_name = format_cc_ident(db, unqualified_fn_name.cpp_name.as_str())
-        .context("Error formatting function name")?;
+    let main_api_fn_name = match method_name_override {
+        Some(name) => name.parse().unwrap(),
+        None => {
+            let cc_name = get_function_cc_name(db, def_id)?;
+            quote! { #cc_name }
+        }
+    };
     let bracketed_decl_name = if db.kythe_annotations() {
         quote! { __CAPTURE_BEGIN__ #main_api_fn_name __CAPTURE_END__ }
     } else {
@@ -627,21 +858,20 @@ pub fn generate_function(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Resul
     };
 
     let mut main_api_prereqs = CcPrerequisites::default();
-    let main_api_ret_type =
-        format_ret_ty_for_cc(db, &sig_mid, sig_hir)?.into_tokens(&mut main_api_prereqs);
+    let main_api_ret_type = format_ret_ty_for_cc(db, &sig_mid)?.into_tokens(&mut main_api_prereqs);
 
     let params = {
-        let names = tcx.fn_arg_idents(def_id).iter();
-        let cpp_types =
-            format_param_types_for_cc(db, &sig_mid, sig_hir, function_kind.has_self_param())?;
+        let names = fn_arg_idents(tcx, def_id);
+        let cpp_types = format_param_types_for_cc(db, &sig_mid, function_kind.has_self_param())?;
         names
+            .into_iter()
             .enumerate()
-            .zip(SugaredTy::fn_inputs(&sig_mid, if db.enable_hir_types() { sig_hir } else { None }))
+            .zip(sig_mid.inputs())
             .zip(cpp_types)
             .map(|(((i, name), ty), cpp_type)| {
                 // TODO(jeanpierreda): deduplicate this with thunk_param_names.
                 let mut cc_name = None;
-                if let Some(ident) = ident_or_opt_ident(name) {
+                if let Some(ident) = ident_or_opt_ident(&name) {
                     if ident.name.as_str() != "_" {
                         if let Ok(name) = format_cc_ident(db, ident.name.as_str()) {
                             cc_name = Some(name);
@@ -653,34 +883,39 @@ pub fn generate_function(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Resul
                 } else {
                     expect_format_cc_ident(&format!("__param_{i}"))
                 };
-                Param { cc_name, cpp_type, ty }
+                Param { cc_name, cpp_type, ty: *ty }
             })
             .collect_vec()
     };
 
-    let mut takes_self_by_copy = false;
-    let method_qualifiers = match function_kind {
-        FunctionKind::Free | FunctionKind::AssociatedFn => quote! {},
-        FunctionKind::MethodTakingSelfByValue => {
-            let self_ty = params[0].ty.mid();
-            if is_copy(tcx, def_id, self_ty) {
-                takes_self_by_copy = true;
-                quote! { const }
-            } else {
-                quote! { && }
+    let takes_self_by_copy = matches!(function_kind, FunctionKind::MethodTakingSelfByValue { .. } if is_copy(tcx, def_id, params[0].ty));
+    let mut method_qualifiers = quote! {};
+    if static_method_mode != StaticMethodMode::ForceStaticMethod {
+        match function_kind {
+            FunctionKind::Free | FunctionKind::AssociatedFn { .. } => {}
+            FunctionKind::MethodTakingSelfByValue { self_ty } => {
+                assert_eq!(self_ty, params[0].ty);
+                method_qualifiers = if is_copy(tcx, def_id, self_ty) {
+                    quote! { const }
+                } else {
+                    quote! { && }
+                };
             }
-        }
-        FunctionKind::MethodTakingSelfByRef => match params[0].ty.mid().kind() {
-            ty::TyKind::Ref(region, _, mutability) => {
+            FunctionKind::MethodTakingSelfByRef { .. } => {
+                let ty::TyKind::Ref(region, _, mutability) = *params[0].ty.kind() else {
+                    panic!("Expecting TyKind::Ref for MethodKind...Self...Ref")
+                };
                 let tcx = db.tcx();
                 // Ref-qualify if the lifetime of `&self` is a named lifetime or if the elided
                 // lifetime appears in the return type.
-                // See <internal link> for more details on the motivation.
-                let ref_qualifier = if !region_is_elided(tcx, *region) {
-                    let lifetime_annotation = format_region_as_cc_lifetime(tcx, region);
+                // See crubit.rs-special-lifetimes for more details on the motivation.
+                let ref_qualifier = if !region_is_elided(tcx, region) {
+                    let lifetime_annotation =
+                        format_region_as_cc_lifetime(db, region, &mut main_api_prereqs);
                     quote! { & #lifetime_annotation }
                 } else if has_elided_region(tcx, sig_mid.output()) {
-                    let lifetime_annotation = format_region_as_cc_lifetime(tcx, region);
+                    let lifetime_annotation =
+                        format_region_as_cc_lifetime(db, region, &mut main_api_prereqs);
                     main_api_prereqs.includes.insert(db.support_header("annotations_internal.h"));
                     quote! { & #lifetime_annotation CRUBIT_LIFETIME_BOUND }
                 } else {
@@ -690,11 +925,16 @@ pub fn generate_function(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Resul
                     Mutability::Mut => quote! {},
                     Mutability::Not => quote! { const },
                 };
-                quote! { #mutability #ref_qualifier }
+                method_qualifiers = quote! { #mutability #ref_qualifier }
             }
-            _ => panic!("Expecting TyKind::Ref for MethodKind...Self...Ref"),
-        },
-    };
+        }
+    }
+
+    let thunk_self = ThunkSelfParameter::new(
+        function_kind.has_self_param(),
+        takes_self_by_copy,
+        static_method_mode == StaticMethodMode::ForceStaticMethod,
+    );
 
     fn has_non_lifetime_substs(substs: &[ty::GenericArg]) -> bool {
         substs.iter().any(|subst| subst.as_region().is_none())
@@ -713,7 +953,8 @@ pub fn generate_function(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Resul
     let needs_definition = unqualified_rust_fn_name.as_str() != thunk_name;
     let main_api_params = params
         .iter()
-        .skip(if function_kind.has_self_param() { 1 } else { 0 })
+        // Include self param for a trait method.
+        .skip(if thunk_self.is_inherent_self_method() { 1 } else { 0 })
         .map(|Param { cc_name, cpp_type, .. }| {
             let annotation = if cpp_type.is_lifetime_bound {
                 main_api_prereqs.includes.insert(db.support_header("annotations_internal.h"));
@@ -725,8 +966,17 @@ pub fn generate_function(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Resul
             quote! { #cpp_type #cc_name #annotation }
         })
         .collect_vec();
-    let rs_return_type =
-        SugaredTy::fn_output(&sig_mid, if db.enable_hir_types() { sig_hir } else { None });
+    let thunk_name_cc = format_cc_ident(db, &thunk_name).context("Error formatting thunk name")?;
+    let impl_body = generate_thunk_call(
+        db,
+        def_id,
+        thunk_name_cc.clone(),
+        rs_return_type,
+        thunk_self,
+        &params,
+    )?
+    .into_tokens(&mut main_api_prereqs);
+
     let main_api = {
         let doc_comment = {
             let doc_comment = generate_doc_comment(db, def_id);
@@ -736,7 +986,9 @@ pub fn generate_function(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Resul
         let mut prereqs = main_api_prereqs.clone();
         prereqs.move_defs_to_fwd_decls();
 
-        let static_ = if function_kind == FunctionKind::AssociatedFn {
+        let static_ = if matches!(function_kind, FunctionKind::AssociatedFn { .. })
+            || thunk_self.is_trait_method
+        {
             quote! { static }
         } else {
             quote! {}
@@ -783,7 +1035,7 @@ pub fn generate_function(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Resul
                 #extern_c #(#attributes)* #static_
                     #main_api_ret_type #bracketed_decl_name (
                         #( #main_api_params ),*
-                    ) #method_qualifiers;
+                    ) #method_qualifiers ;
                 __NEWLINE__
             },
         }
@@ -791,79 +1043,115 @@ pub fn generate_function(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Resul
     let cc_details = if !needs_definition {
         CcSnippet::default()
     } else {
-        let thunk_name = format_cc_ident(db, &thunk_name).context("Error formatting thunk name")?;
-        let struct_name = match struct_name.as_ref() {
-            None => quote! {},
-            Some(fully_qualified_name) => {
-                let name = fully_qualified_name.unqualified.cpp_name;
-                let name = format_cc_ident(db, name.as_str()).expect(
-                    "Caller of generate_function should verify struct via generate_adt_core",
-                );
-                quote! { #name :: }
-            }
-        };
-
         let mut prereqs = main_api_prereqs;
-        let thunk_decl = generate_thunk_decl(
+        let mut thunk_decl = generate_thunk_decl(
             db,
             &sig_mid,
-            sig_hir,
-            &thunk_name,
+            &thunk_name_cc,
             function_kind.has_self_param(),
+            /*is_constructor=*/ false,
         )?
         .into_tokens(&mut prereqs);
-
-        let impl_body = generate_thunk_call(
-            db,
-            def_id,
-            thunk_name,
-            rs_return_type,
-            takes_self_by_copy,
-            function_kind.has_self_param(),
-            &params,
-        )?
-        .into_tokens(&mut prereqs);
-
-        CcSnippet {
-            prereqs,
-            tokens: quote! {
-                __NEWLINE__
-                #thunk_decl
-                inline #main_api_ret_type #struct_name #bracketed_decl_name (
-                        #( #main_api_params ),* ) #method_qualifiers {
-                    #impl_body
+        if static_method_mode == StaticMethodMode::ForceStaticMethod {
+            let cpp_top_level_ns = format_top_level_ns_for_crate(db, db.source_crate_num())
+                .iter()
+                .map(|ns| db.format_cc_ident(*ns))
+                .collect::<Result<Vec<_>>>()?;
+            thunk_decl = quote! {
+                namespace #(#cpp_top_level_ns)::* {
+                  #thunk_decl
                 }
-                __NEWLINE__
-            },
+            };
         }
+
+        let decl_name = match static_method_mode {
+            StaticMethodMode::ForceStaticMethod => {
+                let trait_ref =
+                    trait_ref.as_ref().expect("ForceStaticMethod requires a trait method");
+                let struct_name = struct_name
+                    .as_ref()
+                    .and_then(|fully_qualified_name| fully_qualified_name.format_for_cc(db).ok())
+                    .expect("Generated trait method for an ADT with an invalid rust name");
+                let trait_name_with_args = format_trait_ref_for_cc(db, trait_ref)
+                    .expect("Implementation of trait containing invalid type requested. Caller should have verified type arguments were valid.")
+                    .into_tokens(&mut prereqs);
+                quote! { rs_std :: impl <#struct_name, #trait_name_with_args> :: #bracketed_decl_name }
+            }
+            StaticMethodMode::Infer => struct_name
+                .as_ref()
+                .map(|fully_qualified_name| {
+                    let name = fully_qualified_name.unqualified.cpp_name;
+                    let name = format_cc_ident(db, name.as_str()).expect(
+                        "Caller of generate_function should verify struct via generate_adt_core",
+                    );
+                    quote! { #name :: #bracketed_decl_name }
+                })
+                .unwrap_or_else(|| quote! { #bracketed_decl_name }),
+        };
+        let tokens = quote! {
+            __NEWLINE__
+            #thunk_decl
+
+            __NEWLINE__
+            inline #main_api_ret_type #decl_name (
+                    #( #main_api_params ),* ) #method_qualifiers {
+                #impl_body
+            }
+            __NEWLINE__
+        };
+
+        CcSnippet { prereqs, tokens }
     };
 
     let rs_details = if !needs_thunk {
         RsSnippet::default()
     } else {
-        let fully_qualified_fn_name = match struct_name.as_ref() {
-            None => db
-                .symbol_canonical_name(def_id)
+        // Trait method
+        let fully_qualified_fn_name = if let Some(trait_ref) = trait_ref.as_ref() {
+            let struct_name = struct_name
+                .as_ref()
+                .map(|fully_qualified_name| fully_qualified_name.format_for_rs())
+                .expect("Generated trait method for an ADT with an invalid rust name");
+            let fn_name = make_rs_ident(unqualified_rust_fn_name.as_str());
+            let trait_name_with_args = format_trait_ref_for_rs(db, trait_ref)?;
+            quote! { <#struct_name as #trait_name_with_args>::#fn_name }
+        } else {
+            struct_name
+                .as_ref()
+                .map(|struct_name| {
+                    let fn_name = make_rs_ident(unqualified_rust_fn_name.as_str());
+                    let struct_name = struct_name.format_for_rs();
+                    quote! { #struct_name :: #fn_name }
+                })
                 .unwrap_or_else(|| {
-                    panic!(
+                    db.symbol_canonical_name(def_id)
+                        .unwrap_or_else(|| {
+                            panic!(
                         "`generate_function` called on unreachable top-level function {def_id:?}"
                     )
+                        })
+                        .format_for_rs()
                 })
-                .format_for_rs(),
-            Some(struct_name) => {
-                let fn_name = make_rs_ident(unqualified_rust_fn_name.as_str());
-                let struct_name = struct_name.format_for_rs();
-                quote! { #struct_name :: #fn_name }
-            }
         };
-        generate_thunk_impl(db, def_id, &sig_mid, &thunk_name, fully_qualified_fn_name)?
+        generate_thunk_impl(
+            db,
+            def_id,
+            &sig_mid,
+            &thunk_name,
+            fully_qualified_fn_name,
+            /*is_constructor=*/ false,
+        )?
     };
 
     Ok(ApiSnippets { main_api, cc_details, rs_details })
 }
 
 pub fn check_fn_sig(sig: &ty::FnSig) -> Result<()> {
-    if sig.c_variadic {
+    #[rustversion::before(2026-04-19)]
+    let is_c_variadic = sig.c_variadic;
+    #[rustversion::since(2026-04-19)]
+    let is_c_variadic = sig.c_variadic();
+    if is_c_variadic {
         // TODO(b/254097223): Add support for variadic functions.
         bail!("C variadic functions are not supported (b/254097223)");
     }
@@ -871,24 +1159,42 @@ pub fn check_fn_sig(sig: &ty::FnSig) -> Result<()> {
     Ok(())
 }
 
-/// Returns the rustc_middle and rustc_hir function signatures.
-///
-/// In the case of rustc_hir, this returns the `FnDecl`, not the
-/// `rustc_hir::FnSig`, because the `FnDecl` type is used for both function
-/// pointers and actual functions. This makes it a more useful vocabulary type.
-/// `FnDecl` does drop information, but that information is already on the
-/// rustc_middle `FnSig`, so there is no loss.
-pub fn get_fn_sig<'tcx>(
+/// If `rs_return_type` represents an async future desugared type, extracts and returns its `Output` type.
+pub fn get_async_future_output_ty<'tcx>(
     tcx: TyCtxt<'tcx>,
-    def_id: DefId,
-) -> (ty::FnSig<'tcx>, Option<&'tcx rustc_hir::FnDecl<'tcx>>) {
-    let sig_mid = liberate_and_deanonymize_late_bound_regions(
-        tcx,
-        tcx.fn_sig(def_id).instantiate_identity(),
-        def_id,
-    );
-    let hir_decl = def_id
-        .as_local()
-        .map(|local_def_id| tcx.hir_node_by_def_id(local_def_id).fn_sig().unwrap().decl);
-    (sig_mid, hir_decl)
+    rs_return_type: Ty<'tcx>,
+) -> Result<Ty<'tcx>> {
+    #[rustversion::stable(1.95)]
+    let ty::TyKind::Alias(_, alias_ty) = rs_return_type.kind() else {
+        bail!("async functions should always return a TyKind::Alias, this should never happen.");
+    };
+    #[rustversion::any(nightly, stable(1.96))]
+    let ty::TyKind::Alias(alias_ty) = rs_return_type.kind() else {
+        bail!("async functions should always return a TyKind::Alias, this should never happen.");
+    };
+    let future_output = tcx
+        .lang_items()
+        .future_output()
+        .ok_or_else(|| anyhow!("crubit.rs-bug: Future::Output lang item not found"))?;
+    #[rustversion::stable(1.95)]
+    let alias_def_id = alias_ty.def_id;
+    #[rustversion::any(nightly, stable(1.96))]
+    let alias_def_id = alias_ty.kind.def_id();
+    tcx.explicit_item_bounds(alias_def_id)
+        .iter_instantiated_copied(tcx, alias_ty.args)
+        .find_map(|unnorm| {
+            let (predicate, _span) = crate::normalize_ty(tcx, tcx.param_env(alias_def_id), unnorm);
+            if let ty::ClauseKind::Projection(projection_predicate) = predicate.kind().skip_binder()
+                && Some(projection_predicate.def_id()) == Some(future_output)
+            {
+                return projection_predicate.term.as_type();
+            }
+            None
+        })
+        .ok_or_else(|| {
+            anyhow!(
+                "Failed to find Future::Output associated type in bounds of {:?}",
+                rs_return_type
+            )
+        })
 }

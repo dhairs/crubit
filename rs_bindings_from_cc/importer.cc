@@ -18,16 +18,16 @@
 #include <variant>
 #include <vector>
 
+#include "absl/algorithm/container.h"
 #include "absl/base/no_destructor.h"
+#include "absl/base/nullability.h"
 #include "absl/container/flat_hash_map.h"
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/log/log.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
-#include "absl/strings/cord.h"
 #include "absl/strings/str_cat.h"
-#include "absl/strings/str_format.h"
 #include "absl/strings/str_join.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
@@ -53,6 +53,7 @@
 #include "clang/AST/PrettyPrinter.h"
 #include "clang/AST/RawCommentList.h"
 #include "clang/AST/Type.h"
+#include "clang/AST/TypeBase.h"
 #include "clang/Basic/AttrKinds.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/FileManager.h"
@@ -61,11 +62,14 @@
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/SourceManager.h"
 #include "clang/Basic/Specifiers.h"
+#include "clang/Lex/Lexer.h"
 #include "clang/Sema/Sema.h"
+#include "clang/UnifiedSymbolResolution/USRGeneration.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/Support/Casting.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/Regex.h"
+#include "llvm/Support/raw_ostream.h"
 
 namespace crubit {
 namespace {
@@ -117,6 +121,79 @@ bool IsBuiltinFunction(const clang::Decl* decl) {
     return false;
   }
   return function->getBuiltinID() != 0;
+}
+
+bool IsTypeValueOrRefToConst(clang::QualType candidate,
+                             clang::CanQualType target) {
+  return candidate->getCanonicalTypeUnqualified() == target ||
+         (candidate->isLValueReferenceType() &&
+          candidate.getNonReferenceType().getCanonicalType() ==
+              target.withConst());
+}
+
+bool IsLvalueRefToUnqualified(clang::QualType type) {
+  return type->isLValueReferenceType() &&
+         !type.getNonReferenceType().getCanonicalType().hasQualifiers();
+}
+
+bool IsStdTemplate(const clang::TemplateDecl& decl, clang::StringRef name) {
+  const auto* class_template =
+      clang::dyn_cast<const clang::ClassTemplateDecl>(&decl);
+  return class_template != nullptr && class_template->getName() == name &&
+         class_template->isInStdNamespace();
+}
+
+bool IsCharTraitsChar(clang::QualType type) {
+  const clang::TemplateSpecializationType* specialization =
+      type->getAsNonAliasTemplateSpecializationType();
+  return specialization != nullptr &&
+         IsStdTemplate(*specialization->getTemplateName().getAsTemplateDecl(),
+                       "char_traits") &&
+         specialization->template_arguments().size() == 1 &&
+         specialization->template_arguments()[0].getAsType()->isCharType();
+}
+
+bool IsOstreamRef(clang::QualType type) {
+  if (!IsLvalueRefToUnqualified(type)) {
+    return false;
+  }
+  const clang::TemplateSpecializationType* specialization =
+      type.getNonReferenceType()->getAsNonAliasTemplateSpecializationType();
+  return specialization != nullptr &&
+         IsStdTemplate(*specialization->getTemplateName().getAsTemplateDecl(),
+                       "basic_ostream") &&
+         !specialization->template_arguments().empty() &&
+         specialization->template_arguments()[0].getAsType()->isCharType() &&
+         (specialization->template_arguments().size() == 1 ||
+          IsCharTraitsChar(
+              specialization->template_arguments()[1].getAsType()));
+}
+
+bool DetectFormatterFunction(const clang::Decl& decl,
+                             clang::CanQualType formatted_type) {
+  if (const auto* function_template_decl =
+          clang::dyn_cast<const clang::FunctionTemplateDecl>(&decl);
+      function_template_decl != nullptr) {
+    return function_template_decl->getName() == "AbslStringify" &&
+           function_template_decl->getAsFunction()->getNumParams() == 2 &&
+           IsTypeValueOrRefToConst(
+               /*candidate=*/function_template_decl->getAsFunction()
+                   ->getParamDecl(1)
+                   ->getType(),
+               /*target=*/formatted_type);
+  }
+  if (const auto* function_decl =
+          clang::dyn_cast<const clang::FunctionDecl>(&decl);
+      function_decl != nullptr) {
+    return function_decl->getOverloadedOperator() == clang::OO_LessLess &&
+           function_decl->getNumParams() == 2 &&
+           IsOstreamRef(function_decl->getParamDecl(0)->getType()) &&
+           IsTypeValueOrRefToConst(
+               /*candidate=*/function_decl->getParamDecl(1)->getType(),
+               /*target=*/formatted_type) &&
+           IsOstreamRef(function_decl->getReturnType());
+  }
+  return false;
 }
 
 }  // namespace
@@ -293,6 +370,17 @@ std::vector<clang::Decl*> Importer::GetCanonicalChildren(
     const clang::DeclContext* decl_context) const {
   std::vector<clang::Decl*> result;
   for (clang::Decl* decl : decl_context->decls()) {
+    // Bubble anonymous enum constants up so that they are imported as if they
+    // were top-level constants.
+    if (const auto* enum_decl = llvm::dyn_cast<clang::EnumDecl>(decl)) {
+      if (enum_decl->getName().empty()) {
+        for (clang::EnumConstantDecl* enumerator : enum_decl->enumerators()) {
+          result.push_back(enumerator);
+        }
+        continue;
+      }
+    }
+
     if (const auto* linkage_spec_decl =
             llvm::dyn_cast<clang::LinkageSpecDecl>(decl)) {
       llvm::move(GetCanonicalChildren(linkage_spec_decl),
@@ -317,6 +405,19 @@ std::vector<clang::Decl*> Importer::GetCanonicalChildren(
         canonical_decl == decl) {
       result.push_back(decl);
     }
+
+    // For the special case of aliases, add their referent as a child if
+    // this alias is the preferred name of the template specialization they
+    // refer to.
+    if (clang::TypedefNameDecl* alias_decl =
+            clang::dyn_cast<clang::TypedefNameDecl>(decl)) {
+      if (clang::CXXRecordDecl* record_decl =
+              alias_decl->getUnderlyingType()->getAsCXXRecordDecl()) {
+        if (alias_decl == GetTemplateSpecializationAlias(record_decl)) {
+          result.push_back(record_decl);
+        }
+      }
+    }
   }
   return result;
 }
@@ -331,6 +432,16 @@ const clang::Decl* Importer::CanonicalizeDecl(const clang::Decl* decl) const {
     }
     return false;
   };
+
+  if (auto* alias_decl = clang::dyn_cast<clang::TypedefNameDecl>(decl)) {
+    if (clang::CXXRecordDecl* record_decl =
+            alias_decl->getUnderlyingType()->getAsCXXRecordDecl()) {
+      if (alias_decl == GetTemplateSpecializationAlias(record_decl)) {
+        decl = record_decl;
+      }
+    }
+  }
+
   if (llvm::isa<clang::TagDecl>(decl)) {
     if (is_injected_class_name(decl)) {
       return nullptr;
@@ -363,6 +474,20 @@ const clang::Decl* Importer::CanonicalizeDecl(const clang::Decl* decl) const {
       }
     }
     CHECK(canonical != nullptr);
+    return canonical;
+  }
+  if (const auto* function_decl = llvm::dyn_cast<clang::FunctionDecl>(decl)) {
+    if (llvm::isa<clang::CXXMethodDecl>(function_decl)) {
+      return function_decl->getCanonicalDecl();
+    }
+    const auto* canonical = function_decl->getCanonicalDecl();
+    if (canonical->getLexicalDeclContext()->isRecord()) {
+      for (const auto* redecl : function_decl->redecls()) {
+        if (!redecl->getLexicalDeclContext()->isRecord()) {
+          return redecl;
+        }
+      }
+    }
     return canonical;
   }
   return decl->getCanonicalDecl();
@@ -453,7 +578,7 @@ Importer::DeclItems Importer::GetDeclItems(const clang::Decl* decl) {
 
     // We remove comments attached to a child decl or that are within a child
     // decl.
-    if (auto raw_comment = ctx_.getRawCommentForDeclNoCache(decl)) {
+    if (auto raw_comment = ctx_.getRawCommentNoCache(decl)) {
       ordered_comments.erase(raw_comment->getBeginLoc());
     }
     if (decl->getLocation().isValid()) {
@@ -489,6 +614,12 @@ Importer::GetTopLevelItemIdsInSourceOrder(
 
   // Push all the other items
   for (auto& [decl, item_id] : decl_items.canonical_children) {
+    // Don't include nested records in the total set of top-level items,
+    // as they will be generated as part of their parents.
+    if (llvm::isa<clang::CXXRecordDecl>(decl) &&
+        llvm::isa<clang::CXXRecordDecl>(decl->getDeclContext())) {
+      continue;
+    }
     items[GetOwningTarget(decl)].push_back({GetSourceOrderKey(decl), item_id});
   }
 
@@ -497,7 +628,7 @@ Importer::GetTopLevelItemIdsInSourceOrder(
 
   absl::flat_hash_map<BazelLabel, std::vector<ItemId>> ordered_items;
   for (auto& [target, item_ids_in_target] : items) {
-    llvm::sort(item_ids_in_target, compare_locations);
+    llvm::stable_sort(item_ids_in_target, compare_locations);
 
     std::vector<ItemId>& ordered_item_ids = ordered_items[target];
     ordered_item_ids.reserve(item_ids_in_target.size());
@@ -523,13 +654,20 @@ std::vector<ItemId> Importer::GetItemIdsInSourceOrder(
     if (IsUnsupportedAndAlien(item_id)) {
       continue;
     }
+    // Skip out-of-line defined children of records when listing children of
+    // namespaces!
+    if (decl->getDeclContext() !=
+            clang::cast<clang::DeclContext>(parent_decl) &&
+        llvm::isa<clang::CXXRecordDecl>(decl->getDeclContext())) {
+      continue;
+    }
     items.push_back({GetSourceOrderKey(decl), item_id});
   }
 
   clang::SourceManager& sm = ctx_.getSourceManager();
   auto compare_locations = SourceLocationComparator(sm);
 
-  llvm::sort(items, compare_locations);
+  llvm::stable_sort(items, compare_locations);
   std::vector<ItemId> ordered_item_ids;
 
   ordered_item_ids.reserve(items.size());
@@ -549,7 +687,7 @@ std::vector<ItemId> Importer::GetOrderedItemIdsOfTemplateInstantiations()
 
   clang::SourceManager& sm = ctx_.getSourceManager();
   auto compare_locations = SourceLocationComparator(sm);
-  llvm::sort(items, compare_locations);
+  llvm::stable_sort(items, compare_locations);
 
   std::vector<ItemId> ordered_item_ids;
   ordered_item_ids.reserve(items.size());
@@ -589,6 +727,43 @@ void Importer::Import(clang::TranslationUnitDecl* translation_unit_decl) {
   }
 
   ImportDeclsFromDeclContext(translation_unit_decl);
+
+  // Augment child_item_ids for records with out-of-line defined children, e.g.
+  // class A { class B; };   // declares A::B
+  // class A::B { ... };  // defines A::B
+  std::vector<std::pair<SourceOrderKey, const clang::Decl*>> ordered_children;
+  for (const auto& [decl, item] : import_cache_) {
+    if (!item.has_value()) continue;
+    if (auto* parent_record_decl =
+            llvm::dyn_cast<clang::CXXRecordDecl>(decl->getDeclContext())) {
+      auto parent_it = import_cache_.find(parent_record_decl);
+      if (parent_it != import_cache_.end() && parent_it->second.has_value()) {
+        if (auto* parent_item =
+                std::get_if<Record>(&(parent_it->second.value()))) {
+          ordered_children.push_back({GetSourceOrderKey(decl), decl});
+        }
+      }
+    }
+  }
+
+  SourceLocationComparator compare_locations(sm);
+  llvm::stable_sort(ordered_children, compare_locations);
+
+  for (const auto& [key, decl] : ordered_children) {
+    auto* parent_record_decl =
+        llvm::dyn_cast<clang::CXXRecordDecl>(decl->getDeclContext());
+    auto parent_it = import_cache_.find(parent_record_decl);
+    auto* parent_item = std::get_if<Record>(&(parent_it->second.value()));
+
+    auto child_id = GenerateItemId(decl);
+    if (!IsUnsupportedAndAlien(child_id) &&
+        std::find(parent_item->child_item_ids.begin(),
+                  parent_item->child_item_ids.end(),
+                  child_id) == parent_item->child_item_ids.end()) {
+      parent_item->child_item_ids.push_back(child_id);
+    }
+  }
+
   for (const auto& [decl, item] : import_cache_) {
     if (!item.has_value() || IsUnsupportedAndAlien(GenerateItemId(decl))) {
       continue;
@@ -596,7 +771,7 @@ void Importer::Import(clang::TranslationUnitDecl* translation_unit_decl) {
     ordered_items.push_back({GetSourceOrderKey(decl), *item});
   }
 
-  llvm::sort(ordered_items, SourceLocationComparator(sm));
+  llvm::stable_sort(ordered_items, SourceLocationComparator(sm));
 
   invocation_.ir_.items.reserve(ordered_items.size());
   for (auto& ordered_item : ordered_items) {
@@ -633,7 +808,6 @@ void Importer::ImportDeclsFromDeclContext(
 }
 
 std::optional<IR::Item> Importer::GetDeclItem(clang::Decl* decl) {
-  // TODO(jeanpierreda): Move `decl->getCanonicalDecl()` from callers into here.
   if (auto it = import_cache_.find(decl); it != import_cache_.end()) {
     return it->second;
   }
@@ -710,7 +884,9 @@ std::optional<IR::Item> Importer::GetDeclItem(clang::Decl* decl) {
     if (auto* specialization_decl =
             llvm::dyn_cast<clang::ClassTemplateSpecializationDecl>(decl);
         specialization_decl && IsFromCurrentTarget(specialization_decl)) {
-      class_template_instantiations_.insert(specialization_decl);
+      if (GetTemplateSpecializationAlias(specialization_decl) == nullptr) {
+        class_template_instantiations_.insert(specialization_decl);
+      }
     }
   }
   return result;
@@ -787,7 +963,7 @@ std::optional<IR::Item> Importer::ImportDecl(clang::Decl* decl) {
   }
 
   for (auto& importer : decl_importers_) {
-    std::optional<IR::Item> result = importer->ImportDecl(decl);
+    std::optional<IR::Item> result = importer->ImportDecl(decl, *must_bind);
     if (result.has_value()) {
       if (*must_bind) {
         SetMustBindItem(*result);
@@ -891,32 +1067,165 @@ bool Importer::IsFromProtoTarget(const clang::Decl& decl) const {
   return filename.has_value() && filename->ends_with(".proto.h");
 }
 
+bool Importer::IsFeatureEnabledForTarget(const BazelLabel& label,
+                                         absl::string_view feature) const {
+  if (auto i = invocation_.ir_.crubit_features.find(label);
+      i != invocation_.ir_.crubit_features.end()) {
+    return i->second.contains(feature);
+  }
+  return false;
+}
+
+// LINT.IfChange
+bool Importer::AreAssumedLifetimesEnabledForTarget(
+    const BazelLabel& label) const {
+  return (IsFeatureEnabledForTarget(label, "assume_lifetimes") ||
+          IsFeatureEnabledForTarget(label, "all")) &&
+         !IsFeatureEnabledForTarget(label, "no_assume_lifetimes");
+}
+// LINT.ThenChange(//depot/common/crubit_feature.rs,
+// //depot/features/BUILD)
+
+bool Importer::IsUnsafeViewEnabledForTarget(const BazelLabel& label) const {
+  return IsFeatureEnabledForTarget(label, "unsafe_view");
+}
+
+absl::StatusOr<bool> Importer::DetectFormatter(
+    const clang::TypeDecl& decl) const {
+  CRUBIT_ASSIGN_OR_RETURN(std::optional<bool> override_display,
+                          GetCrubitOverrideDisplayAnnotation(decl));
+  if (override_display.has_value()) {
+    return *override_display;
+  }
+  clang::CanQualType type = ctx_.getCanonicalTypeDeclType(&decl);
+  CRUBIT_ASSIGN_OR_RETURN(
+      std::optional<bool> found,
+      DetectFormatterForType(/*lookup=*/type, /*target=*/type));
+  return found.value_or(false);
+}
+
+absl::StatusOr<std::optional<bool>>
+Importer::GetCrubitOverrideDisplayAnnotation(
+    const clang::TypeDecl& decl) const {
+  CRUBIT_ASSIGN_OR_RETURN(std::optional<AnnotateArgs> args,
+                          GetAnnotateAttrArgs(decl, "crubit_override_display"));
+  if (!args.has_value()) {
+    return std::nullopt;
+  }
+  if (args->size() != 1) {
+    return absl::InvalidArgumentError(
+        "crubit_override_display annotation must have exactly one argument");
+  }
+  CRUBIT_ASSIGN_OR_RETURN(bool result, GetExprAsBool(*args->front(), ctx_));
+  return result;
+}
+
+absl::StatusOr<std::optional<bool>> Importer::DetectFormatterForType(
+    clang::CanQualType lookup, clang::CanQualType target) const {
+  const clang::Type* lookup_type = lookup.getTypePtrOrNull();
+  const clang::Type* target_type = target.getTypePtrOrNull();
+  if (lookup_type == nullptr) {
+    std::string error_message;
+    llvm::raw_string_ostream os(error_message);
+    os << "unexpectedly null lookup type, while finding formatter for ";
+    if (target_type == nullptr) {
+      os << "(also unexpected) null type";
+    } else {
+      target_type->dump(os, ctx_);
+    }
+    return absl::InternalError(error_message);
+  }
+  if (target_type == nullptr) {
+    std::string error_message;
+    llvm::raw_string_ostream os(error_message);
+    os << "unexpectedly null target type, while finding its formatter in ";
+    lookup_type->dump(os, ctx_);
+    return absl::InternalError(error_message);
+  }
+
+  if (const clang::CXXRecordDecl* record = lookup->getAsCXXRecordDecl();
+      record != nullptr) {
+    for (const clang::FriendDecl* absl_nonnull friend_decl :
+         record->friends()) {
+      const clang::NamedDecl* inner_friend = friend_decl->getFriendDecl();
+      if (inner_friend != nullptr &&
+          DetectFormatterFunction(*inner_friend, target)) {
+        return true;
+      }
+    }
+    for (const clang::CXXBaseSpecifier& base_specifier : record->bases()) {
+      clang::CanQualType base_type =
+          ctx_.getCanonicalType(base_specifier.getType());
+      CRUBIT_ASSIGN_OR_RETURN(
+          std::optional<bool> detected_for_target_in_base,
+          DetectFormatterForType(/*lookup=*/base_type, /*target=*/target));
+      if (detected_for_target_in_base.has_value()) {
+        return *detected_for_target_in_base;
+      }
+
+      auto* base_decl = base_specifier.getType()->getAsTagDecl();
+      if (base_decl == nullptr) {
+        std::string error_message;
+        llvm::raw_string_ostream os(error_message);
+        os << "base ";
+        base_specifier.getType()->dump(os, ctx_);
+        os << " of ";
+        record->dump(os);
+        os << " unexpectedly not a TagDecl, while finding formatter for ";
+        target_type->dump(os, ctx_);
+        return absl::InternalError(error_message);
+      }
+      CRUBIT_ASSIGN_OR_RETURN(bool detected_for_base,
+                              DetectFormatter(*base_decl));
+      if (detected_for_base) {
+        return detected_for_base;
+      }
+    }
+  }
+  const clang::TagDecl* lookup_decl = lookup_type->getAsTagDecl();
+  if (lookup_decl == nullptr) {
+    return std::nullopt;
+  }
+  const clang::DeclContext* absl_nonnull context =
+      lookup_decl->getDeclContext()->getEnclosingNamespaceContext();
+  for (const clang::Decl* absl_nonnull decl : context->decls()) {
+    if (DetectFormatterFunction(*decl, target)) {
+      return true;
+    }
+  }
+  return std::nullopt;
+}
+
+bool Importer::IsCrubitEnabledForTarget(const BazelLabel& label) const {
+  if (auto i = invocation_.ir_.crubit_features.find(label);
+      i != invocation_.ir_.crubit_features.end()) {
+    return !i->second.empty();
+  }
+  // TODO(b/471240594): This is a hack for this specific header. We need to
+  // properly fix target assignment for Crubit support libraries.
+  if (label.value().starts_with("//_unknown_target:") &&
+      label.value().ends_with("crubit/support/rs_std/slice_ref.h")) {
+    return true;
+  }
+  return false;
+}
+
 IR::Item Importer::HardError(const clang::Decl& decl, FormattedError error) {
   return ImportUnsupportedItem(decl, std::nullopt, {error},
                                /*is_hard_error=*/true);
 }
 
-IR::Item Importer::ImportUnsupportedItem(
-    const clang::Decl& decl, std::optional<UnsupportedItem::Path> path,
-    std::vector<FormattedError> errors) {
-  return ImportUnsupportedItem(decl, std::move(path), std::move(errors),
-                               /*is_hard_error=*/false);
-}
 
 IR::Item Importer::ImportUnsupportedItem(
-    const clang::Decl& decl, std::optional<UnsupportedItem::Path> path,
-    FormattedError error) {
-  return ImportUnsupportedItem(decl, std::move(path),
-                               std::vector<FormattedError>({std::move(error)}),
-                               /*is_hard_error=*/false);
-}
-
-IR::Item Importer::ImportUnsupportedItem(
-    const clang::Decl& decl, std::optional<UnsupportedItem::Path> path,
+    const clang::Decl& original_decl, std::optional<UnsupportedItem::Path> path,
     std::vector<FormattedError> errors, bool is_hard_error) {
   auto kind = UnsupportedItem::Kind::kOther;
+  const clang::Decl* decl = &original_decl;
+  while (auto* using_decl = clang::dyn_cast<clang::UsingShadowDecl>(decl)) {
+    decl = using_decl->getTargetDecl();
+  }
   if (const clang::TagDecl* named_decl =
-          clang::dyn_cast<clang::TagDecl>(&decl)) {
+          clang::dyn_cast<clang::TagDecl>(decl)) {
     switch (named_decl->getTagKind()) {
       case clang::TagTypeKind::Struct:
         kind = UnsupportedItem::Kind::kStruct;
@@ -934,7 +1243,7 @@ IR::Item Importer::ImportUnsupportedItem(
         break;
     }
   } else if (const clang::FunctionDecl* func_decl =
-                 clang::dyn_cast<clang::FunctionDecl>(&decl)) {
+                 clang::dyn_cast<clang::FunctionDecl>(decl)) {
     kind = func_decl->getKind() == clang::NamedDecl::Kind::CXXConstructor
                ? UnsupportedItem::Kind::kConstructor
                : UnsupportedItem::Kind::kFunc;
@@ -951,17 +1260,20 @@ IR::Item Importer::ImportUnsupportedItem(
     kind = UnsupportedItem::Kind::kTypeAlias;
   }
   std::string name = "unnamed";
-  if (const auto* named_decl = clang::dyn_cast<clang::NamedDecl>(&decl)) {
+  if (const auto* named_decl =
+          clang::dyn_cast<clang::NamedDecl>(&original_decl)) {
     name = named_decl->getQualifiedNameAsString();
   }
-  std::string source_loc = ConvertSourceLocation(decl.getBeginLoc());
+  std::string source_loc =
+      ConvertSourceLocation(original_decl.getBeginLoc(), nullptr);
   return UnsupportedItem{
       .name = name,
+      .unique_name = GetUniqueName(original_decl),
       .kind = kind,
       .path = std::move(path),
       .errors = std::move(errors),
       .source_loc = source_loc,
-      .id = GenerateItemId(&decl),
+      .id = GenerateItemId(&original_decl),
       .must_bind = is_hard_error,
   };
 }
@@ -982,7 +1294,7 @@ std::optional<std::string> Importer::GetComment(const clang::Decl* decl) const {
   // This is going to be a heuristic that needs to be tuned over time.
 
   clang::SourceManager& sm = ctx_.getSourceManager();
-  clang::RawComment* raw_comment = ctx_.getRawCommentForDeclNoCache(decl);
+  clang::RawComment* raw_comment = ctx_.getRawCommentNoCache(decl);
 
   if (raw_comment == nullptr) {
     return {};
@@ -996,7 +1308,9 @@ std::optional<std::string> Importer::GetComment(const clang::Decl* decl) const {
   return cleaned_comment_text;
 }
 
-std::string Importer::ConvertSourceLocation(clang::SourceLocation loc) const {
+std::string Importer::ConvertSourceLocation(
+    clang::SourceLocation loc, clang::DeclarationNameInfo* name_info) const {
+  bool kythe_annotations = invocation_.kythe_annotations();
   auto& sm = ctx_.getSourceManager();
   // For macros: https://clang.llvm.org/doxygen/SourceManager_8h.html:
   // Spelling location: where the macro is originally defined.
@@ -1008,10 +1322,13 @@ std::string Importer::ConvertSourceLocation(clang::SourceLocation loc) const {
   // number to avoid wrong links while generated files have not caught up.
   constexpr absl::string_view kGeneratedFrom = "Generated from";
   constexpr absl::string_view kExpandedAt = "Expanded at";
-  constexpr auto kSourceLocationFunc =
-      [](absl::string_view origin, absl::string_view filename, uint32_t line) {
-        return absl::Substitute("$0: $1;l=$2", origin, filename, line);
-      };
+  constexpr auto kSourceLocationFunc = [](bool kythe_annotations,
+                                          absl::string_view origin,
+                                          absl::string_view filename,
+                                          uint32_t line, uint32_t begin,
+                                          int32_t end) {
+    return absl::Substitute("$0: $1;l=$2", origin, filename, line);
+  };
   constexpr absl::string_view kSourceLocUnknown = "<unknown location>";
   std::string spelling_loc_str;
   if (absl::string_view spelling_filename =
@@ -1023,8 +1340,20 @@ std::string Importer::ConvertSourceLocation(clang::SourceLocation loc) const {
     if (absl::StartsWith(spelling_filename, "./")) {
       spelling_filename = spelling_filename.substr(2);
     }
-    spelling_loc_str =
-        kSourceLocationFunc(kGeneratedFrom, spelling_filename, spelling_line);
+    // This gets us most of the way there, but getting it right in generality
+    // is tricky (see ClangRangeFinder::RangeForNameInfo for details).
+    uint32_t spelling_begin = 0, spelling_end = 0;
+    if (kythe_annotations && name_info != nullptr) {
+      auto tr =
+          clang::CharSourceRange::getTokenRange(name_info->getSourceRange());
+      auto sr =
+          clang::Lexer::getAsCharRange(tr, sm, ctx_.getLangOpts()).getAsRange();
+      spelling_begin = sm.getFileOffset(sr.getBegin());
+      spelling_end = sm.getFileOffset(sr.getEnd());
+    }
+    spelling_loc_str = kSourceLocationFunc(kythe_annotations, kGeneratedFrom,
+                                           spelling_filename, spelling_line,
+                                           spelling_begin, spelling_end);
   }
   if (!loc.isMacroID()) {
     return spelling_loc_str;
@@ -1041,12 +1370,13 @@ std::string Importer::ConvertSourceLocation(clang::SourceLocation loc) const {
       expansion_filename = expansion_filename.substr(2);
     }
     expansion_loc_str =
-        kSourceLocationFunc(kExpandedAt, expansion_filename, expansion_line);
+        kSourceLocationFunc(kythe_annotations, kExpandedAt, expansion_filename,
+                            expansion_line, 0, 0);
   }
   return absl::StrCat(spelling_loc_str, "\n", expansion_loc_str);
 }
 
-absl::StatusOr<CcType> Importer::ConvertTemplateSpecializationType(
+CcType Importer::ConvertTemplateSpecializationType(
     const clang::TemplateSpecializationType* type) {
   // Qualifiers are handled separately in TypeMapper::ConvertQualType().
   std::string type_string = clang::QualType(type, 0).getAsString();
@@ -1055,10 +1385,31 @@ absl::StatusOr<CcType> Importer::ConvertTemplateSpecializationType(
       clang::dyn_cast_or_null<clang::ClassTemplateSpecializationDecl>(
           type->getAsCXXRecordDecl());
   if (!specialization_decl) {
-    return absl::InvalidArgumentError(absl::Substitute(
+    return CcType(FormattedError::Substitute(
         "Template specialization '$0' without an associated record decl "
         "is not supported.",
         type_string));
+  }
+
+  if (auto* template_decl = type->getTemplateName().getAsTemplateDecl()) {
+    // Resolve template_decl to its definition if possible.
+    if (auto* class_template_decl =
+            clang::dyn_cast<clang::ClassTemplateDecl>(template_decl)) {
+      if (clang::CXXRecordDecl* definition =
+              class_template_decl->getTemplatedDecl()->getDefinition()) {
+        if (auto* definition_template_decl =
+                definition->getDescribedClassTemplate()) {
+          template_decl = definition_template_decl;
+        }
+      }
+    }
+    auto target = GetOwningTarget(template_decl);
+    if (!IsCrubitEnabledForTarget(target)) {
+      return CcType(FormattedError::Substitute(
+          "Failed to complete template specialization type $0: template "
+          "belongs to target $1, which does not support Crubit.",
+          type_string, target.value()));
+    }
   }
 
   if (HasBeenAlreadySuccessfullyImported(specialization_decl))
@@ -1084,7 +1435,7 @@ absl::StatusOr<CcType> Importer::ConvertTemplateSpecializationType(
             ctx_.getCanonicalTagType(specialization_decl));
       });
   if (diagnostic_recorder.getNumErrors() != 0) {
-    return absl::InvalidArgumentError(absl::Substitute(
+    return CcType(FormattedError::Substitute(
         "Failed to complete template specialization type $0: Diagnostics "
         "emitted:\n$1",
         type_string, diagnostic_recorder.ConcatenatedDiagnostics()));
@@ -1096,7 +1447,7 @@ absl::StatusOr<CcType> Importer::ConvertTemplateSpecializationType(
   absl::Status import_status =
       CheckImportStatus(GetDeclItem(specialization_decl));
   if (!import_status.ok()) {
-    return absl::InvalidArgumentError(absl::Substitute(
+    return CcType(FormattedError::Substitute(
         "Failed to create bindings for template specialization type $0: $1",
         type_string, import_status.message()));
   }
@@ -1104,9 +1455,9 @@ absl::StatusOr<CcType> Importer::ConvertTemplateSpecializationType(
   return ConvertTypeDecl(specialization_decl);
 }
 
-absl::StatusOr<CcType> Importer::ConvertTypeDecl(clang::NamedDecl* decl) {
+CcType Importer::ConvertTypeDecl(clang::NamedDecl* decl) {
   if (!EnsureSuccessfullyImported(decl)) {
-    return absl::NotFoundError(absl::Substitute(
+    return CcType(FormattedError::Substitute(
         "No generated bindings found for '$0'", decl->getNameAsString()));
   }
 
@@ -1130,9 +1481,10 @@ static bool IsSameCanonicalUnqualifiedType(clang::QualType type1,
 
 absl::StatusOr<CcType> Importer::ConvertType(
     const clang::Type* type,
-    const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable) {
+    const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable,
+    bool assume_lifetimes) {
   absl::StatusOr<CcType> cpp_type =
-      ConvertUnattributedType(type, lifetimes, nullable);
+      ConvertUnattributedType(type, lifetimes, nullable, assume_lifetimes);
   if (cpp_type.ok()) {
     std::optional<std::string> unknown_attr =
         CollectUnknownTypeAttrs(*type, [](clang::attr::Kind kind) {
@@ -1157,13 +1509,25 @@ absl::StatusOr<CcType> Importer::ConvertType(
     if (unknown_attr.has_value()) {
       cpp_type->unknown_attr = *unknown_attr;
     }
+    if (assume_lifetimes) {
+      CRUBIT_ASSIGN_OR_RETURN(
+          std::vector<absl::string_view> explicit_lifetime_views,
+          CollectExplicitLifetimes(ctx_, *type));
+      cpp_type->explicit_lifetimes.reserve(explicit_lifetime_views.size());
+      absl::c_transform(explicit_lifetime_views,
+                        std::back_inserter(cpp_type->explicit_lifetimes),
+                        [](absl::string_view lifetime_view) {
+                          return std::string(lifetime_view);
+                        });
+    }
   }
   return cpp_type;
 }
 
 absl::StatusOr<CcType> Importer::ConvertUnattributedType(
     const clang::Type* type,
-    const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable) {
+    const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable,
+    bool assume_lifetimes) {
   // Qualifiers are handled separately in ConvertQualType().
   std::string type_string = clang::QualType(type, 0).getAsString();
 
@@ -1213,9 +1577,9 @@ absl::StatusOr<CcType> Importer::ConvertUnattributedType(
           param_lifetimes =
               &pointee_lifetimes->GetFuncLifetimes().GetParamLifetimes(i);
         }
-        CRUBIT_ASSIGN_OR_RETURN(
-            CcType cpp_param_type,
-            ConvertQualType(func_type->getParamType(i), param_lifetimes));
+        CcType cpp_param_type =
+            ConvertQualType(func_type->getParamType(i), param_lifetimes,
+                            /*nullable=*/true, assume_lifetimes);
         param_and_return_types.push_back(std::move(cpp_param_type));
       }
 
@@ -1224,9 +1588,9 @@ absl::StatusOr<CcType> Importer::ConvertUnattributedType(
         return_lifetimes =
             &pointee_lifetimes->GetFuncLifetimes().GetReturnLifetimes();
       }
-      CRUBIT_ASSIGN_OR_RETURN(
-          CcType cpp_return_type,
-          ConvertQualType(func_type->getReturnType(), return_lifetimes));
+      CcType cpp_return_type =
+          ConvertQualType(func_type->getReturnType(), return_lifetimes,
+                          /*nullable=*/true, assume_lifetimes);
       param_and_return_types.push_back(std::move(cpp_return_type));
 
       CHECK(type->isPointerType() || type->isLValueReferenceType());
@@ -1236,9 +1600,8 @@ absl::StatusOr<CcType> Importer::ConvertUnattributedType(
           .param_and_return_types = std::move(param_and_return_types),
       });
     }
-
-    CRUBIT_ASSIGN_OR_RETURN(CcType cpp_pointee_type,
-                            ConvertQualType(pointee_type, pointee_lifetimes));
+    CcType cpp_pointee_type = ConvertQualType(
+        pointee_type, pointee_lifetimes, /*nullable=*/true, assume_lifetimes);
     // Note: we don't check for a lifetime here and prefer to defer to the
     // IR consumer to error if a lifetime is required. This allows the IR
     // consumer to infer a lifetime where-appropriate (e.g. constructors).
@@ -1322,42 +1685,72 @@ absl::StatusOr<CcType> Importer::ConvertUnattributedType(
     return ConvertTemplateSpecializationType(tst_type);
   } else if (const auto* subst_type =
                  type->getAs<clang::SubstTemplateTypeParmType>()) {
-    return ConvertQualType(subst_type->getReplacementType(), lifetimes);
+    return ConvertQualType(subst_type->getReplacementType(), lifetimes,
+                           /*nullable=*/true, assume_lifetimes);
   } else if (const auto* deduced_type = type->getAs<clang::DeducedType>()) {
     // Deduction should have taken place earlier (e.g. via DeduceReturnType
     // called from FunctionDeclImporter::Import).
     CHECK(deduced_type->isDeduced());
-    return ConvertQualType(deduced_type->getDeducedType(), lifetimes);
+    return ConvertQualType(deduced_type->getDeducedType(), lifetimes,
+                           /*nullable=*/true, assume_lifetimes);
+  } else if (const auto* decltype_type = type->getAs<clang::DecltypeType>()) {
+    return ConvertQualType(decltype_type->getUnderlyingType(), lifetimes,
+                           /*nullable=*/true, assume_lifetimes);
   }
 
   return absl::UnimplementedError(absl::StrCat(
       "Unsupported clang::Type class '", type->getTypeClassName(), "'"));
 }
 
-absl::StatusOr<CcType> Importer::ConvertQualType(
+CcType Importer::ConvertQualType(
     clang::QualType qual_type,
-    const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable) {
+    const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable,
+    bool assume_lifetimes) {
   clang::PrintingPolicy printing_policy = ctx_.getPrintingPolicy();
   printing_policy.FullyQualifiedName = true;
   std::string type_string = qual_type.getAsString(printing_policy);
 
-  absl::StatusOr<CcType> type =
-      ConvertType(qual_type.getTypePtr(), lifetimes, nullable);
+  absl::StatusOr<CcType> type = ConvertType(qual_type.getTypePtr(), lifetimes,
+                                            nullable, assume_lifetimes);
+
+  // TODO(b/468093766): make _all_ the functions return a CcType.
+  // Then we can remove this duplicated logic: "either it was bad and returned
+  // as a bad status, or it was bad and returned as a CcType with a
+  // FormattedError variant". That's a bit ridiculous! But the remaining uses
+  // of Status are a bit tricky and don't fit in a first draft.
   if (!type.ok()) {
-    absl::Status error = absl::UnimplementedError(absl::Substitute(
+    return CcType(FormattedError::Substitute(
         "Unsupported type '$0': $1", type_string, type.status().message()));
-    error.SetPayload(kTypeStatusPayloadUrl, absl::Cord(type_string));
-    return error;
+  }
+  if (auto* error = std::get_if<FormattedError>(&type->variant)) {
+    // TODO(jeanpierreda): The most-specific type should go at the start, and
+    // be something we can aggregate by somehow.
+    // TODO(jeanpierreda): This produces pretty verbose errors.
+    return CcType(FormattedError::Substitute("Unsupported type '$0': $1",
+                                             type_string, error->message()));
   }
 
   // Handle cv-qualification.
   type->is_const = qual_type.isConstQualified();
   if (qual_type.isVolatileQualified()) {
-    return absl::UnimplementedError(
-        absl::StrCat("Unsupported `volatile` qualifier: ", type_string));
+    return CcType(FormattedError::PrefixedStrCat(
+        "Unsupported `volatile` qualifier", type_string));
   }
 
-  return type;
+  return *std::move(type);
+}
+
+std::string Importer::GetUniqueName(const clang::Decl& decl) const {
+  llvm::SmallString<128> usr;
+  if (!clang::index::generateUSRForDecl(&decl, usr)) {
+    return std::string(usr.str());
+  }
+
+  // Note: we shouldn't get this far for anything with a real name, and we
+  // can't really fall back to GetMangledName unconditionally because
+  // mangleName crashes at least for types like the implicit `__uint128_t`
+  // typedef.
+  return "";
 }
 
 std::string Importer::GetMangledName(const clang::NamedDecl* named_decl) const {
@@ -1503,6 +1896,15 @@ absl::StatusOr<TranslatedUnqualifiedIdentifier> Importer::GetTranslatedName(
         return absl::InvalidArgumentError(
             absl::StrCat("Unescapable identifier: ", name));
       }
+      // The string_view -> raw_string_view renaming happens centrally, so that
+      // it applies to both records (if we use preferred_name renaming) and
+      // type aliases (if preferred_name does not exist).
+      if (name == "string_view" && named_decl->isInStdNamespace()) {
+        if (!crubit_rust_name.has_value()) {
+          crubit_rust_name =
+              UnqualifiedIdentifier(Identifier("raw_string_view"));
+        }
+      }
 
       return TranslatedUnqualifiedIdentifier{
           .cc_identifier = Identifier(name),
@@ -1586,6 +1988,49 @@ bool Importer::HasBeenAlreadySuccessfullyImported(
     const clang::NamedDecl* decl) const {
   return known_type_decls_.contains(
       clang::cast<clang::NamedDecl>(CanonicalizeDecl(decl)));
+}
+
+clang::TypedefNameDecl* Importer::GetTemplateSpecializationAlias(
+    clang::Decl* decl) const {
+  clang::ClassTemplateSpecializationDecl* spec_decl =
+      clang::dyn_cast<clang::ClassTemplateSpecializationDecl>(decl);
+  if (!spec_decl) {
+    return nullptr;
+  }
+  for (const auto* preferred_name :
+       spec_decl->getMostRecentDecl()
+           ->specific_attrs<clang::PreferredNameAttr>()) {
+    clang::QualType preferred_type = preferred_name->getTypedefType();
+    if (!clang::declaresSameEntity(preferred_type->getAsCXXRecordDecl(),
+                                   spec_decl)) {
+      continue;
+    }
+    while (true) {
+      if (auto* typedef_decl =
+              clang::dyn_cast<clang::TypedefType>(preferred_type)) {
+        // TODO(b/485041750): For Some Reason this doesn't work for std::pmr...
+        // un-allowlist this once we figure out why.
+        // TODO(b/485041750): This doesn't work for std::string because the
+        // wrapper type expects to use the original C++ type name, not the
+        // version produced here.
+        std::string qualified_name =
+            typedef_decl->getDecl()->getQualifiedNameAsString();
+        if (qualified_name != "std::string_view" &&
+            qualified_name != "std::wstring_view") {
+          return nullptr;
+        }
+        return typedef_decl->getDecl();
+      }
+      clang::QualType next_preferred_type =
+          preferred_type.getSingleStepDesugaredType(ctx_);
+      if (next_preferred_type == preferred_type) {
+        break;
+      }
+      preferred_type = std::move(next_preferred_type);
+    }
+    return nullptr;
+  }
+  return nullptr;
 }
 
 }  // namespace crubit

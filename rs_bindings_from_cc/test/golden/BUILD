@@ -60,9 +60,37 @@ DEPS = {
 
 TAGS = {}
 
+ASPECT_HINTS = {
+    "composable_bridging_template_type": [
+        "//features:wrapper",
+    ],
+    "template_inst": [
+        "//features:wrapper",
+    ],
+    "deprecated_experimental": [
+        "//features:experimental",
+    ],
+    "nodiscard_experimental": [
+        "//features:experimental",
+    ],
+    "blocklist_template_paths": [
+        "//features:template_instantiation",
+        ":template_blocklist_path_regex",
+    ],
+    "template_instantiation": [
+        "//features:template_instantiation",
+    ],
+}
+
 rust_bindings_from_cc_cli_flag(
-    name = "disable_source_location_in_doc_comment",
-    flags = "--generate_source_location_in_doc_comment=False",
+    name = "enable_kythe_annotations",
+    flags = "--kythe_annotations=True",
+)
+
+rust_bindings_from_cc_cli_flag(
+    name = "template_blocklist_path_regex",
+    # Be careful: everything after the = is passed verbatim, including quotes
+    flags = "--template_blocklist_path_regex=.*blocklist_template_paths.*",
 )
 
 [cc_library(
@@ -70,8 +98,7 @@ rust_bindings_from_cc_cli_flag(
     hdrs = [name + ".h"],
     aspect_hints = [
         "//features:supported",
-        ":disable_source_location_in_doc_comment",
-    ] + (["//features:wrapper"] if name == "template_inst" else []),
+    ] + (ASPECT_HINTS[name] if name in ASPECT_HINTS else []) + ([":enable_kythe_annotations"] if name.endswith("_annotations") else []),
     deps = [
         ((d + "_cc") if d in TESTS else d)
         for d in (DEPS[name] if name in DEPS else [])
@@ -88,10 +115,15 @@ rust_bindings_from_cc_cli_flag(
 ) for name in TESTS]
 
 NON_BUILDABLE_TEST = [
-    # The bridge type is not defined in the C++ header so it cannot be built.
-    "bridge_type",
+    "callables",
+
+    # The rust type is not defined in the C++ header so it cannot be built.
+    "crubit_internal_rust_type",
+
     # We can't support additional Rust srcs so we can't run the test.
     "composable_bridging",
+    "composable_bridging_template_type",
+    "bridge_wrapping_alias",
 ]
 
 BUILDABLE_TESTS = [name for name in TESTS if name not in NON_BUILDABLE_TEST]
@@ -106,7 +138,6 @@ cc_library(
     name = "namespaces_json",
     hdrs = ["namespaces_json.h"],
     aspect_hints = [
-        ":disable_source_location_in_doc_comment",
         "//features:supported",
     ],
 )

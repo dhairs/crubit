@@ -6,6 +6,7 @@
 
 use core::cell::Cell;
 use core::ffi::c_void;
+use cref::{CMut, CRef};
 use googletest::prelude::*;
 
 trait ParameterIs<P> {}
@@ -31,9 +32,9 @@ macro_rules! function_return_type_is {
   ($mod:ident, $($cc_name:ident => $rs_type:ty),* $(,)?) => {
     $(
     const _ : () = {
-      #[allow(dead_code)]
+      #[allow(dead_code, unused_unsafe)]
       unsafe fn test_return_type() {
-        let _c = Cell::new($mod::$cc_name::Function(unreachable!()));
+        let _c = unsafe { Cell::new($mod::$cc_name::Function(unreachable!())) };
         let _: Cell<$rs_type> = _c;
       }
     };
@@ -72,7 +73,7 @@ macro_rules! type_is {
 type_is!(
     types_nonptr,
     Bool => bool,
-    Char => ::core::ffi::c_char,
+    Char => ::ffi_11::c_char,
 
     UnsignedChar => u8,
     SignedChar => i8,
@@ -82,17 +83,17 @@ type_is!(
     Short => i16,
     Int => i32,
     Long => i64,
-    LongLong => i64,
+    LongLong => ::ffi_11::c_longlong,
 
     UnsignedShort => u16,
     UnsignedInt => u32,
     UnsignedLong => u64,
-    UnsignedLongLong => u64,
+    UnsignedLongLong => ::ffi_11::c_ulonglong,
 
     SignedShort => i16,
     SignedInt => i32,
     SignedLong => i64,
-    SignedLongLong => i64,
+    SignedLongLong => ::ffi_11::c_longlong,
 
     Int8 => i8,
     Int16 => i16,
@@ -132,6 +133,8 @@ type_is!(
     Enum => types_nonptr::ns::ExampleEnum,
     TypeAliasEnum => types_nonptr::AliasEnum,
     UsingEnum => types_nonptr::ns::ExampleEnum,
+
+    DeclTypeBool => bool,
 
     ExistingRustTypeStruct => i8,
     ExistingRustTypeClass => i8,
@@ -225,8 +228,8 @@ struct_field_type_is!(
 function_return_type_is!(types_inferred_lifetimes,
     IntP => *mut i32,
     ConstIntP => *const i32,
-    IntRef => &mut i32,
-    ConstIntRef => &i32,
+    IntRef => CMut<'_, i32>,
+    ConstIntRef => CRef<'_, i32>,
     VoidP => *mut c_void,
     ConstVoidP => *const c_void,
     // TODO: b/436971180 - Why is this a pointer?
@@ -234,8 +237,8 @@ function_return_type_is!(types_inferred_lifetimes,
 
     StructPtr => *mut types_inferred_lifetimes::ExampleStruct,
     ConstStructPtr => *const types_inferred_lifetimes::ExampleStruct,
-    StructRef => &mut types_inferred_lifetimes::ExampleStruct,
-    ConstStructRef => &types_inferred_lifetimes::ExampleStruct,
+    StructRef => CMut<'_, types_inferred_lifetimes::ExampleStruct>,
+    ConstStructRef => CRef<'_, types_inferred_lifetimes::ExampleStruct>,
 );
 
 function_parameter_type_is!(types_inferred_lifetimes,

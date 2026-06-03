@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:trivial_type_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 pub mod ns {
@@ -21,7 +22,7 @@ pub mod ns {
     #[repr(C)]
     ///CRUBIT_ANNOTATE: cpp_type=ns :: Trivial
     pub struct Trivial {
-        pub trivial_field: ::core::ffi::c_int,
+        pub trivial_field: ::ffi_11::c_int,
     }
     impl !Send for Trivial {}
     impl !Sync for Trivial {}
@@ -32,21 +33,19 @@ pub mod ns {
     impl Trivial {
         #[inline(always)]
         pub fn Unqualified<'a>(&'a mut self) {
-            unsafe { crate::detail::__rust_thunk___ZN2ns7Trivial11UnqualifiedEv(self) }
+            unsafe { self::trivial::Unqualified(self) }
         }
         #[inline(always)]
         pub fn ConstQualified<'a>(&'a self) {
-            unsafe { crate::detail::__rust_thunk___ZNK2ns7Trivial14ConstQualifiedEv(self) }
+            unsafe { self::trivial::ConstQualified(self) }
         }
         #[inline(always)]
         pub fn LvalueRefQualified<'a>(&'a mut self) {
-            unsafe { crate::detail::__rust_thunk___ZNR2ns7Trivial18LvalueRefQualifiedEv(self) }
+            unsafe { self::trivial::LvalueRefQualified(self) }
         }
         #[inline(always)]
         pub fn ConstLvalueRefQualified<'a>(&'a self) {
-            unsafe {
-                crate::detail::__rust_thunk___ZNKR2ns7Trivial23ConstLvalueRefQualifiedEv(self)
-            }
+            unsafe { self::trivial::ConstLvalueRefQualified(self) }
         }
     }
 
@@ -61,63 +60,90 @@ pub mod ns {
         }
     }
 
-    // Error while generating bindings for constructor 'Trivial::Trivial':
-    // Can't generate bindings for Trivial::Trivial, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for Trivial::Trivial (the type of __param_0 (parameter #1): references are not supported)
+    // error: constructor `ns::Trivial::Trivial` could not be bound
+    //   Unsupported parameter type `const ns::Trivial& __param_0`:
+    //     references are not yet supported
 
-    // Error while generating bindings for constructor 'Trivial::Trivial':
-    // Can't generate bindings for Trivial::Trivial, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for Trivial::Trivial (the type of __param_0 (parameter #1): references are not supported)
+    // error: constructor `ns::Trivial::Trivial` could not be bound
+    //   Unsupported parameter type `ns::Trivial&& __param_0`:
+    //     references are not yet supported
 
-    // Error while generating bindings for function 'Trivial::operator=':
-    // Can't generate bindings for Trivial::operator=, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for Trivial::operator= (return type: references are not supported)
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for Trivial::operator= (the type of __param_0 (parameter #1): references are not supported)
+    // error: function `ns::Trivial::operator=` could not be bound
+    //   Unsupported parameter type `const ns::Trivial& __param_0`:
+    //     references are not yet supported
+    //   Unsupported return type `ns::Trivial&`:
+    //     references are not yet supported
 
-    // Error while generating bindings for function 'Trivial::operator=':
-    // Can't generate bindings for Trivial::operator=, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for Trivial::operator= (return type: references are not supported)
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for Trivial::operator= (the type of __param_0 (parameter #1): references are not supported)
+    // error: function `ns::Trivial::operator=` could not be bound
+    //   Unsupported parameter type `ns::Trivial&& __param_0`:
+    //     references are not yet supported
+    //   Unsupported return type `ns::Trivial&`:
+    //     references are not yet supported
 
-    // Error while generating bindings for function 'Trivial::RvalueRefQualified':
-    // Can't generate bindings for Trivial::RvalueRefQualified, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for Trivial::RvalueRefQualified (the type of __this (parameter #0): references are not supported)
+    // error: function `ns::Trivial::RvalueRefQualified` could not be bound
+    //   Unsupported parameter type `ns::Trivial&& __this`:
+    //     references are not yet supported
 
-    // Error while generating bindings for function 'Trivial::ConstRvalueRefQualified':
-    // Can't generate bindings for Trivial::ConstRvalueRefQualified, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for Trivial::ConstRvalueRefQualified (the type of __this (parameter #0): references are not supported)
+    // error: function `ns::Trivial::ConstRvalueRefQualified` could not be bound
+    //   Unsupported parameter type `const ns::Trivial&& __this`:
+    //     references are not yet supported
+
+    pub mod trivial {
+        #[inline(always)]
+        pub(crate) fn Unqualified<'a>(__this: &'a mut crate::ns::Trivial) {
+            unsafe { crate::detail::__rust_thunk___ZN2ns7Trivial11UnqualifiedEv(__this) }
+        }
+        #[inline(always)]
+        pub(crate) fn ConstQualified<'a>(__this: &'a crate::ns::Trivial) {
+            unsafe { crate::detail::__rust_thunk___ZNK2ns7Trivial14ConstQualifiedEv(__this) }
+        }
+        #[inline(always)]
+        pub(crate) fn LvalueRefQualified<'a>(__this: &'a mut crate::ns::Trivial) {
+            unsafe { crate::detail::__rust_thunk___ZNR2ns7Trivial18LvalueRefQualifiedEv(__this) }
+        }
+        #[inline(always)]
+        pub(crate) fn ConstLvalueRefQualified<'a>(__this: &'a crate::ns::Trivial) {
+            unsafe {
+                crate::detail::__rust_thunk___ZNKR2ns7Trivial23ConstLvalueRefQualifiedEv(__this)
+            }
+        }
+    }
 
     #[inline(always)]
     pub fn TakesByValue(mut trivial: crate::ns::Trivial) -> crate::ns::Trivial {
         unsafe {
-            let mut __return = ::core::mem::MaybeUninit::<crate::ns::Trivial>::uninit();
+            let mut __crubit_return = ::core::mem::MaybeUninit::<crate::ns::Trivial>::uninit();
             crate::detail::__rust_thunk___ZN2ns12TakesByValueENS_7TrivialE(
-                &raw mut __return as *mut ::core::ffi::c_void,
+                &raw mut __crubit_return as *mut ::core::ffi::c_void,
                 &mut trivial,
             );
-            __return.assume_init()
+            __crubit_return.assume_init()
         }
     }
 
-    // Error while generating bindings for function 'TakesByReference':
-    // Can't generate bindings for TakesByReference, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for TakesByReference (return type: references are not supported)
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for TakesByReference (the type of trivial (parameter #0): references are not supported)
+    // error: function `ns::TakesByReference` could not be bound
+    //   Unsupported parameter type `ns::Trivial& trivial`:
+    //     references are not yet supported
+    //   Unsupported return type `ns::Trivial&`:
+    //     references are not yet supported
 
-    // Error while generating bindings for function 'TakesByConstReference':
-    // Can't generate bindings for TakesByConstReference, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for TakesByConstReference (return type: references are not supported)
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for TakesByConstReference (the type of trivial (parameter #0): references are not supported)
+    // error: function `ns::TakesByConstReference` could not be bound
+    //   Unsupported parameter type `const ns::Trivial& trivial`:
+    //     references are not yet supported
+    //   Unsupported return type `const ns::Trivial&`:
+    //     references are not yet supported
 
-    // Error while generating bindings for function 'TakesByRvalueReference':
-    // Can't generate bindings for TakesByRvalueReference, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for TakesByRvalueReference (return type: references are not supported)
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for TakesByRvalueReference (the type of trivial (parameter #0): references are not supported)
+    // error: function `ns::TakesByRvalueReference` could not be bound
+    //   Unsupported parameter type `ns::Trivial&& trivial`:
+    //     references are not yet supported
+    //   Unsupported return type `ns::Trivial&&`:
+    //     references are not yet supported
 
-    // Error while generating bindings for function 'TakesByConstRvalueReference':
-    // Can't generate bindings for TakesByConstRvalueReference, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for TakesByConstRvalueReference (return type: references are not supported)
-    // //rs_bindings_from_cc/test/golden:trivial_type_cc needs [//features:experimental] for TakesByConstRvalueReference (the type of trivial (parameter #0): references are not supported)
+    // error: function `ns::TakesByConstRvalueReference` could not be bound
+    //   Unsupported parameter type `const ns::Trivial&& trivial`:
+    //     references are not yet supported
+    //   Unsupported return type `const ns::Trivial&&`:
+    //     references are not yet supported
 }
 
 // namespace ns

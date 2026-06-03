@@ -1,15 +1,15 @@
 // Part of the Crubit project, under the Apache License v2.0 with LLVM
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-#![feature(rustc_private)]
 #![feature(cfg_accessible)]
-#![deny(rustc::internal)]
+#![feature(rustc_private)]
 #![feature(stmt_expr_attributes)]
 #![feature(proc_macro_hygiene)]
 
 extern crate rustc_abi;
 extern crate rustc_ast;
 extern crate rustc_attr_parsing;
+extern crate rustc_data_structures;
 extern crate rustc_hir;
 extern crate rustc_infer;
 extern crate rustc_middle;
@@ -18,31 +18,39 @@ extern crate rustc_target;
 extern crate rustc_trait_selection;
 extern crate rustc_type_ir;
 
+pub mod avoid_colliding_types;
 pub mod format_type;
 pub mod generate_function;
 mod generate_function_thunk;
 mod generate_struct_and_union;
+mod generate_template_specialization;
+mod get_generic_args;
 
 use crate::format_type::{
-    crubit_abi_type_from_ty, ensure_ty_is_pointer_like, format_cc_ident, format_cc_ident_symbol,
-    format_param_types_for_cc, format_region_as_cc_lifetime, format_ret_ty_for_cc,
-    format_top_level_ns_for_crate, is_bridged_type, BridgedBuiltin, BridgedType,
-    BridgedTypeConversionInfo,
+    crubit_abi_type_from_ty, format_cc_ident, format_cc_ident_symbol, format_param_types_for_cc,
+    format_region_as_cc_lifetime, format_ret_ty_for_cc, format_top_level_ns_for_crate,
+    is_bridged_type, BridgedBuiltin, BridgedType, BridgedTypeConversionInfo,
 };
 use crate::generate_function::{generate_function, must_use_attr_of};
 use crate::generate_function_thunk::{generate_trait_thunks, TraitThunks};
 use crate::generate_struct_and_union::{
-    cpp_enum_cpp_underlying_type, from_trait_impls_by_argument, generate_adt, generate_adt_core,
-    scalar_value_to_string,
+    adt_needs_bindings, cpp_enum_cpp_underlying_type, from_trait_impls_by_argument, generate_adt,
+    generate_adt_core, into_trait_impls_by_destination, scalar_value_to_string,
 };
+use crate::generate_template_specialization::collect_trait_impls;
 use arc_anyhow::{Context, Error, Result};
 use code_gen_utils::{format_cc_includes, CcConstQualifier, CcInclude, NamespaceQualifier};
-use database::code_snippet::{ApiSnippets, CcPrerequisites, CcSnippet, ExternCDecl, RsSnippet};
-use database::{
-    AdtCoreBindings, BindingsGenerator, ExportedPath, FineGrainedFeature, FullyQualifiedName,
-    NoMoveOrAssign, PublicPaths, SugaredTy, TypeLocation, UnqualifiedName,
+use database::code_snippet::{
+    ApiSnippets, CcPrerequisites, CcSnippet, ExternCDecl, RsSnippet, TemplateSpecialization,
 };
-pub use database::{Database, IncludeGuard};
+use database::{
+    rename_clang_builtin_macros, AdtCoreBindings, ExportedPath, FineGrainedFeature,
+    FullyQualifiedName, NoMoveOrAssign, PublicPaths, StaticMethodMode, TypeLocation,
+    UnqualifiedName,
+};
+pub use database::{
+    BindingsGenerator, CopyCtorStyle, CppTypeSpecialization, IncludeGuard, MoveCtorStyle,
+};
 use error_report::{anyhow, bail, ErrorReporting, ReportFatalError};
 use itertools::Itertools;
 use proc_macro2::TokenStream;
@@ -54,21 +62,31 @@ use query_compiler::{
 use quote::{format_ident, quote};
 use rustc_abi::{AddressSpace, BackendRepr, Integer, Primitive, Scalar};
 use rustc_hir::def::{DefKind, Res};
-use rustc_hir::{Item, ItemKind, Node};
-use rustc_middle::dep_graph::DepContext;
 use rustc_middle::metadata::{ModChild, Reexport};
 use rustc_middle::mir::ConstValue;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, GenericParamDefKind, Ty, TyCtxt};
 use rustc_span::def_id::{CrateNum, DefId, LOCAL_CRATE};
 use rustc_span::symbol::{sym, Symbol};
 use std::cmp::Ordering;
 use std::collections::{BTreeSet, HashMap, HashSet};
-use std::iter::once;
+use std::fmt::{self, Display, Formatter};
+use std::path::PathBuf;
 use std::rc::Rc;
 
 /// Implementation of `BindingsGenerator::support_header`.
-fn support_header<'tcx>(db: &dyn BindingsGenerator<'tcx>, suffix: &'tcx str) -> CcInclude {
+fn support_header<'tcx>(db: &BindingsGenerator<'tcx>, suffix: &'tcx str) -> CcInclude {
     CcInclude::support_lib_header(db.crubit_support_path_format(), suffix.into())
+}
+
+pub(crate) fn should_receive_bindings<'tcx>(db: &BindingsGenerator<'tcx>, def_id: DefId) -> bool {
+    let def_span = db.tcx().def_span(def_id);
+    let filepath = db.tcx().sess.source_map().span_to_filename(def_span);
+    #[rustversion::all(before(1.94), before(2025-12-14))]
+    let file_name = filepath.prefer_local().to_string();
+    #[rustversion::any(since(1.94), since(2025-12-14))]
+    let file_name = filepath.prefer_local_unconditionally().to_string();
+    let file_name = file_name.strip_prefix("./").unwrap_or(file_name.as_str());
+    !db.ignore_symbols_from_files().contains(&PathBuf::from(file_name))
 }
 
 pub struct BindingsTokens {
@@ -76,7 +94,7 @@ pub struct BindingsTokens {
     pub cc_api_impl: TokenStream,
 }
 
-fn add_include_guard(db: &dyn BindingsGenerator<'_>, cc_api: TokenStream) -> Result<TokenStream> {
+fn add_include_guard(db: &BindingsGenerator<'_>, cc_api: TokenStream) -> Result<TokenStream> {
     let metadata_block = if db.kythe_annotations() {
         quote! {
             __HASH_TOKEN__ ifdef KYTHE_IS_RUNNING __NEWLINE__
@@ -113,13 +131,13 @@ fn add_include_guard(db: &dyn BindingsGenerator<'_>, cc_api: TokenStream) -> Res
 
 /// Wrap `repr_attrs` for use as a database function.
 fn repr_attrs_from_db(
-    db: &dyn BindingsGenerator<'_>,
+    db: &BindingsGenerator<'_>,
     def_id: DefId,
 ) -> Rc<[rustc_hir::attrs::ReprAttr]> {
     repr_attrs(db.tcx(), def_id)
 }
 
-fn source_crate_num(db: &dyn BindingsGenerator<'_>) -> CrateNum {
+fn source_crate_num(db: &BindingsGenerator<'_>) -> CrateNum {
     // This is a temporary workaround while migrating to the rmeta interface. Our old implementation
     // breaks with some rmeta files, notably proto files, due to crate renaming behavior. But our
     // new implementation relies on assuming our source is the placeholder file provided by
@@ -172,13 +190,67 @@ fn source_crate_num(db: &dyn BindingsGenerator<'_>) -> CrateNum {
     }
 }
 
+fn specializations<'tcx>(db: &crate::BindingsGenerator<'tcx>) -> Rc<[CppTypeSpecialization<'tcx>]> {
+    let tcx = db.tcx();
+    let mut specializations = Vec::new();
+
+    let defs_in_crate = db.public_paths_by_def_id(db.source_crate_num());
+    for (adt_or_alias_def_id, paths) in defs_in_crate {
+        specializations.extend(
+            std::iter::once(adt_or_alias_def_id)
+                .chain(
+                    paths
+                        .into_extern_aliases()
+                        .into_iter()
+                        .filter_map(|path| path.type_alias_def_id),
+                )
+                .filter_map(|def_id| {
+                    let rustc_hir::def::DefKind::TyAlias = tcx.def_kind(def_id) else {
+                        return None;
+                    };
+                    let attrs = crubit_attr::get_attrs(tcx, def_id)
+                        .map_err(|err| {
+                            db.fatal_errors().report(&format!(
+                                "Failed to parse Crubit attributes for `{}`: {}",
+                                tcx.def_path_str(def_id),
+                                err
+                            ));
+                        })
+                        .ok()?;
+                    if !attrs.specializes_cpp_type {
+                        return None;
+                    }
+                    let Some(cpp_type) = attrs.cpp_type else {
+                        let alias_name = tcx.def_path_str(def_id);
+                        db.fatal_errors().report(&format!(
+                            "Type alias `{alias_name}` marked with `specializes_cpp_type` must have \
+                                `cpp_type` attribute"
+                        ));
+                        return None;
+                    };
+                    let ty = crate::normalize_ty(
+                        tcx,
+                        tcx.param_env(def_id),
+                        tcx.type_of(def_id).instantiate_identity(),
+                    );
+                    let ty = tcx.erase_and_anonymize_regions(ty);
+                    Some(CppTypeSpecialization {
+                        ty,
+                        cpp_type: Rc::from(cpp_type.as_str()),
+                        include_path: attrs.include_path.map(|s| Rc::from(s.as_str())),
+                    })
+                }),
+        );
+    }
+    specializations.into()
+}
+
 pub fn new_database<'db>(
     tcx: TyCtxt<'db>,
     source_crate_name: Option<Rc<str>>,
     crubit_support_path_format: dyn_format::Format<1>,
     crubit_debug_path_format: Option<dyn_format::Format<2>>,
     default_features: flagset::FlagSet<crubit_feature::CrubitFeature>,
-    enable_hir_types: bool,
     kythe_annotations: bool,
     enable_rmeta_interface: bool,
     crate_name_to_include_paths: Rc<HashMap<Rc<str>, Vec<CcInclude>>>,
@@ -187,16 +259,16 @@ pub fn new_database<'db>(
     crate_renames: Rc<HashMap<Rc<str>, Rc<str>>>,
     errors: Rc<dyn ErrorReporting>,
     fatal_errors: Rc<dyn ReportFatalError>,
-    no_thunk_name_mangling: bool,
+    is_golden_test: bool,
     h_out_include_guard: IncludeGuard,
-) -> Database<'db> {
-    Database::new(
+    ignore_symbols_from_files: Rc<HashSet<PathBuf>>,
+) -> BindingsGenerator<'db> {
+    BindingsGenerator::new(
         tcx,
         source_crate_name,
         crubit_support_path_format,
         crubit_debug_path_format,
         default_features,
-        enable_hir_types,
         kythe_annotations,
         enable_rmeta_interface,
         crate_name_to_include_paths,
@@ -205,52 +277,71 @@ pub fn new_database<'db>(
         crate_renames,
         errors,
         fatal_errors,
-        no_thunk_name_mangling,
+        is_golden_test,
         h_out_include_guard,
+        ignore_symbols_from_files,
+        specializations,
         source_crate_num,
         support_header,
         repr_attrs_from_db,
+        supported_traits,
         symbol_unqualified_name,
         symbol_canonical_name,
         public_paths_by_def_id,
+        all_public_paths_by_def_id,
+        def_id_by_symbol,
         format_cc_ident_symbol,
         format_top_level_ns_for_crate,
         format_type::format_ty_for_cc,
         format_type::format_ty_for_rs,
+        has_default_ctor,
+        has_copy_ctor_and_assignment_operator,
+        has_move_ctor_and_assignment_operator,
         generate_default_ctor,
         generate_copy_ctor_and_assignment_operator,
         generate_move_ctor_and_assignment_operator,
         generate_item,
         generate_function,
+        adt_needs_bindings,
         generate_adt_core,
         crubit_abi_type_from_ty,
         from_trait_impls_by_argument,
+        into_trait_impls_by_destination,
+        get_generic_args::get_generic_args,
+        renamed_crate_original_name,
+        generate_template_specialization::parse_rs_std_template_specialization,
     )
 }
 
-pub fn generate_bindings(db: &Database) -> Result<BindingsTokens> {
+pub fn generate_bindings(db: &BindingsGenerator) -> Result<BindingsTokens> {
     let tcx = db.tcx();
 
     let top_comment = {
         let source_crate_num = db.source_crate_num();
         let crate_name = tcx.crate_name(source_crate_num);
-        let crubit_features = {
-            let mut crubit_features: Vec<&str> = crate_features(db, source_crate_num)
+        let mut txt = format!(
+            "Automatically @generated C++ bindings for the following Rust crate:\n\
+             {crate_name}"
+        );
+        if !db.is_golden_test() {
+            use std::fmt::Write as _;
+
+            txt.push_str("\nFeatures: ");
+            let mut crubit_features: Vec<&str> = db
+                .crate_features(source_crate_num)
                 .into_iter()
                 .map(|feature| feature.short_name())
                 .collect();
             crubit_features.sort();
-            if crubit_features.is_empty() {
-                "<none>".to_string()
+            if let [first, rest @ ..] = crubit_features.as_slice() {
+                txt.push_str(first);
+                for feature in rest {
+                    write!(&mut txt, ", {feature}").unwrap();
+                }
             } else {
-                crubit_features.join(", ")
+                txt.push_str("<none>");
             }
-        };
-        let txt = format!(
-            "Automatically @generated C++ bindings for the following Rust crate:\n\
-             {crate_name}\n\
-             Features: {crubit_features}"
-        );
+        }
         quote! { __COMMENT__ #txt __NEWLINE__ }
     };
 
@@ -259,6 +350,17 @@ pub fn generate_bindings(db: &Database) -> Result<BindingsTokens> {
         let src = quote! { __COMMENT__ #txt };
         BindingsTokens { cc_api: src.clone(), cc_api_impl: src }
     });
+    let cc_api = quote! {
+        __HASH_TOKEN__ pragma clang diagnostic push __NEWLINE__
+        __HASH_TOKEN__ pragma clang diagnostic ignored "-Wreturn-type-c-linkage" __NEWLINE__
+        __HASH_TOKEN__ pragma clang diagnostic ignored "-Wunused-private-field" __NEWLINE__
+        __HASH_TOKEN__ pragma clang diagnostic ignored "-Wdeprecated-declarations" __NEWLINE__
+        __HASH_TOKEN__ pragma clang diagnostic ignored "-Wignored-attributes" __NEWLINE__
+
+        #cc_api
+
+        __HASH_TOKEN__ pragma clang diagnostic pop __NEWLINE__
+    };
     let cc_api = add_include_guard(db, cc_api)?;
     let cc_api = quote! {
         #top_comment
@@ -267,12 +369,30 @@ pub fn generate_bindings(db: &Database) -> Result<BindingsTokens> {
     };
 
     let mut extern_crate_decls: Vec<TokenStream> = vec![];
-    for (name, renamed) in db.crate_renames().iter() {
+    let (mut core_renamed, mut alloc_renamed) = (false, false);
+    for (name, renamed) in db.crate_renames().iter().sorted() {
+        if name.as_ref() == "core" {
+            core_renamed = true;
+        }
+        if name.as_ref() == "alloc" {
+            alloc_renamed = true;
+        }
         let name = format_ident!("{}", name.to_string());
         let renamed = format_ident!("{}", renamed.to_string());
 
         extern_crate_decls.push(quote! {
             extern crate #name as #renamed;
+        });
+    }
+
+    if !core_renamed {
+        extern_crate_decls.push(quote! {
+            extern crate core;
+        });
+    }
+    if !alloc_renamed {
+        extern_crate_decls.push(quote! {
+            extern crate alloc;
         });
     }
 
@@ -299,21 +419,8 @@ pub fn generate_bindings(db: &Database) -> Result<BindingsTokens> {
     Ok(BindingsTokens { cc_api, cc_api_impl })
 }
 
-fn crate_features(
-    db: &dyn BindingsGenerator,
-    krate: CrateNum,
-) -> flagset::FlagSet<crubit_feature::CrubitFeature> {
-    let crate_features = db.crate_name_to_features();
-    let features = if krate == LOCAL_CRATE {
-        crate_features.get("self")
-    } else {
-        crate_features.get(db.tcx().crate_name(krate).as_str())
-    };
-    features.copied().unwrap_or_else(|| db.default_features())
-}
-
 fn check_feature_enabled_on_self_and_all_deps(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     feature: FineGrainedFeature,
 ) -> bool {
     for (_, crate_features) in db.crate_name_to_features().iter() {
@@ -325,11 +432,14 @@ fn check_feature_enabled_on_self_and_all_deps(
 }
 
 fn format_with_cc_body(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     ns: &NamespaceQualifier,
     mut tokens: TokenStream,
     attributes: Vec<TokenStream>,
 ) -> Result<TokenStream> {
+    if tokens.is_empty() {
+        return Ok(quote! {});
+    }
     let mut namespaces = ns.parts().map(|s| format_cc_ident(db, s)).collect::<Result<Vec<_>>>()?;
 
     // Nested namespace syntax does not accept attributes (see b/445613694), so we have to split out
@@ -361,7 +471,7 @@ fn format_with_cc_body(
 
 /// Implementation of `BindingsGenerator::public_paths_by_def_id`.
 fn public_paths_by_def_id(
-    db: &dyn BindingsGenerator<'_>,
+    db: &BindingsGenerator<'_>,
     crate_num: CrateNum,
 ) -> HashMap<DefId, PublicPaths> {
     /// This is retooled logic from rustc's `visible_parent_map` function. Except where that only
@@ -372,6 +482,7 @@ fn public_paths_by_def_id(
     use std::collections::vec_deque::VecDeque;
 
     let tcx = db.tcx();
+    let crate_name = tcx.crate_name(crate_num);
     let mut visible_parent_map = HashMap::default();
 
     let bfs_queue = &mut VecDeque::new();
@@ -423,7 +534,7 @@ fn public_paths_by_def_id(
             // SIMD primitives often have name collisions with SIMD primitives in C++. The C++
             // primitives are macros, so namespacing does not prevent collision. We expect people
             // will not need bindings to these primitives, so we exclude them to prevent the
-            // collission.
+            // collision.
             if ["simd_arch", "simd_x86"].contains(&stability.feature.as_str()) {
                 return;
             }
@@ -432,10 +543,51 @@ fn public_paths_by_def_id(
         // Map type aliases to their underlying type.
         let mut type_alias_def_id = None;
         if def_kind == DefKind::TyAlias {
-            let underlying_type = tcx.type_of(def_id).instantiate_identity();
-            if let crate::ty::TyKind::Adt(def, _) = underlying_type.kind() {
-                type_alias_def_id = Some(def_id);
-                def_id = def.did();
+            let underlying_type = normalize_ty(
+                tcx,
+                tcx.param_env(def_id),
+                tcx.type_of(def_id).instantiate_identity(),
+            );
+            if let crate::ty::TyKind::Adt(def, args) = underlying_type.kind() {
+                let alias_generics = tcx.generics_of(def_id);
+                // Check if generics match.
+                let generics_match = args.len() == alias_generics.own_params.len()
+                    && args.iter().zip(alias_generics.own_params.iter()).all(|(arg, param)| {
+                        matches!(
+                            (arg.kind(), &param.kind),
+                            (ty::GenericArgKind::Type(_), ty::GenericParamDefKind::Type { .. })
+                                | (
+                                    ty::GenericArgKind::Const(_),
+                                    ty::GenericParamDefKind::Const { .. }
+                                )
+                                | (
+                                    ty::GenericArgKind::Lifetime(_),
+                                    ty::GenericParamDefKind::Lifetime
+                                )
+                        )
+                    });
+                // If our generics do not match for our type alias, do not consider them a public
+                // path for their underlying type.
+                if generics_match
+                    || crubit_attr::get_attrs(tcx, def_id).unwrap().specializes_cpp_type
+                {
+                    type_alias_def_id = Some(def_id);
+                    def_id = def.did();
+                }
+            }
+        }
+
+        // Don't include paths for definitions inside of `std::os`.
+        // These collide with definitions in the C++ standard library that provide OS functionality.
+        if crate_name.as_str() == "std" {
+            let path = tcx
+                .def_path(def_id)
+                .data
+                .iter()
+                .map(|seg| seg.as_sym(/*verbose=*/ false))
+                .collect::<Vec<_>>();
+            if path.first().is_some_and(|p| p.as_str() == "os") {
+                return;
             }
         }
 
@@ -444,6 +596,8 @@ fn public_paths_by_def_id(
             name: child.ident.name,
             type_alias_def_id,
             is_doc_hidden,
+            is_reexport: !child.reexport_chain.is_empty(),
+            krate: crate_num,
         };
         use std::collections::hash_map::Entry;
         match visible_parent_map.entry(def_id) {
@@ -480,6 +634,62 @@ fn public_paths_by_def_id(
     visible_parent_map
 }
 
+fn all_public_paths_by_def_id(db: &BindingsGenerator<'_>) -> HashMap<DefId, PublicPaths> {
+    let tcx = db.tcx();
+    let mut out = HashMap::new();
+
+    // TODO(b/458768435): LOCAL_CRATE is not included in list of `used_crates`, so while we still have
+    // `--enable-rmeta-interface` (and some users that are not on the rmeta interface) we need to
+    // manually add it to the list of considered crates.
+    for krate in
+        std::iter::once(LOCAL_CRATE).chain(tcx.used_crates(()).iter().cloned()).filter(|&krate|
+        // Check if our krate can be imported (and so should provide public paths for DefIds).
+        krate == db.source_crate_num()
+            || db.crate_name_to_include_paths().contains_key(&Rc::from(tcx.crate_name(krate).as_str())))
+    {
+        let public_paths = db.public_paths_by_def_id(krate);
+        for (def_id, mut paths) in public_paths {
+            use std::collections::hash_map::Entry;
+            match out.entry(def_id) {
+                Entry::Vacant(vacant) => {
+                    vacant.insert(paths);
+                }
+                Entry::Occupied(mut occupied) => {
+                    let existing_paths = occupied.get_mut();
+                    if def_id.krate == existing_paths.canonical().krate {
+                        existing_paths.insert_aliases(paths);
+                    } else if def_id.krate == paths.canonical().krate {
+                        std::mem::swap(existing_paths, &mut paths);
+                        existing_paths.insert_aliases(paths);
+                    } else {
+                        // Merge paths together picking canonical by ordering.
+                        existing_paths.merge(paths);
+                    }
+                }
+            }
+        }
+    }
+    out
+}
+
+/// Implementation of `BindingsGenerator::def_id_by_symbol`.
+fn def_id_by_symbol(
+    db: &BindingsGenerator<'_>,
+    crate_num: CrateNum,
+    name: Symbol,
+) -> Option<DefId> {
+    let public_paths = db.public_paths_by_def_id(crate_num);
+    public_paths.iter().find_map(
+        |(def_id, paths)| {
+            if paths.canonical().name == name {
+                Some(*def_id)
+            } else {
+                None
+            }
+        },
+    )
+}
+
 fn module_children(tcx: TyCtxt<'_>, parent: DefId) -> &[ModChild] {
     match parent.as_local() {
         None => tcx.module_children(parent),
@@ -488,7 +698,7 @@ fn module_children(tcx: TyCtxt<'_>, parent: DefId) -> &[ModChild] {
     }
 }
 
-fn resolve_if_use(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Option<DefId> {
+fn resolve_if_use(db: &BindingsGenerator<'_>, def_id: DefId) -> Option<DefId> {
     let tcx = db.tcx();
     let DefKind::Use = tcx.def_kind(def_id) else {
         return None;
@@ -504,13 +714,10 @@ fn resolve_if_use(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Option<DefId
     None
 }
 
-fn symbol_unqualified_name(
-    db: &dyn BindingsGenerator<'_>,
-    def_id: DefId,
-) -> Option<UnqualifiedName> {
+fn symbol_unqualified_name(db: &BindingsGenerator<'_>, def_id: DefId) -> Option<UnqualifiedName> {
     let tcx = db.tcx();
     let item_name = db
-        .public_paths_by_def_id(def_id.krate)
+        .all_public_paths_by_def_id()
         .get(&def_id)
         .map(|path| path.canonical().name)
         .or_else(|| tcx.opt_item_name(def_id))?;
@@ -531,11 +738,19 @@ fn symbol_unqualified_name(
     Some(UnqualifiedName { cpp_name, rs_name, cpp_type })
 }
 
+fn renamed_crate_original_name(db: &BindingsGenerator<'_>, krate_id: CrateNum) -> Option<Rc<str>> {
+    let tcx = db.tcx();
+    let crate_name = tcx.crate_name(krate_id);
+    for (name, renamed) in db.crate_renames().iter() {
+        if renamed.as_ref() == crate_name.as_str() {
+            return Some(name.clone());
+        }
+    }
+    return None;
+}
+
 /// Implementation of `BindingsGenerator::symbol_canonical_name`.
-fn symbol_canonical_name(
-    db: &dyn BindingsGenerator<'_>,
-    def_id: DefId,
-) -> Option<FullyQualifiedName> {
+fn symbol_canonical_name(db: &BindingsGenerator<'_>, def_id: DefId) -> Option<FullyQualifiedName> {
     let tcx = db.tcx();
 
     // TODO: b/433286909 - We shouldn't pass DefKind::Use to this method and instead should keep what our use
@@ -543,13 +758,8 @@ fn symbol_canonical_name(
     // canonical name.
     let def_id = resolve_if_use(db, def_id).unwrap_or(def_id);
 
-    let (full_path_strs, type_alias_def_id) = {
-        // If our definition is at a path that can't be spelled, we have to pick a path from our
-        // aliases.
-        let paths = db.public_paths_by_def_id(def_id.krate);
-
-        // If our definition has no public spellings, we can't give it a canonical name.
-        let paths = paths.get(&def_id)?;
+    let (full_path_strs, type_alias_def_id, krate_num) = {
+        let paths = db.all_public_paths_by_def_id().get(&def_id).cloned()?;
 
         // Select a canonical path for this symbol from available paths.
         // Our paths are kept in sorted order, so the canonical path will be the first one.
@@ -560,17 +770,18 @@ fn symbol_canonical_name(
         (
             canonical_path.path.iter().map(|s| Rc::<str>::from(s.as_str())).collect::<Vec<_>>(),
             canonical_path.type_alias_def_id,
+            canonical_path.krate,
         )
     };
 
     let unqualified = type_alias_def_id
-        .and_then(|def_id| {
+        .and_then(|alias_def_id| {
             use crubit_attr::CrubitAttrs;
-            let attrs = crubit_attr::get_attrs(tcx, def_id).unwrap();
-            if attrs == CrubitAttrs::default() {
+            let attrs = crubit_attr::get_attrs(tcx, alias_def_id).unwrap();
+            if attrs == CrubitAttrs::default() && def_id.krate == alias_def_id.krate {
                 None
             } else {
-                db.symbol_unqualified_name(def_id)
+                db.symbol_unqualified_name(alias_def_id)
             }
         })
         .or_else(|| db.symbol_unqualified_name(def_id))?;
@@ -580,12 +791,12 @@ fn symbol_canonical_name(
     // to include the `_rust_proto` suffix, but the rmeta file contains the unsuffixed crate name.
     // If we're naming a symbol from our source crate, use the source crate name as the krate name
     // to resolve any renaming issues.
-    let krate = (def_id.krate == db.source_crate_num())
+    let krate = (krate_num == db.source_crate_num())
         .then_some(())
         .and_then(|_| db.source_crate_name())
         .map(|source_crate_name| Symbol::intern(source_crate_name.as_ref()))
-        .unwrap_or_else(|| tcx.crate_name(def_id.krate));
-    //let krate = tcx.crate_name(def_id.krate);
+        .unwrap_or_else(|| tcx.crate_name(krate_num));
+
     if krate.as_str() == "polars_plan"
         && matches!(unqualified.rs_name.as_str(), "date_range" | "time_range")
     {
@@ -601,16 +812,29 @@ fn symbol_canonical_name(
         }
     }
 
-    let rs_mod_path = NamespaceQualifier::new(full_path_strs.clone());
-    let cpp_ns_path = NamespaceQualifier::new(full_path_strs);
-    let cpp_top_level_ns = format_top_level_ns_for_crate(db, def_id.krate);
+    let features = db.crate_features(krate_num);
+    let use_leading_colons =
+        features.contains(crubit_feature::CrubitFeature::LeadingColonsForCppType);
 
-    Some(FullyQualifiedName { krate, cpp_top_level_ns, cpp_ns_path, rs_mod_path, unqualified })
+    let rs_mod_path = NamespaceQualifier::new(full_path_strs.clone(), use_leading_colons);
+    let cpp_ns_path = NamespaceQualifier::new(
+        full_path_strs.into_iter().map(rename_clang_builtin_macros),
+        use_leading_colons,
+    );
+    let cpp_top_level_ns = format_top_level_ns_for_crate(db, krate_num);
+    Some(FullyQualifiedName {
+        krate,
+        krate_num,
+        cpp_top_level_ns,
+        cpp_ns_path,
+        rs_mod_path,
+        unqualified,
+    })
 }
 
 /// Checks whether a definition matches a specific qualified name by matching it's definition path
 /// against `name`. Name must include the crate in it's path.
-fn matches_qualified_name(db: &dyn BindingsGenerator<'_>, item_did: DefId, name: &[&str]) -> bool {
+fn matches_qualified_name(db: &BindingsGenerator<'_>, item_did: DefId, name: &[&str]) -> bool {
     let tcx = db.tcx();
     let path = tcx.def_path(item_did);
     if path.data.len() + 1 != name.len() {
@@ -631,13 +855,7 @@ fn check_slice_layout<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) {
     // Check the assumption from `rust_builtin_type_abi_assumptions.md` that Rust's
     // slice has the same ABI as `rs_std::SliceRef`.
     let layout = tcx
-        .layout_of(
-            ty::TypingEnv {
-                typing_mode: ty::TypingMode::PostAnalysis,
-                param_env: ty::ParamEnv::empty(),
-            }
-            .as_query_input(ty),
-        )
+        .layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty))
         .expect("`layout_of` is expected to succeed for `{ty}` type")
         .layout;
     assert_eq!(8, layout.align().abi.bytes());
@@ -697,8 +915,14 @@ fn generate_deprecated_tag(tcx: TyCtxt, def_id: DefId) -> Option<TokenStream> {
         return None;
     }
 
-    if let Some((deprecation, _span)) = find_attr!(tcx.get_all_attrs(def_id), AttributeKind::Deprecation{deprecation, span} => (*deprecation, *span))
-    {
+    #[rustversion::all(before(1.95), before(2026-02-25))]
+    #[allow(deprecated)]
+    let deprecation_attr = find_attr!(tcx.get_all_attrs(def_id), AttributeKind::Deprecation{deprecation, span} => (*deprecation, *span));
+    #[rustversion::any(since(1.95), since(2026-02-25))]
+    #[allow(deprecated)]
+    let deprecation_attr = find_attr!(tcx.get_all_attrs(def_id), AttributeKind::Deprecated{deprecation, span} => (*deprecation, *span));
+
+    if let Some((deprecation, _span)) = deprecation_attr {
         let cc_deprecated_tag = match deprecation.note {
             None => quote! {[[deprecated]]},
             Some(note_symbol) => {
@@ -711,16 +935,23 @@ fn generate_deprecated_tag(tcx: TyCtxt, def_id: DefId) -> Option<TokenStream> {
     None
 }
 
-fn generate_using(
-    db: &dyn BindingsGenerator<'_>,
+fn generate_using<'tcx>(
+    db: &BindingsGenerator<'tcx>,
     using_name: &Symbol,
     def_id: DefId,
-) -> Result<CcSnippet> {
+) -> Result<CcSnippet<'tcx>> {
     let tcx = db.tcx();
+
+    // TODO(b/503008058): Clean this up.
+    // Prevent binding to items generated by `::ctor::recursively_pinned(PinnedDrop)`
+    // - `__CrubitProjectPin...`
+    // - `__CrubitProjectRef...`
+    if using_name.as_str().starts_with("__CrubitProject") {
+        return Ok(CcSnippet { prereqs: CcPrerequisites::default(), tokens: quote! {} });
+    }
     match tcx.def_kind(def_id) {
         DefKind::Fn => {
-            // TODO(b/350772554): Support exporting private functions.
-            let mut prereqs = match db.generate_function(def_id) {
+            let mut prereqs = match db.generate_function(def_id, None, StaticMethodMode::Infer) {
                 Ok(snippet) => snippet.main_api.prereqs,
                 Err(err) => {
                     bail!("Unable to `use` function whose bindings failed: {err:?}");
@@ -733,32 +964,77 @@ fn generate_using(
             let main_api_fn_name =
                 format_cc_ident(db, fully_qualified_fn_name.unqualified.cpp_name.as_str())
                     .context("Error formatting function name")?;
-            let using_name =
+            let using_name_ident =
                 format_cc_ident(db, using_name.as_str()).context("Error formatting using name")?;
 
-            prereqs.defs.insert(def_id);
-            let tokens = if format!("{}", using_name) == format!("{}", main_api_fn_name) {
+            prereqs.depend_on_def(db, def_id)?;
+            let tokens = if using_name_ident == main_api_fn_name {
                 quote! { using #formatted_fully_qualified_fn_name; }
             } else {
-                // TODO(b/350772554): Support function alias.
-                bail!("Unsupported function alias");
+                quote! { constexpr auto #using_name_ident = #formatted_fully_qualified_fn_name; }
             };
             Ok(CcSnippet { prereqs, tokens })
         }
         DefKind::Struct | DefKind::Enum => {
             // This points directly to a type definition, not an alias or compound data
             // type, so we can drop the hir type.
-            let use_type = SugaredTy::missing_hir(tcx.type_of(def_id).instantiate_identity());
+            let use_type = normalize_ty(
+                tcx,
+                tcx.param_env(def_id),
+                tcx.type_of(def_id).instantiate_identity(),
+            );
             create_type_alias(db, def_id, using_name.as_str(), use_type)
         }
         DefKind::TyAlias => generate_type_alias(db, def_id, using_name.as_str()),
-        _ => {
-            bail!("Unsupported use statement that refers to this type of the entity: {:#?}", def_id)
+        DefKind::Trait => {
+            if !db.supported_traits().contains(&def_id) {
+                bail!(
+                    "Trait {} is not yet supported, so we're not generating a using for it.",
+                    tcx.def_path_str(def_id)
+                )
+            }
+            let generics = tcx.generics_of(def_id);
+            // Traits do not support const generics.
+            let generic_ty_args_count = generics
+                .own_params
+                .iter()
+                .filter(|param| matches!(param.kind, GenericParamDefKind::Type { .. }))
+                .count();
+            let has_generic_ty_args = if generics.has_self {
+                generic_ty_args_count > 1
+            } else {
+                generic_ty_args_count > 0
+            };
+            if has_generic_ty_args {
+                bail!("Aliases to generic trait `{}` are not supported.", tcx.def_path_str(def_id))
+            }
+            let canonical_name = db.symbol_canonical_name(def_id).expect(
+                "generate_trait was unexpectedly called on an item without a canonical name",
+            );
+
+            let trait_name = canonical_name.format_for_cc(db)?;
+            let using_name_ident =
+                format_cc_ident(db, using_name.as_str()).context("Error formatting using name")?;
+            let mut prereqs = CcPrerequisites::default();
+            prereqs.depend_on_def(db, def_id)?;
+            let tokens = if using_name_ident == canonical_name.unqualified.cpp_name.as_str() {
+                quote! { using #trait_name; }
+            } else {
+                quote! { using #using_name_ident = #trait_name; }
+            };
+            Ok(CcSnippet { prereqs, tokens })
+        }
+        kind => {
+            bail!(
+                "Unsupported use statement that refers to this type of the entity: {} of kind {:?}",
+                tcx.def_path_str(def_id),
+                kind
+            )
         }
     }
 }
 
-fn generate_const(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Result<ApiSnippets> {
+fn generate_const<'tcx>(db: &BindingsGenerator<'tcx>, def_id: DefId) -> Result<ApiSnippets<'tcx>> {
     let tcx = db.tcx();
     // TODO: b/457843120 - Remove this workaround once we can properly support float constants.
     let unsupported_consts = [
@@ -775,21 +1051,8 @@ fn generate_const(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Result<ApiSn
             tcx.item_name(def_id).as_str()
         )
     }
-    let unsupported_node_item_msg = "Called `generate_const` with a `rustc_hir::Node` that is not a `Node::Item` or `Node::ImplItem`";
-    let ty = tcx.type_of(def_id).instantiate_identity();
-    let rust_type = if db.enable_hir_types() {
-        let hir_ty = def_id.as_local().map(|local_def_id| {
-            let hir_node = tcx.hir_node_by_def_id(local_def_id);
-            match hir_node {
-                Node::Item(item) => item.expect_const().2,
-                Node::ImplItem(item) => item.expect_const().0,
-                _ => panic!("{}", unsupported_node_item_msg),
-            }
-        });
-        SugaredTy::new(ty, hir_ty)
-    } else {
-        SugaredTy::missing_hir(ty)
-    };
+    let ty = normalize_ty(tcx, tcx.param_env(def_id), tcx.type_of(def_id).instantiate_identity());
+    let rust_type = ty;
     let cc_type_snippet = db.format_ty_for_cc(rust_type, TypeLocation::Const)?;
 
     let cc_type = cc_type_snippet.tokens;
@@ -836,45 +1099,139 @@ fn generate_const(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Result<ApiSn
     })
 }
 
-fn generate_type_alias(
-    db: &dyn BindingsGenerator<'_>,
+// Implementation of `BindingsGenerator::supported_traits`.
+fn supported_traits(db: &BindingsGenerator<'_>) -> Rc<[DefId]> {
+    let tcx = db.tcx();
+    let iterator_trait_id = tcx.get_diagnostic_item(sym::Iterator);
+    let future_trait_id = tcx.lang_items().future_trait();
+
+    let traits = tcx
+        .visible_traits()
+        .filter(|trait_id| {
+            // Does the trait get bindings?
+            db.symbol_canonical_name(*trait_id).is_some()
+        })
+        .filter(|trait_id| {
+            // Traits do not support const generics.
+            let has_const_generics = tcx
+                .generics_of(*trait_id)
+                .own_params
+                .iter()
+                .any(|param| matches!(param.kind, GenericParamDefKind::Const { .. }));
+            !has_const_generics
+        })
+        .filter(|trait_id| {
+            // TODO(b/483382648): Generate bindings for other `std`, `core`, and `alloc` traits.
+            // At least for _most_ other traits - we probably still want to exclude traits that
+            // get idiomatic C++ bindings elsewhere, such as `Clone`, `Default`, `Drop`, `From`,
+            // `Index`, `Into`, and `PartialEq`.
+            let not_in_stdlib = {
+                let crate_name = tcx.crate_name(trait_id.krate);
+                crate_name.as_str() != "std"
+                    && crate_name.as_str() != "core"
+                    && crate_name.as_str() != "alloc"
+            };
+            let is_iterator_trait = iterator_trait_id == Some(*trait_id);
+            let is_future_trait = future_trait_id == Some(*trait_id);
+            not_in_stdlib || is_iterator_trait || is_future_trait
+        })
+        .collect::<Vec<DefId>>()
+        .into_boxed_slice();
+    Rc::from(traits)
+}
+
+fn generate_trait<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    trait_id: DefId,
+) -> arc_anyhow::Result<ApiSnippets<'tcx>> {
+    if !db.supported_traits().contains(&trait_id) {
+        bail!("Trait is not yet supported")
+    }
+
+    let canonical_name = db
+        .symbol_canonical_name(trait_id)
+        .expect("generate_trait was unexpectedly called on an item without a canonical name");
+
+    let doc_comment = generate_doc_comment(db, trait_id);
+    let trait_name = format_cc_ident(db, canonical_name.unqualified.cpp_name.as_str())?;
+    let rs_type = canonical_name.format_for_rs().to_string();
+    let attributes = vec![quote! {CRUBIT_INTERNAL_RUST_TYPE(#rs_type)}];
+
+    let tcx = db.tcx();
+    let generics = tcx.generics_of(trait_id);
+    let own_params: Vec<_> = generics
+        .own_params
+        .iter()
+        .filter(|param| matches!(param.kind, GenericParamDefKind::Type { .. }))
+        .collect();
+    let trait_params = if generics.has_self { &own_params[1..] } else { &own_params[..] };
+
+    let (template_prefix, trait_name_with_args) = if trait_params.is_empty() {
+        (quote! {}, quote! { #trait_name })
+    } else {
+        let template_params = trait_params.iter().enumerate().map(|(i, _)| {
+            let param_name = format_ident!("T{}", i);
+            quote! { typename #param_name }
+        });
+        let template_args = trait_params.iter().enumerate().map(|(i, _)| format_ident!("T{}", i));
+        (quote! { template <#(#template_params),*> }, quote! { #trait_name<#(#template_args),*> })
+    };
+
+    let mut main_api = CcSnippet::with_include(
+        quote! {
+            __NEWLINE__ #doc_comment
+            #template_prefix
+            struct #(#attributes)* #trait_name {
+                template <typename T>
+                using impl = rs_std::impl<T, #trait_name_with_args>;
+            };
+            __NEWLINE__
+        },
+        db.support_header("rs_std/traits.h"),
+    );
+    main_api.prereqs.includes.insert(db.support_header("annotations_internal.h"));
+    Ok(ApiSnippets { main_api, ..Default::default() })
+}
+
+fn generate_type_alias<'tcx>(
+    db: &BindingsGenerator<'tcx>,
     def_id: DefId,
     using_name: &str,
-) -> Result<CcSnippet> {
-    let tcx = db.tcx();
-    let mir_ty = tcx.type_of(def_id).instantiate_identity();
-    let alias_type = if db.enable_hir_types() {
-        let hir_ty = def_id.as_local().map(|local_def_id| {
-            let Item { kind: ItemKind::TyAlias(_, _, hir_ty, ..), .. } =
-                tcx.hir_expect_item(local_def_id)
-            else {
-                panic!("called generate_type_alias on a non-type-alias");
-            };
-            *hir_ty
-        });
-        SugaredTy::new(mir_ty, hir_ty)
-    } else {
-        SugaredTy::missing_hir(mir_ty)
-    };
+) -> Result<CcSnippet<'tcx>> {
+    let alias_type = normalize_ty(
+        db.tcx(),
+        db.tcx().param_env(def_id),
+        db.tcx().type_of(def_id).instantiate_identity(),
+    );
     create_type_alias(db, def_id, using_name, alias_type)
 }
 
 fn create_type_alias<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     def_id: DefId,
     alias_name: &str,
-    alias_type: SugaredTy<'tcx>,
-) -> Result<CcSnippet> {
+    alias_type: Ty<'tcx>,
+) -> Result<CcSnippet<'tcx>> {
+    let fully_qualified_name = db
+        .symbol_canonical_name(def_id)
+        .ok_or_else(|| anyhow!("Failed to get canonical name for {:?}", def_id))?;
+    let rs_type = format!("{}", fully_qualified_name.format_for_rs());
+    create_type_alias_with_rs_type(db, def_id, &rs_type, alias_name, alias_type)
+}
+
+pub(crate) fn create_type_alias_with_rs_type<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    def_id: DefId,
+    rs_type: &str,
+    alias_name: &str,
+    alias_type: Ty<'tcx>,
+) -> Result<CcSnippet<'tcx>> {
+    let doc_comment = generate_doc_comment(db, def_id);
     let cc_bindings = db.format_ty_for_cc(alias_type, TypeLocation::Other)?;
     let mut main_api_prereqs = CcPrerequisites::default();
     let actual_type_name = cc_bindings.into_tokens(&mut main_api_prereqs);
 
     let alias_name = format_cc_ident(db, alias_name).context("Error formatting type alias name")?;
-
-    let fully_qualified_name = db
-        .symbol_canonical_name(def_id)
-        .ok_or_else(|| anyhow!("Failed to get canonical name for {:?}", def_id))?;
-    let rs_type = format!("{}", fully_qualified_name.format_for_rs());
 
     main_api_prereqs.includes.insert(db.support_header("annotations_internal.h"));
     let mut attributes = vec![quote! {CRUBIT_INTERNAL_RUST_TYPE(#rs_type)}];
@@ -882,20 +1239,34 @@ fn create_type_alias<'tcx>(
         attributes.push(cc_deprecated_tag);
     }
 
-    let tokens = quote! {using #alias_name #(#attributes)* = #actual_type_name;};
+    let bracketed_alias_name = if db.kythe_annotations() {
+        quote! { __CAPTURE_BEGIN__ #alias_name __CAPTURE_END__ }
+    } else {
+        quote! { #alias_name }
+    };
+
+    let tokens = quote! { __NEWLINE__ #doc_comment using #bracketed_alias_name #(#attributes)* = #actual_type_name; };
 
     Ok(CcSnippet { prereqs: main_api_prereqs, tokens })
 }
 
+fn has_default_ctor<'tcx>(db: &BindingsGenerator<'tcx>, self_ty: Ty<'tcx>) -> bool {
+    let tcx = db.tcx();
+    let trait_id = tcx
+        .get_diagnostic_item(sym::Default)
+        .expect("Couldn't find lang item `core::default::Default`");
+    does_type_implement_trait(tcx, self_ty, trait_id, [])
+}
+
 /// Implementation of `BindingsGenerator::generate_default_ctor`.
 fn generate_default_ctor<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     core: Rc<AdtCoreBindings<'tcx>>,
-) -> Result<ApiSnippets, ApiSnippets> {
+) -> Result<ApiSnippets<'tcx>, ApiSnippets<'tcx>> {
     fn fallible_format_default_ctor<'tcx>(
-        db: &dyn BindingsGenerator<'tcx>,
+        db: &BindingsGenerator<'tcx>,
         core: Rc<AdtCoreBindings<'tcx>>,
-    ) -> Result<ApiSnippets> {
+    ) -> Result<ApiSnippets<'tcx>> {
         let tcx = db.tcx();
         let trait_id = tcx
             .get_diagnostic_item(sym::Default)
@@ -904,7 +1275,15 @@ fn generate_default_ctor<'tcx>(
             method_name_to_cc_thunk_name,
             cc_thunk_decls,
             rs_thunk_impls: rs_details,
-        } = generate_trait_thunks(db, trait_id, &[], &core)?;
+        } = generate_trait_thunks(
+            db,
+            trait_id,
+            &[],
+            core.self_ty,
+            core.def_id,
+            core.rs_fully_qualified_name.clone(),
+            /*is_constructor=*/ true,
+        )?;
 
         let cc_struct_name = &core.cc_short_name;
         let main_api = CcSnippet::new(quote! {
@@ -920,18 +1299,19 @@ fn generate_default_ctor<'tcx>(
             let mut prereqs = CcPrerequisites::default();
             let cc_thunk_decls = cc_thunk_decls.into_tokens(&mut prereqs);
 
+            let fully_qualified_name = &core.cc_fully_qualified_name;
             // This might be the case for `#[repr(transparent)]` types.
             // TODO: b/459482188 - This is ultimately dependent on the return ABI of the thunk and
-            // should be cetnralized with the other callsites that depend on return type ABI.
+            // should be centralized with the other callsites that depend on return type ABI.
             let ctor_impl = if is_c_abi_compatible_by_value(tcx, core.self_ty) {
                 quote! {
-                    inline #cc_struct_name::#cc_struct_name() {
+                    inline #fully_qualified_name::#cc_struct_name() {
                        *this = __crubit_internal::#thunk_name();
                     }
                 }
             } else {
                 quote! {
-                    inline #cc_struct_name::#cc_struct_name() {
+                    inline #fully_qualified_name::#cc_struct_name() {
                         __crubit_internal::#thunk_name(this);
                     }
                 }
@@ -957,75 +1337,116 @@ fn generate_default_ctor<'tcx>(
     })
 }
 
+fn has_copy_ctor_and_assignment_operator<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    def_id: Option<DefId>,
+    self_ty: Ty<'tcx>,
+) -> Option<CopyCtorStyle> {
+    let tcx = db.tcx();
+    let trait_id = tcx.lang_items().clone_trait().expect("Can't find the `Clone` trait");
+    if is_copy(tcx, def_id, self_ty) {
+        Some(CopyCtorStyle::Copy)
+    } else if does_type_implement_trait(tcx, self_ty, trait_id, []) {
+        Some(CopyCtorStyle::Clone)
+    } else {
+        None
+    }
+}
+
 /// Implementation of `BindingsGenerator::generate_copy_ctor_and_assignment_operator`.
 fn generate_copy_ctor_and_assignment_operator<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     core: Rc<AdtCoreBindings<'tcx>>,
-) -> Result<ApiSnippets, ApiSnippets> {
+) -> Result<ApiSnippets<'tcx>, ApiSnippets<'tcx>> {
     fn fallible_format_copy_ctor_and_assignment_operator<'tcx>(
-        db: &dyn BindingsGenerator<'tcx>,
+        db: &BindingsGenerator<'tcx>,
         core: Rc<AdtCoreBindings<'tcx>>,
-    ) -> Result<ApiSnippets> {
+    ) -> Result<ApiSnippets<'tcx>> {
         let tcx = db.tcx();
         let cc_struct_name = &core.cc_short_name;
+        let qualified_adt_name = &core.cc_fully_qualified_name;
 
-        if is_copy(tcx, core.def_id, core.self_ty) {
-            let msg = "Rust types that are `Copy` get trivial, `default` C++ copy constructor \
-                       and assignment operator.";
-            let main_api = CcSnippet::new(quote! {
-                __NEWLINE__ __COMMENT__ #msg
-                #cc_struct_name(const #cc_struct_name&) = default;  __NEWLINE__
-                #cc_struct_name& operator=(const #cc_struct_name&) = default;
-            });
-            let cc_details = CcSnippet::with_include(
-                quote! {
-                    static_assert(std::is_trivially_copy_constructible_v<#cc_struct_name>);
-                    static_assert(std::is_trivially_copy_assignable_v<#cc_struct_name>);
-                },
-                CcInclude::type_traits(),
-            );
+        match db.has_copy_ctor_and_assignment_operator(core.def_id, core.self_ty) {
+            Some(CopyCtorStyle::Copy) => {
+                let msg = "Rust types that are `Copy` get trivial, `default` C++ copy constructor \
+                        and assignment operator.";
+                let main_api = CcSnippet::new(quote! {
+                    __NEWLINE__ __COMMENT__ #msg
+                    #cc_struct_name(const #cc_struct_name&) = default;  __NEWLINE__
+                    #cc_struct_name& operator=(const #cc_struct_name&) = default;
+                });
+                let cc_details = CcSnippet::with_include(
+                    quote! {
+                        static_assert(::std::is_trivially_copy_constructible_v<#qualified_adt_name>);
+                        static_assert(::std::is_trivially_copy_assignable_v<#qualified_adt_name>);
+                    },
+                    CcInclude::type_traits(),
+                );
 
-            return Ok(ApiSnippets { main_api, cc_details, rs_details: RsSnippet::default() });
+                Ok(ApiSnippets { main_api, cc_details, rs_details: RsSnippet::default() })
+            }
+            Some(CopyCtorStyle::Clone) => {
+                let trait_id = tcx
+                    .lang_items()
+                    .clone_trait()
+                    .ok_or_else(|| anyhow!("Can't find the `Clone` trait"))?;
+                let TraitThunks {
+                    method_name_to_cc_thunk_name,
+                    cc_thunk_decls,
+                    rs_thunk_impls: rs_details,
+                } = generate_trait_thunks(
+                    db,
+                    trait_id,
+                    &[],
+                    core.self_ty,
+                    core.def_id,
+                    core.rs_fully_qualified_name.clone(),
+                    /*is_constructor=*/ true,
+                )?;
+                let main_api = CcSnippet::new(quote! {
+                    __NEWLINE__ __COMMENT__ "Clone::clone"
+                    #cc_struct_name(const #cc_struct_name&); __NEWLINE__
+                    __NEWLINE__ __COMMENT__ "Clone::clone_from"
+                    #qualified_adt_name& operator=(const #cc_struct_name&); __NEWLINE__ __NEWLINE__
+                });
+                let cc_details = {
+                    // `unwrap` calls are okay because `Clone` trait always has these methods.
+                    let clone_thunk_name = method_name_to_cc_thunk_name.get(&sym::clone).unwrap();
+                    let clone_from_thunk_name =
+                        method_name_to_cc_thunk_name.get(&sym::clone_from).unwrap();
+
+                    let mut prereqs = CcPrerequisites::default();
+                    let cc_thunk_decls = cc_thunk_decls.into_tokens(&mut prereqs);
+
+                    let tokens = quote! {
+                        #cc_thunk_decls
+                        inline #qualified_adt_name::#cc_struct_name(const #cc_struct_name& other) {
+                            __crubit_internal::#clone_thunk_name(other, this);
+                        }
+                        inline #qualified_adt_name& #qualified_adt_name::operator=(const #cc_struct_name& other) {
+                            if (this != &other) {
+                                __crubit_internal::#clone_from_thunk_name(*this, other);
+                            }
+                            return *this;
+                        }
+                    };
+                    CcSnippet { tokens, prereqs }
+                };
+                Ok(ApiSnippets { main_api, cc_details, rs_details })
+            }
+            None => {
+                let display_name = core
+                    .def_id
+                    .and_then(|id| db.symbol_canonical_name(id))
+                    .map(|canon| {
+                        let parts =
+                            canon.rs_name_parts().map(|s| format!("{}", s)).collect::<Vec<_>>();
+                        parts.join("::")
+                    })
+                    .unwrap_or_else(|| format!("{}", core.self_ty));
+                bail!("`{display_name}` doesn't implement the `Clone` trait");
+            }
         }
-
-        let trait_id = tcx
-            .lang_items()
-            .clone_trait()
-            .ok_or_else(|| anyhow!("Can't find the `Clone` trait"))?;
-        let TraitThunks {
-            method_name_to_cc_thunk_name,
-            cc_thunk_decls,
-            rs_thunk_impls: rs_details,
-        } = generate_trait_thunks(db, trait_id, &[], &core)?;
-        let main_api = CcSnippet::new(quote! {
-            __NEWLINE__ __COMMENT__ "Clone::clone"
-            #cc_struct_name(const #cc_struct_name&); __NEWLINE__
-            __NEWLINE__ __COMMENT__ "Clone::clone_from"
-            #cc_struct_name& operator=(const #cc_struct_name&); __NEWLINE__ __NEWLINE__
-        });
-        let cc_details = {
-            // `unwrap` calls are okay because `Clone` trait always has these methods.
-            let clone_thunk_name = method_name_to_cc_thunk_name.get(&sym::clone).unwrap();
-            let clone_from_thunk_name = method_name_to_cc_thunk_name.get(&sym::clone_from).unwrap();
-
-            let mut prereqs = CcPrerequisites::default();
-            let cc_thunk_decls = cc_thunk_decls.into_tokens(&mut prereqs);
-
-            let tokens = quote! {
-                #cc_thunk_decls
-                inline #cc_struct_name::#cc_struct_name(const #cc_struct_name& other) {
-                    __crubit_internal::#clone_thunk_name(other, this);
-                }
-                inline #cc_struct_name& #cc_struct_name::operator=(const #cc_struct_name& other) {
-                    if (this != &other) {
-                        __crubit_internal::#clone_from_thunk_name(*this, other);
-                    }
-                    return *this;
-                }
-            };
-            CcSnippet { tokens, prereqs }
-        };
-        Ok(ApiSnippets { main_api, cc_details, rs_details })
     }
     fallible_format_copy_ctor_and_assignment_operator(db, core.clone()).map_err(|err| {
         let msg = format!("{err:#}");
@@ -1041,114 +1462,130 @@ fn generate_copy_ctor_and_assignment_operator<'tcx>(
     })
 }
 
+fn has_move_ctor_and_assignment_operator<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    def_id: Option<DefId>,
+    self_ty: Ty<'tcx>,
+) -> Option<MoveCtorStyle> {
+    let tcx = db.tcx();
+    let typing_env = def_id
+        .map(|id| post_analysis_typing_env(tcx, id))
+        .unwrap_or_else(ty::TypingEnv::fully_monomorphized);
+    // If our type has no drop glue we can use the default move constructor and assignment operator.
+    if !self_ty.needs_drop(tcx, typing_env) {
+        return Some(MoveCtorStyle::Default);
+    }
+    let has_default_ctor = db.has_default_ctor(self_ty);
+    let is_unpin = self_ty.is_unpin(tcx, typing_env);
+    if has_default_ctor && is_unpin {
+        Some(MoveCtorStyle::MemSwap)
+    } else if db.has_copy_ctor_and_assignment_operator(def_id, self_ty).is_some() {
+        Some(MoveCtorStyle::Copy)
+    } else {
+        None
+    }
+}
+
 /// Implementation of `BindingsGenerator::generate_move_ctor_and_assignment_operator`.
 #[allow(clippy::result_large_err)]
 fn generate_move_ctor_and_assignment_operator<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     core: Rc<AdtCoreBindings<'tcx>>,
-) -> Result<ApiSnippets, NoMoveOrAssign> {
+) -> Result<ApiSnippets<'tcx>, NoMoveOrAssign<'tcx>> {
     fn fallible_format_move_ctor_and_assignment_operator<'tcx>(
-        db: &dyn BindingsGenerator<'tcx>,
+        db: &BindingsGenerator<'tcx>,
         core: Rc<AdtCoreBindings<'tcx>>,
-    ) -> Result<ApiSnippets> {
-        let tcx = db.tcx();
+    ) -> Result<ApiSnippets<'tcx>> {
         let adt_cc_name = &core.cc_short_name;
-        if generate_struct_and_union::adt_core_bindings_needs_drop(&core, tcx) {
-            let has_default_ctor = db.generate_default_ctor(core.clone()).is_ok();
-            let is_unpin = core.self_ty.is_unpin(tcx, post_analysis_typing_env(tcx, core.def_id));
-            if has_default_ctor && is_unpin {
+        let qualified_adt_name = &core.cc_fully_qualified_name;
+        match db.has_move_ctor_and_assignment_operator(core.def_id, core.self_ty) {
+            // We rely on the copy constructor and assignment operator to handle the move
+            // operations.
+            Some(MoveCtorStyle::Copy) => Ok(ApiSnippets::default()),
+            None => {
+                bail!(
+                    "C++ move operations are unavailable for this type. See \
+                    http://crubit.rs/rust/movable_types for an explanation of Rust types that are C++ \
+                    movable."
+                );
+            }
+            Some(MoveCtorStyle::MemSwap) => {
                 let main_api = CcSnippet::new(quote! {
                     #adt_cc_name(#adt_cc_name&&); __NEWLINE__
-                    #adt_cc_name& operator=(#adt_cc_name&&); __NEWLINE__
+                    #qualified_adt_name& operator=(#adt_cc_name&&); __NEWLINE__
                 });
                 let mut prereqs = CcPrerequisites::default();
                 prereqs.includes.insert(db.support_header("internal/memswap.h"));
                 prereqs.includes.insert(CcInclude::utility()); // for `std::move`
                 let tokens = quote! {
-                    inline #adt_cc_name::#adt_cc_name(#adt_cc_name&& other)
+                    inline #qualified_adt_name::#adt_cc_name(#adt_cc_name&& other)
                             : #adt_cc_name() {
-                        *this = std::move(other);
+                        *this = ::std::move(other);
                     }
-                    inline #adt_cc_name& #adt_cc_name::operator=(#adt_cc_name&& other) {
+                    inline #qualified_adt_name& #qualified_adt_name::operator=(#adt_cc_name&& other) {
                         crubit::MemSwap(*this, other);
                         return *this;
                     }
                 };
                 let cc_details = CcSnippet { tokens, prereqs };
                 Ok(ApiSnippets { main_api, cc_details, ..Default::default() })
-            } else if db.generate_copy_ctor_and_assignment_operator(core).is_ok() {
-                // The class will have a custom copy constructor and copy assignment operator
-                // and *no* move constructor nor move assignment operator. This
-                // way, when a move is requested, a copy is performed instead
-                // (this is okay, this is what happens if a copyable pre-C++11
-                // class is compiled in C++11 mode and moved).
-                //
-                // We can't use the `=default` move constructor, because it is elementwise and
-                // semantically incorrect.  We can't `=delete` the move constructor because it
-                // would make `SomeStruct(MakeSomeStruct())` select the deleted move constructor
-                // and fail to compile.
-                Ok(ApiSnippets::default())
-            } else {
-                bail!(
-                    "C++ move operations are unavailable for this type. See \
-                    http://<internal link>/rust/movable_types for an explanation of Rust types that are C++ \
-                    movable."
-                );
             }
-        } else {
-            let main_api = CcSnippet::new(quote! {
-                // The generated bindings have to follow Rust move semantics:
-                // * All Rust types are memcpy-movable (e.g. <internal link>/constructors.html says
-                //   that "Every type must be ready for it to be blindly memcopied to somewhere
-                //   else in memory")
-                // * The only valid operation on a moved-from non-`Copy` Rust struct is to assign to
-                //   it.
-                //
-                // The generated C++ bindings below match the required semantics because they:
-                // * Generate trivial` C++ move constructor and move assignment operator. Per
-                //   <internal link>/cpp/language/move_constructor#Trivial_move_constructor: "A trivial
-                //   move constructor is a constructor that performs the same action as the trivial
-                //   copy constructor, that is, makes a copy of the object representation as if by
-                //   std::memmove."
-                // * Generate trivial C++ destructor.
-                //
-                // In particular, note that the following C++ code and Rust code are exactly
-                // equivalent (except that in Rust, reuse of `y` is forbidden at compile time,
-                // whereas in C++, it's only prohibited by convention):
-                // * C++, assumming trivial move constructor and trivial destructor:
-                //   `auto x = std::move(y);`
-                // * Rust, assumming non-`Copy`, no custom `Drop` or drop glue:
-                //   `let x = y;`
-                //
-                // TODO(b/258251148): If the ADT provides a custom `Drop` impls or requires drop
-                // glue, then extra care should be taken to ensure the C++ destructor can handle
-                // the moved-from object in a way that meets Rust move semantics.  For example, the
-                // generated C++ move constructor might need to assign `Default::default()` to the
-                // moved-from object.
-                #adt_cc_name(#adt_cc_name&&) = default; __NEWLINE__
-                #adt_cc_name& operator=(#adt_cc_name&&) = default; __NEWLINE__
-                __NEWLINE__
-            });
-            let cc_details = CcSnippet::with_include(
-                quote! {
-                    static_assert(std::is_trivially_move_constructible_v<#adt_cc_name>);
-                    static_assert(std::is_trivially_move_assignable_v<#adt_cc_name>);
-                },
-                CcInclude::type_traits(),
-            );
-            Ok(ApiSnippets { main_api, cc_details, ..Default::default() })
+            Some(MoveCtorStyle::Default) => {
+                let main_api = CcSnippet::new(quote! {
+                    // The generated bindings have to follow Rust move semantics:
+                    // * All Rust types are memcpy-movable (e.g. <internal link>/constructors.html says
+                    //   that "Every type must be ready for it to be blindly memcopied to somewhere
+                    //   else in memory")
+                    // * The only valid operation on a moved-from non-`Copy` Rust struct is to assign to
+                    //   it.
+                    //
+                    // The generated C++ bindings below match the required semantics because they:
+                    // * Generate trivial` C++ move constructor and move assignment operator. Per
+                    //   <internal link>/cpp/language/move_constructor#Trivial_move_constructor: "A trivial
+                    //   move constructor is a constructor that performs the same action as the trivial
+                    //   copy constructor, that is, makes a copy of the object representation as if by
+                    //   std::memmove."
+                    // * Generate trivial C++ destructor.
+                    //
+                    // In particular, note that the following C++ code and Rust code are exactly
+                    // equivalent (except that in Rust, reuse of `y` is forbidden at compile time,
+                    // whereas in C++, it's only prohibited by convention):
+                    // * C++, assumming trivial move constructor and trivial destructor:
+                    //   `auto x = std::move(y);`
+                    // * Rust, assumming non-`Copy`, no custom `Drop` or drop glue:
+                    //   `let x = y;`
+                    //
+                    // TODO(b/258251148): If the ADT provides a custom `Drop` impls or requires drop
+                    // glue, then extra care should be taken to ensure the C++ destructor can handle
+                    // the moved-from object in a way that meets Rust move semantics.  For example, the
+                    // generated C++ move constructor might need to assign `Default::default()` to the
+                    // moved-from object.
+                    #adt_cc_name(#adt_cc_name&&) = default; __NEWLINE__
+                    #adt_cc_name& operator=(#adt_cc_name&&) = default; __NEWLINE__
+                    __NEWLINE__
+                });
+                let cc_details = CcSnippet::with_include(
+                    quote! {
+                        static_assert(::std::is_trivially_move_constructible_v<#qualified_adt_name>);
+                        static_assert(::std::is_trivially_move_assignable_v<#qualified_adt_name>);
+                    },
+                    CcInclude::type_traits(),
+                );
+                Ok(ApiSnippets { main_api, cc_details, ..Default::default() })
+            }
         }
     }
     fallible_format_move_ctor_and_assignment_operator(db, core.clone()).map_err(|err| {
         let msg = format!("{err:#}");
         let adt_cc_name = &core.cc_short_name;
+        let qualified_adt_name = &core.cc_fully_qualified_name;
         NoMoveOrAssign {
             err,
             explicitly_deleted: ApiSnippets {
                 main_api: CcSnippet::new(quote! {
                     __NEWLINE__ __COMMENT__ #msg
                     #adt_cc_name(#adt_cc_name&&) = delete;  __NEWLINE__
-                    #adt_cc_name& operator=(#adt_cc_name&&) = delete;
+                    #qualified_adt_name& operator=(#adt_cc_name&&) = delete;
                 }),
                 ..Default::default()
             },
@@ -1162,7 +1599,7 @@ fn generate_move_ctor_and_assignment_operator<'tcx>(
 ///
 /// Will panic if `def_id` doesn't identify an ADT that can be successfully
 /// handled by `generate_adt_core`.
-fn generate_fwd_decl(db: &Database<'_>, def_id: DefId) -> TokenStream {
+fn generate_fwd_decl(db: &BindingsGenerator<'_>, def_id: DefId) -> TokenStream {
     // `generate_fwd_decl` should only be called for items from
     // `CcPrerequisites::fwd_decls` and `fwd_decls` should only contain ADTs
     // that `generate_adt_core` succeeds for.
@@ -1174,7 +1611,7 @@ fn generate_fwd_decl(db: &Database<'_>, def_id: DefId) -> TokenStream {
     // If we're forward declaring a C++ enum, we need to include the underlying type in the forward
     // declaration. Otherwise, it will default to `int` and cause a compilation error.
     let tcx = db.tcx();
-    let crubit_attrs = crubit_attr::get_attrs(tcx, core_bindings.def_id).unwrap_or_default();
+    let crubit_attrs = crubit_attr::get_attrs(tcx, def_id).unwrap_or_default();
     if crubit_attrs.cpp_enum.is_some() {
         let cpp_enum_cpp_underlying_type_snippet = cpp_enum_cpp_underlying_type(db, def_id)
             .expect("`generate_fwd_decl` should only be called if we successfully generated an enum for this type");
@@ -1186,7 +1623,7 @@ fn generate_fwd_decl(db: &Database<'_>, def_id: DefId) -> TokenStream {
 }
 
 fn generate_kythe_doc_comment(
-    db: &dyn BindingsGenerator,
+    db: &BindingsGenerator,
     def_id: DefId,
     doc_comment: String,
 ) -> TokenStream {
@@ -1195,31 +1632,35 @@ fn generate_kythe_doc_comment(
     // capture tag; it's fine to emit capture tags that never capture anything.)
     let tcx = db.tcx();
     let def_span = tcx.def_ident_span(def_id).unwrap_or_else(|| tcx.def_span(def_id));
-    #[rustversion::before(2025-12-14)]
+    let (start, end) = if def_span.is_dummy() {
+        ("0".to_string(), "0".to_string())
+    } else {
+        // We're assuming that lo and hi are in the same source file.
+        let sf = tcx.sess.source_map().lookup_source_file(def_span.lo());
+        (
+            sf.relative_position(def_span.lo()).0.to_string(),
+            sf.relative_position(def_span.hi()).0.to_string(),
+        )
+    };
+    #[rustversion::all(before(1.94), before(2025-12-14))]
     let file_name = tcx.sess().source_map().span_to_filename(def_span).prefer_local().to_string();
-    #[rustversion::since(2025-12-14)]
-    let file_name = tcx
-        .sess()
-        .source_map()
-        .span_to_filename(def_span)
-        .prefer_local_unconditionally()
-        .to_string();
-    let start = def_span.lo().0.to_string();
-    let end = def_span.hi().0.to_string();
+    #[rustversion::any(since(1.94), since(2025-12-14))]
+    let file_name =
+        tcx.sess.source_map().span_to_filename(def_span).prefer_local_unconditionally().to_string();
     quote! { __CAPTURE_TAG__ #file_name #start #end __COMMENT__ #doc_comment}
 }
 
-fn generate_source_location(db: &dyn BindingsGenerator, def_id: DefId) -> String {
+fn generate_source_location(db: &BindingsGenerator, def_id: DefId) -> String {
     let tcx = db.tcx();
     let def_span = tcx.def_span(def_id);
-    let rustc_span::FileLines { file, lines } =
-        match tcx.sess().source_map().span_to_lines(def_span) {
-            Ok(filelines) => filelines,
-            Err(_) => return "unknown location".to_string(),
-        };
-    #[rustversion::before(2025-12-14)]
+    let rustc_span::FileLines { file, lines } = match tcx.sess.source_map().span_to_lines(def_span)
+    {
+        Ok(filelines) => filelines,
+        Err(_) => return "unknown location".to_string(),
+    };
+    #[rustversion::all(before(1.94), before(2025-12-14))]
     let file_name = file.name.prefer_local().to_string();
-    #[rustversion::since(2025-12-14)]
+    #[rustversion::any(since(1.94), since(2025-12-14))]
     let file_name = file.name.prefer_local_unconditionally().to_string();
     // Virtual paths will have a "./" prefix that we don't want to display.
     let file_name = file_name.strip_prefix("./").unwrap_or(file_name.as_str());
@@ -1237,114 +1678,165 @@ fn generate_source_location(db: &dyn BindingsGenerator, def_id: DefId) -> String
 /// Formats the doc comment (if any) associated with the item identified by
 /// `local_def_id`, and appends the source location at which the item is
 /// defined.
-fn generate_doc_comment(db: &dyn BindingsGenerator, def_id: DefId) -> TokenStream {
-    let doc_comment = db
+fn generate_doc_comment(db: &BindingsGenerator, def_id: DefId) -> TokenStream {
+    #[allow(deprecated)]
+    let mut docs = db
         .tcx()
         .get_all_attrs(def_id)
         .iter()
         .filter_map(|attr| attr.doc_str())
         .map(|symbol| symbol.to_string())
-        .chain(once(format!("Generated from: {}", generate_source_location(db, def_id))))
-        .join("\n\n");
+        .peekable();
+
+    let include_source_loc = !db.is_golden_test() || db.kythe_annotations();
+    let leading_newline = if docs.peek().is_none() { "" } else { "\n" };
+
+    let doc_comment = docs
+        .chain(include_source_loc.then(|| {
+            format!("{leading_newline}Generated from: {}", generate_source_location(db, def_id))
+        }))
+        .join("\n");
+
     if db.kythe_annotations() {
         generate_kythe_doc_comment(db, def_id, doc_comment)
-    } else {
+    } else if !doc_comment.is_empty() {
         quote! { __COMMENT__ #doc_comment}
+    } else {
+        quote! {}
     }
 }
 
-/// Returns the name of the item identified by `def_id`, or "<unknown>" if
-/// the item can't be identified.
-fn item_name(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Symbol {
-    db.tcx().opt_item_name(def_id).unwrap_or_else(|| Symbol::intern("<unknown>"))
+fn item_name_for_error_report(db: &BindingsGenerator<'_>, def_id: DefId) -> error_report::ItemName {
+    let crate_name = db.tcx().crate_name(def_id.krate);
+    let name = format!("{crate_name}::{}", db.tcx().def_path_str(def_id)).into();
+    let id = ((def_id.index.as_u32() as u64) << 32) | def_id.krate.as_u32() as u64;
+    let defining_target = if def_id.krate == db.source_crate_num() {
+        None
+    } else {
+        Some(crate_name.to_string().into())
+    };
+    error_report::ItemName { name, id, unique_name: None, defining_target }
+}
+
+pub(crate) fn report_must_bind_error<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    def_id: DefId,
+    err: &Error,
+) {
+    let tcx = db.tcx();
+    let item_path = tcx.def_path_str(def_id);
+    let bold = "\x1B[1m";
+    let reset = "\x1B[0m";
+    let red = "\x1B[31m";
+    let must_bind_message = format!(
+        "{bold}{red}error:{reset}{bold}{}\n\
+        {bold}note:{reset} hard error because `#[crubit_annotate::must_bind]` was applied to `{item_path}`",
+        unsupported_def_error_message(db, def_id, err, ErrorStyle::Terminal),
+    );
+    db.fatal_errors().report(&must_bind_message);
 }
 
 /// Implementation of `BindingsGenerator::generate_item`.
-fn generate_item(db: &dyn BindingsGenerator<'_>, def_id: DefId) -> Result<Option<ApiSnippets>> {
+fn generate_item<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    def_id: DefId,
+) -> Result<Option<ApiSnippets<'tcx>>> {
     let tcx = db.tcx();
     let generated = generate_item_impl(db, def_id);
     let attributes = crubit_attr::get_attrs(tcx, def_id).unwrap();
     if attributes.must_bind {
         if let Err(e) = &generated {
-            let item_name = item_name(db, def_id);
-            let must_bind_message = format!(
-                "Failed to generate bindings for `{item_name}`:\n\
-                {e:?}\n\
-                This is a hard error because `{item_name}` was annotated with \
-                `#[crubit_annotate::must_bind]`"
-            );
-            db.fatal_errors().report(&must_bind_message);
+            report_must_bind_error(db, def_id, e);
         }
     }
     generated
 }
 
+#[macro_export]
+macro_rules! error_scope {
+    ($db:expr, $def_id:expr) => {
+        let db = $db;
+        let errors = db.errors();
+        let _error_scope =
+            error_report::ItemScope::new(&*errors, $crate::item_name_for_error_report(db, $def_id));
+    };
+}
+
 // A helper for `generate_item`.
 // The wrapper is used to ensure that the `must_bind` annotation is enforced.
-fn generate_item_impl(
-    db: &dyn BindingsGenerator<'_>,
+fn generate_item_impl<'tcx>(
+    db: &BindingsGenerator<'tcx>,
     def_id: DefId,
-) -> Result<Option<ApiSnippets>> {
+) -> Result<Option<ApiSnippets<'tcx>>> {
     let tcx = db.tcx();
-    let Some(canonical_name) = db.symbol_canonical_name(def_id) else {
+    if db.symbol_canonical_name(def_id).is_none() {
         return Ok(None);
     };
     let item = match tcx.def_kind(def_id) {
         DefKind::Struct | DefKind::Enum | DefKind::Union => {
-            let attributes = crubit_attr::get_attrs(tcx, def_id).unwrap();
-
-            let has_composable_bridging_attrs = matches!(
-                attributes.get_bridging_attrs()?,
-                Some(crubit_attr::BridgingAttrs::Composable { .. })
-            );
-
-            if !has_composable_bridging_attrs
-                && BridgedBuiltin::new(db, tcx.adt_def(def_id)).is_none()
-                && query_compiler::has_non_lifetime_generics(tcx, def_id)
-            {
-                bail!("Generic types are not supported yet (b/259749095)");
-            }
-
-            if let Some(cpp_type) = canonical_name.unqualified.cpp_type {
-                let item_name = tcx.def_path_str(def_id);
-                bail!(
-                    "Type bindings for {item_name} suppressed due to being mapped to \
-                            an existing C++ type ({cpp_type})"
-                );
-            }
-            db.generate_adt_core(def_id).map(|core| Some(generate_adt(db, core)))
+            db.adt_needs_bindings(def_id).map(|core| Some(generate_adt(db, core)))
         }
-        DefKind::Fn => db.generate_function(def_id).map(Some),
+        DefKind::Fn => db.generate_function(def_id, None, StaticMethodMode::Infer).map(Some),
         DefKind::TyAlias => generate_type_alias(db, def_id, tcx.item_name(def_id).as_str())
             .map(|snippets| Some(snippets.into_main_api())),
-        DefKind::Const => generate_const(db, def_id).map(Some),
+        DefKind::Const { .. } => generate_const(db, def_id).map(Some),
+        DefKind::Trait => generate_trait(db, def_id).map(Some),
         DefKind::Impl { .. } => Ok(None), // Handled by `generate_adt`
         DefKind::Mod => Ok(None),         // Handled by `generate_crate`
         kind => bail!("Unsupported rustc_hir::hir::DefKind: {kind:?}"),
     };
 
     if let Ok(Some(item)) = item {
-        Ok(Some(item.resolve_feature_requirements(crate_features(db, db.source_crate_num()))?))
+        Ok(Some(item.resolve_feature_requirements(db.crate_features(db.source_crate_num()))?))
     } else {
         item
     }
 }
 
-/// Formats a C++ comment explaining why no bindings have been generated for
-/// `local_def_id`.
-fn generate_unsupported_def(
-    db: &dyn BindingsGenerator<'_>,
+enum ErrorStyle {
+    // This message will be formatted as a comment.
+    Comment,
+    // This message will be printed to a terminal.
+    Terminal,
+}
+
+pub(crate) fn unsupported_def_error_message(
+    db: &BindingsGenerator,
     def_id: DefId,
-    err: Error,
-) -> CcSnippet {
+    err: &Error,
+    style: ErrorStyle,
+) -> String {
     let tcx = db.tcx();
-    db.errors().report(&err);
     let source_loc = generate_source_location(db, def_id);
     let name = tcx.def_path_str(def_id);
+    let def_kind = tcx.def_kind(def_id);
+    let kind_str = def_kind.descr(def_id);
+    let err_msg = if let ErrorStyle::Terminal = style {
+        format!("\n  {err:#}").replace('\n', "\n  ")
+    } else {
+        format!(" {err:#}")
+    };
+    let bold = if let ErrorStyle::Terminal = style { "\x1B[1m" } else { "" };
+    let reset = if let ErrorStyle::Terminal = style { "\x1B[0m" } else { "" };
 
     // https://docs.rs/anyhow/latest/anyhow/struct.Error.html#display-representations
     // says: To print causes as well [...], use the alternate selector “{:#}”.
-    let msg = format!("Error generating bindings for `{name}` defined at {source_loc}: {err:#}");
+    format!("{bold}{kind_str} `{name}` defined at {source_loc}:{reset}{err_msg}")
+}
+
+/// Formats a C++ comment explaining why no bindings have been generated for
+/// `local_def_id`.
+pub(crate) fn generate_unsupported_def<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    def_id: DefId,
+    err: Error,
+) -> CcSnippet<'tcx> {
+    db.errors().assert_in_item(item_name_for_error_report(db, def_id));
+    db.errors().report(&err);
+    let msg = format!(
+        "Error generating bindings for {}",
+        unsupported_def_error_message(db, def_id, &err, ErrorStyle::Comment)
+    );
     CcSnippet::new(quote! { __NEWLINE__ __NEWLINE__ __COMMENT__ #msg __NEWLINE__ })
 }
 
@@ -1382,7 +1874,7 @@ fn generate_unsupported_def(
 ///     #tokens
 ///     ```
 pub fn format_namespace_bound_cc_tokens(
-    db: &dyn BindingsGenerator<'_>,
+    db: &BindingsGenerator<'_>,
     iter: impl IntoIterator<Item = (Option<DefId>, NamespaceQualifier, TokenStream)>,
     tcx: TyCtxt,
 ) -> TokenStream {
@@ -1424,13 +1916,7 @@ pub fn format_namespace_bound_cc_tokens(
 
 /// Compares two `DefId` s
 pub(crate) fn stable_def_id_cmp<'tcx>(tcx: TyCtxt<'tcx>, lhs_id: DefId, rhs_id: DefId) -> Ordering {
-    let lhs_def_path_hash = tcx.def_path_str(lhs_id);
-    let rhs_def_path_hash = tcx.def_path_str(rhs_id);
-    lhs_def_path_hash.cmp(&rhs_def_path_hash).then_with(|| {
-        let lhs_def_hash = tcx.def_path_hash(lhs_id);
-        let rhs_def_hash = tcx.def_path_hash(rhs_id);
-        lhs_def_hash.cmp(&rhs_def_hash)
-    })
+    NodeSortKey::from_def_id(tcx, lhs_id).cmp(&NodeSortKey::from_def_id(tcx, rhs_id))
 }
 
 pub(crate) trait SortedByDef: Iterator + Sized {
@@ -1453,23 +1939,88 @@ pub(crate) trait SortedByDef: Iterator + Sized {
 }
 impl<T: Iterator + Sized> SortedByDef for T {}
 
-struct FormattedItem {
+struct FormattedItem<'tcx> {
     def_id: DefId,
-    snippets: Option<ApiSnippets>,
+    snippets: Option<ApiSnippets<'tcx>>,
     aliases: Vec<ExportedPath>,
 }
 
-fn formatted_items_in_crate(db: &dyn BindingsGenerator<'_>) -> impl Iterator<Item = FormattedItem> {
+struct GeneratedSpecializations<'tcx> {
+    specializations: HashMap<TemplateSpecialization<'tcx>, CcSnippet<'tcx>>,
+    impls_cc_details: Vec<TokenStream>,
+}
+
+/// Generates template specializations for a given worklist, and transitively discovers
+/// any specializations required by the generated specializations.
+fn generate_specializations_fixpoint<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    mut worklist: Vec<TemplateSpecialization<'tcx>>,
+    cc_details_prereqs: &mut CcPrerequisites<'tcx>,
+    extern_c_decls: &mut BTreeSet<ExternCDecl>,
+    cc_api_impl: &mut TokenStream,
+) -> GeneratedSpecializations<'tcx> {
+    let mut seen = HashSet::new();
+    let mut specializations = HashMap::new();
+    let mut impls_cc_details = Vec::new();
+
+    while !worklist.is_empty() {
+        // Sort to ensure deterministic processing.
+        worklist.sort_by_cached_key(|spec| NodeSortKey::new(db.tcx(), spec));
+
+        let mut next_worklist = Vec::new();
+        for spec in worklist {
+            if seen.contains(&spec) {
+                continue;
+            }
+
+            let snippets = generate_template_specialization::generate_template_specialization(
+                db,
+                spec.clone(),
+            );
+            seen.insert(spec.clone());
+
+            // Collect specializations required by the main_api.
+            for new_spec in snippets.main_api.prereqs.template_specializations.iter() {
+                if !seen.contains(new_spec) {
+                    next_worklist.push(new_spec.clone());
+                }
+            }
+
+            impls_cc_details.push(snippets.cc_details.into_tokens(cc_details_prereqs));
+            // Collect any transitive specializations discovered in cc_details.
+            for new_spec in std::mem::take(&mut cc_details_prereqs.template_specializations) {
+                if !seen.contains(&new_spec) {
+                    next_worklist.push(new_spec);
+                }
+            }
+
+            cc_api_impl.extend(snippets.rs_details.into_tokens(extern_c_decls));
+            specializations.insert(spec, snippets.main_api);
+        }
+        worklist = next_worklist;
+    }
+
+    GeneratedSpecializations { specializations, impls_cc_details }
+}
+
+fn formatted_items_in_crate<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+) -> impl Iterator<Item = FormattedItem<'tcx>> {
     let tcx = db.tcx();
     let defs_in_crate = db.public_paths_by_def_id(db.source_crate_num());
     defs_in_crate
         .into_iter()
         .filter_map(|(def_id, paths)| {
+            if !crate::should_receive_bindings(db, def_id) {
+                return None;
+            }
             let mut snippets = None;
-            let aliases = if def_id.krate == db.source_crate_num() {
+            let canonical_name = db.symbol_canonical_name(def_id)?;
+            let aliases = if canonical_name.krate_num == db.source_crate_num() {
                 // We only want to call `generate_item` on DefIds from our source crate. External
                 // crate DefIds might appear in this map if our crate re-exports them, but we don't
                 // want to regenerate those definitions.
+                error_scope!(db, def_id);
                 let api_snippets = db.generate_item(def_id).transpose()?;
                 let (api_snippets, aliases) = api_snippets.map_or_else(
                     |err| (generate_unsupported_def(db, def_id, err).into_main_api(), vec![]),
@@ -1489,8 +2040,74 @@ fn formatted_items_in_crate(db: &dyn BindingsGenerator<'_>) -> impl Iterator<Ite
         .sorted_by_def_with(tcx, |item| item.def_id)
 }
 
+/// Key used to sort template specializations.
+/// Hash is produced by
+#[derive(Debug, Clone)]
+struct NodeSortKey {
+    hash: u64,
+    path_str: String,
+}
+impl NodeSortKey {
+    fn from_def_id(tcx: TyCtxt<'_>, def_id: DefId) -> Self {
+        let path_str = tcx.def_path_str(def_id);
+        let hash = tcx.def_path_hash(def_id).local_hash().as_u64();
+        NodeSortKey { hash, path_str }
+    }
+
+    fn new<'tcx>(tcx: TyCtxt<'tcx>, spec: &TemplateSpecialization<'tcx>) -> Self {
+        match spec {
+            TemplateSpecialization::RsStd(e) => {
+                let ty = e.self_ty_rs;
+
+                #[cfg_accessible(rustc_data_structures::stable_hash)]
+                use rustc_data_structures::stable_hash;
+                #[cfg_accessible(rustc_data_structures::stable_hasher)]
+                use rustc_data_structures::stable_hasher as stable_hash;
+
+                let hash = tcx.with_stable_hashing_context(|mut hcx| {
+                    let mut hasher = stable_hash::StableHasher::new();
+
+                    #[rustversion::before(2026-05-03)]
+                    stable_hash::HashStable::hash_stable(&ty, &mut hcx, &mut hasher);
+                    #[rustversion::since(2026-05-03)]
+                    stable_hash::StableHash::stable_hash(&ty, &mut hcx, &mut hasher);
+
+                    hasher
+                        .finish::<rustc_data_structures::fingerprint::Fingerprint>()
+                        .to_smaller_hash()
+                        .as_u64()
+                });
+
+                Self {
+                    hash,
+                    // Ty's Display implementation uses FmtPrinter to pretty print the type, so this
+                    // will be a reasonable representation of the underlying tree structure.
+                    path_str: ty.to_string(),
+                }
+            }
+            TemplateSpecialization::TraitImpl(t) => Self::from_def_id(tcx, t.trait_impl),
+        }
+    }
+}
+impl Ord for NodeSortKey {
+    fn cmp(&self, other: &Self) -> Ordering {
+        self.path_str.cmp(&other.path_str).then_with(|| self.hash.cmp(&other.hash))
+    }
+}
+impl PartialOrd for NodeSortKey {
+    fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+        Some(self.cmp(other))
+    }
+}
+impl PartialEq for NodeSortKey {
+    fn eq(&self, other: &Self) -> bool {
+        self.hash == other.hash && self.path_str == other.path_str
+    }
+}
+impl Eq for NodeSortKey {}
+
 /// Formats all public items from the Rust crate being compiled.
-fn generate_crate(db: &Database) -> Result<BindingsTokens> {
+fn generate_crate(db: &BindingsGenerator) -> Result<BindingsTokens> {
     struct CcDetails {
         def_id: DefId,
         namespace: NamespaceQualifier,
@@ -1508,6 +2125,7 @@ fn generate_crate(db: &Database) -> Result<BindingsTokens> {
     let mut main_apis = HashMap::<DefId, CcSnippet>::new();
     for item in formatted_items_in_crate(db) {
         let def_id = item.def_id;
+        error_scope!(db, def_id);
         // We delay handling aliases until after sorting by def id to ensure they are emitted in a
         // deterministic order, same as the main api definitions. This is important for caching and
         // testing.
@@ -1519,7 +2137,7 @@ fn generate_crate(db: &Database) -> Result<BindingsTokens> {
                 // `format_namespace_bound_cc_tokens`, so we want to carry it alongside our alias
                 // even though we technically no longer need it.
                 def_id,
-                NamespaceQualifier::from(alias),
+                alias.to_namespace_qualifier(db),
                 using_snippets.into_tokens(&mut cc_details_prereqs),
             ));
         }
@@ -1543,28 +2161,93 @@ fn generate_crate(db: &Database) -> Result<BindingsTokens> {
         cc_api_impl.extend(api_snippets.rs_details.into_tokens(&mut extern_c_decls));
     }
 
+    let worklist: Vec<_> = std::mem::take(&mut cc_details_prereqs.template_specializations)
+        .into_iter()
+        .chain(
+            main_apis.values().flat_map(|api| api.prereqs.template_specializations.iter()).cloned(),
+        )
+        .chain(collect_trait_impls(db))
+        .collect();
+
+    let GeneratedSpecializations { mut specializations, impls_cc_details } =
+        generate_specializations_fixpoint(
+            db,
+            worklist,
+            &mut cc_details_prereqs,
+            &mut extern_c_decls,
+            &mut cc_api_impl,
+        );
+
     // Find the order of `main_apis` that 1) meets the requirements of
     // `CcPrerequisites::defs` and 2) makes a best effort attempt to keep the
     // `main_apis` in the same order as the source order of the Rust APIs.
     let tcx = db.tcx();
+
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    enum Node<'tcx> {
+        Def(DefId),
+        Specialization(TemplateSpecialization<'tcx>),
+    }
     let ordered_ids = {
         let toposort::TopoSortResult { ordered: ordered_ids, failed: failed_ids } = {
-            let nodes = main_apis.keys().copied();
-            let deps = main_apis.iter().flat_map(|(&successor, main_api)| {
-                let predecessors = main_api.prereqs.defs.iter().copied().filter(|pre|
+            let nodes = main_apis
+                .keys()
+                .copied()
+                .map(Node::Def)
+                .chain(specializations.keys().cloned().map(Node::Specialization));
+            let deps = main_apis
+                .iter()
+                .map(|(successor, main_api)| (Node::Def(*successor), main_api))
+                .chain(
+                    specializations
+                        .iter()
+                        .map(|(spec, main_api)| (Node::Specialization(spec.clone()), main_api)),
+                )
+                .flat_map(|(successor, main_api)| {
+                    let predecessors = main_api
+                        .prereqs
+                        .defs
+                        .iter()
+                        .copied()
                         // Only consider `pre`s that we're currently generating APIs for.
-                        main_apis.contains_key(pre));
-                predecessors.map(move |predecessor| toposort::Dependency { predecessor, successor })
-            });
-            toposort::toposort(nodes, deps, move |&lhs_id, &rhs_id| {
-                stable_def_id_cmp(tcx, lhs_id, rhs_id)
+                        .filter(|pre| main_apis.contains_key(pre))
+                        .map(Node::Def)
+                        .chain(
+                            main_api
+                                .prereqs
+                                .template_specializations
+                                .iter()
+                                .cloned()
+                                .map(Node::Specialization),
+                        );
+                    predecessors.map(move |predecessor| toposort::Dependency {
+                        predecessor,
+                        successor: successor.clone(),
+                    })
+                })
+                .collect::<Vec<_>>();
+            let spec_keys: HashMap<&TemplateSpecialization<'_>, NodeSortKey> =
+                specializations.keys().map(|spec| (spec, NodeSortKey::new(tcx, spec))).collect();
+
+            toposort::toposort(nodes, deps, move |lhs_id, rhs_id| {
+                match (lhs_id, rhs_id) {
+                    (Node::Def(lhs_id), Node::Def(rhs_id)) => {
+                        stable_def_id_cmp(tcx, *lhs_id, *rhs_id)
+                    }
+                    // Prefer to emit specializations after defs.
+                    (Node::Specialization(left), Node::Specialization(right)) => {
+                        spec_keys[left].cmp(&spec_keys[right])
+                    }
+                    (Node::Def(_), Node::Specialization(_)) => Ordering::Less,
+                    (Node::Specialization(_), Node::Def(_)) => Ordering::Greater,
+                }
             })
         };
         assert_eq!(
             0,
             failed_ids.len(),
             "There are no known scenarios where CcPrerequisites::defs can form \
-                    a dependency cycle. These `LocalDefId`s form an unexpected cycle: {}",
+                    a dependency cycle. These `Node`s form an unexpected cycle: {}",
             failed_ids.into_iter().map(|id| format!("{:?}", id)).join(",")
         );
         ordered_ids
@@ -1576,71 +2259,104 @@ fn generate_crate(db: &Database) -> Result<BindingsTokens> {
         let mut already_declared: HashSet<DefId> = HashSet::new();
         let mut fwd_decls: HashSet<DefId> = HashSet::new();
         let mut includes = cc_details_prereqs.includes;
-        let mut ordered_main_apis: Vec<(DefId, TokenStream)> = Vec::new();
-        for def_id in ordered_ids.into_iter() {
+        let mut ordered_main_apis: Vec<(Node, TokenStream)> = Vec::new();
+        for node in ordered_ids.into_iter() {
             let CcSnippet {
-                tokens: cc_tokens,
-                prereqs: CcPrerequisites {
-                    includes: mut inner_includes,
-                    fwd_decls: inner_fwd_decls,
-                    .. // `defs` have already been utilized by `toposort` above
-                }
-            } = main_apis.remove(&def_id).unwrap();
+                        tokens: cc_tokens,
+                        prereqs: CcPrerequisites {
+                            includes: mut inner_includes,
+                            fwd_decls: inner_fwd_decls,
+                            .. // `defs` and `specializations` have already been utilized by `toposort` above
+                        }
+                    } = match &node {
+                        Node::Def(def_id) => main_apis.remove(def_id).unwrap(),
+                        Node::Specialization(spec) => specializations.remove(spec).unwrap(),
+                    };
 
             fwd_decls.extend(inner_fwd_decls.difference(&already_declared).copied());
-            already_declared.insert(def_id);
-            already_declared.extend(inner_fwd_decls.into_iter());
+            already_declared.extend(inner_fwd_decls);
+            // We don't need to do this for specializations.
+            if let Node::Def(def_id) = node {
+                already_declared.insert(def_id);
+            }
 
             includes.append(&mut inner_includes);
-            ordered_main_apis.push((def_id, cc_tokens));
+            ordered_main_apis.push((node, cc_tokens));
         }
 
         let fwd_decls = fwd_decls
             .into_iter()
             .sorted_by_def(tcx)
-            .map(|local_def_id| (local_def_id, generate_fwd_decl(db, local_def_id)));
+            .map(|def_id| (Node::Def(def_id), generate_fwd_decl(db, def_id)));
 
+        let cpp_top_level_ns: Vec<Rc<str>> =
+            format_top_level_ns_for_crate(db, db.source_crate_num())
+                .iter()
+                .map(|sym| Rc::from(sym.as_str()))
+                .collect();
         // The first item of the tuple here is the DefId of the namespace.
-        let ordered_cc: Vec<(Option<DefId>, NamespaceQualifier, TokenStream)> =
-            fwd_decls
-                .into_iter()
-                .chain(ordered_main_apis)
-                .map(|(def_id, tokens)| {
+        let ordered_cc: Vec<(Option<DefId>, NamespaceQualifier, TokenStream)> = fwd_decls
+            .into_iter()
+            .chain(ordered_main_apis)
+            .map(|(node, tokens)| match node {
+                Node::Def(def_id) => {
+                    let features = db.crate_features(def_id.krate);
+                    let use_leading_colons =
+                        features.contains(crubit_feature::CrubitFeature::LeadingColonsForCppType);
                     (
                         tcx.opt_parent(def_id),
-                        db.symbol_canonical_name(def_id)
-                            .unwrap_or_else(|| {
-                                panic!("Exported item {def_id:?} should have a canonical name")
-                            })
-                            .cpp_ns_path,
+                        NamespaceQualifier::new(
+                            cpp_top_level_ns.iter().cloned().chain({
+                                db.symbol_canonical_name(def_id)
+                                    .unwrap_or_else(|| {
+                                        panic!(
+                                            "Exported item {def_id:?} should have a canonical name"
+                                        )
+                                    })
+                                    .cpp_ns_path
+                                    .namespaces
+                            }),
+                            use_leading_colons,
+                        ),
                         tokens,
                     )
-                })
-                .chain(cc_details.into_iter().map(|details| {
-                    (tcx.opt_parent(details.def_id), details.namespace, details.tokens)
-                }))
-                .collect_vec();
+                }
+                // Specializations always live in the top-level namespace.
+                Node::Specialization(_) => {
+                    let use_leading_colons = db
+                        .crate_features(db.source_crate_num())
+                        .contains(crubit_feature::CrubitFeature::LeadingColonsForCppType);
+                    (None, NamespaceQualifier::new::<Rc<str>>([], use_leading_colons), tokens)
+                }
+            })
+            .chain(cc_details.into_iter().map(|details| {
+                let use_leading_colons = db
+                    .crate_features(details.def_id.krate)
+                    .contains(crubit_feature::CrubitFeature::LeadingColonsForCppType);
+                (
+                    tcx.opt_parent(details.def_id),
+                    NamespaceQualifier::new(
+                        cpp_top_level_ns.iter().cloned().chain(details.namespace.namespaces),
+                        use_leading_colons,
+                    ),
+                    details.tokens,
+                )
+            }))
+            .collect_vec();
 
         (includes, ordered_cc)
     };
 
     // Generate top-level elements of the C++ header file.
     let cc_api = {
-        let cpp_top_level_ns = format_top_level_ns_for_crate(db, db.source_crate_num())
-            .iter()
-            .map(|ns| db.format_cc_ident(*ns))
-            .collect::<Result<Vec<_>>>()?;
-
         let includes = format_cc_includes(&includes);
         let ordered_cc = format_namespace_bound_cc_tokens(db, ordered_cc, tcx);
         quote! {
             #includes
             __NEWLINE__ __NEWLINE__
-            namespace #(#cpp_top_level_ns)::* {
-                __NEWLINE__
-                #ordered_cc
-                __NEWLINE__
-            }
+            #ordered_cc
+            __NEWLINE__
+            #(#impls_cc_details)__NEWLINE__*
             __NEWLINE__
         }
     };
@@ -1654,11 +2370,67 @@ fn generate_crate(db: &Database) -> Result<BindingsTokens> {
         cc_api_impl = quote! {
             #cc_api_impl
 
-           extern "C" {
+           unsafe extern "C" {
                #decls
            }
         };
     }
 
     Ok(BindingsTokens { cc_api, cc_api_impl })
+}
+
+#[rustversion::before(2026-04-19)]
+pub fn normalize_ty<'tcx, T>(_tcx: TyCtxt<'tcx>, _param_env: ty::ParamEnv<'tcx>, val: T) -> T {
+    val
+}
+
+#[rustversion::since(2026-04-19)]
+pub fn normalize_ty<'tcx, T>(
+    tcx: TyCtxt<'tcx>,
+    param_env: ty::ParamEnv<'tcx>,
+    val: ty::Unnormalized<'tcx, T>,
+) -> T
+where
+    T: ty::TypeFoldable<TyCtxt<'tcx>>,
+{
+    use rustc_infer::infer::TyCtxtInferExt;
+    use rustc_infer::traits::ObligationCause;
+    use rustc_trait_selection::infer::canonical::ir::TypingMode;
+    use rustc_trait_selection::traits::ObligationCtxt;
+
+    let infcx = tcx.infer_ctxt().build(TypingMode::non_body_analysis());
+    let ocx = ObligationCtxt::new_with_diagnostics(&infcx);
+    let cause = ObligationCause::dummy(); // RESPECTFUL_TERMS_EXCEPTION
+    ocx.normalize(&cause, param_env, val)
+}
+
+/// Returns true if the field is public and stable.
+///
+/// Notably, this rejects public fields that are unstable, which may exist for macro accessibility
+/// reasons.
+pub fn field_def_is_pub_and_stable(
+    tcx: TyCtxt<'_>,
+    field_def: &ty::FieldDef,
+) -> Result<(), PrivateOrUnstableField> {
+    if field_def.vis != ty::Visibility::Public {
+        return Err(PrivateOrUnstableField::Private);
+    }
+    if tcx.lookup_stability(field_def.did).is_some_and(|stability| stability.is_unstable()) {
+        return Err(PrivateOrUnstableField::Unstable);
+    }
+    Ok(())
+}
+
+pub enum PrivateOrUnstableField {
+    Private,
+    Unstable,
+}
+
+impl Display for PrivateOrUnstableField {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            PrivateOrUnstableField::Private => write!(f, "private"),
+            PrivateOrUnstableField::Unstable => write!(f, "unstable"),
+        }
+    }
 }

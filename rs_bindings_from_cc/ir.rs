@@ -6,12 +6,12 @@
 //! `rs_bindings_from_cc/ir.h` for more
 //! information.
 
-use arc_anyhow::{anyhow, bail, ensure, Context, Error, Result};
-use code_gen_utils::{make_rs_ident, NamespaceQualifier};
+use arc_anyhow::{bail, ensure, Context, Error, Result};
+use code_gen_utils::make_rs_ident;
 use crubit_feature::CrubitFeature;
 use proc_macro2::{Ident, TokenStream};
 use quote::{quote, ToTokens};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::cell::OnceCell;
 use std::cmp::Ordering;
 use std::collections::hash_map::{Entry, HashMap};
@@ -24,13 +24,11 @@ use std::rc::Rc;
 pub trait GenericItem {
     fn id(&self) -> ItemId;
 
+    /// The unique name (probably the USR) of the item for log aggregation purposes.
+    fn unique_name(&self) -> Option<Rc<str>>;
+
     /// The Bazel target which owns the bindings for this item.
     fn owning_target(&self) -> Option<BazelLabel>;
-
-    /// The name of the item, readable by programmers.
-    ///
-    /// For example, `void Foo();` should have name `Foo`.
-    fn debug_name(&self, ir: &IR) -> Rc<str>;
 
     /// If this item is unsupported by Crubit, we may generate
     /// markers in the Rust bindings to indicate that the item is not
@@ -57,11 +55,11 @@ where
     fn id(&self) -> ItemId {
         (**self).id()
     }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        (**self).unique_name()
+    }
     fn owning_target(&self) -> Option<BazelLabel> {
         (**self).owning_target()
-    }
-    fn debug_name(&self, ir: &IR) -> Rc<str> {
-        (**self).debug_name(ir)
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         (**self).unsupported_kind()
@@ -213,6 +211,10 @@ pub struct CcType {
     pub variant: CcTypeVariant,
     pub is_const: bool,
     pub unknown_attr: Rc<str>,
+    // An ordered list of lifetime variable names applied to this type. It is valid for the same
+    // name to appear multiple times.
+    #[serde(default)]
+    pub explicit_lifetimes: Vec<Rc<str>>,
 }
 
 impl CcType {
@@ -224,9 +226,10 @@ impl CcType {
 impl From<&Record> for CcType {
     fn from(record: &Record) -> Self {
         CcType {
-            variant: CcTypeVariant::Decl(record.id),
+            variant: CcTypeVariant::Decl { id: record.id, template_args: None },
             is_const: false,
             unknown_attr: Rc::default(),
+            explicit_lifetimes: Vec::default(),
         }
     }
 }
@@ -234,9 +237,10 @@ impl From<&Record> for CcType {
 impl From<&TypeAlias> for CcType {
     fn from(alias: &TypeAlias) -> Self {
         CcType {
-            variant: CcTypeVariant::Decl(alias.id),
+            variant: CcTypeVariant::Decl { id: alias.id, template_args: None },
             is_const: false,
             unknown_attr: Rc::default(),
+            explicit_lifetimes: Vec::default(),
         }
     }
 }
@@ -244,9 +248,10 @@ impl From<&TypeAlias> for CcType {
 impl From<&ExistingRustType> for CcType {
     fn from(existing_rust_type: &ExistingRustType) -> Self {
         CcType {
-            variant: CcTypeVariant::Decl(existing_rust_type.id),
+            variant: CcTypeVariant::Decl { id: existing_rust_type.id, template_args: None },
             is_const: false,
             unknown_attr: Rc::default(),
+            explicit_lifetimes: Vec::default(),
         }
     }
 }
@@ -454,8 +459,24 @@ pub enum CcTypeVariant {
 
         /// The parameter types, followed by the return type.
         param_and_return_types: Rc<[CcType]>,
+
+        // Lifetime variable names bound by this function pointer.
+        #[serde(default)]
+        lifetime_inputs: Vec<Rc<str>>,
     },
-    Decl(ItemId),
+    Decl {
+        id: ItemId,
+        /// The type arguments to the type. These override any type arguments attached to the item.
+        #[serde(default)]
+        template_args: Option<Rc<[CcType]>>,
+    },
+    /// This type could not be translated to Rust.
+    ///
+    /// It's preferable to forward on a failed type conversion,
+    /// to defer errors as late as possible. For instance, struct
+    /// fields should become blobs of bytes, instead of failing
+    /// the whole struct.
+    Error(FormattedError),
 }
 
 impl CcTypeVariant {
@@ -483,7 +504,7 @@ pub trait TypeWithDeclId {
 impl TypeWithDeclId for CcType {
     fn decl_id(&self) -> Option<ItemId> {
         match &self.variant {
-            CcTypeVariant::Decl(id) => Some(*id),
+            CcTypeVariant::Decl { id, .. } => Some(*id),
             _ => None,
         }
     }
@@ -565,6 +586,9 @@ impl Debug for ItemId {
 }
 
 impl ItemId {
+    pub fn as_u64(self) -> u64 {
+        self.0 as u64
+    }
     pub const fn new_for_testing(value: usize) -> Self {
         Self(value)
     }
@@ -781,17 +805,18 @@ pub struct InstanceMethodMetadata {
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct MemberFuncMetadata {
-    pub record_id: ItemId,
-    pub instance_method_metadata: Option<InstanceMethodMetadata>,
-}
-
-#[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize)]
-#[serde(deny_unknown_fields)]
 pub struct FuncParam {
     #[serde(rename(deserialize = "type"))]
     pub type_: CcType,
     pub identifier: Identifier,
+    /// A list of parameter indexes attached to this parameter by Clang's lifetime_capture_by.
+    /// In `f(x, y)`, `x` is parameter 0 and y is parameter 1. In the member function
+    /// `S::f(x, y)`, `this` is parameter 0, `x` is 1, and `y` is 2.
+    #[serde(default)]
+    pub clang_lifetime_capture_by: Vec<i32>,
+    /// True if this parameter was annotated with Clang's lifetimebound.
+    #[serde(default)]
+    pub clang_lifetimebound: bool,
     /// A human-readable list of attributes that Crubit doesn't understand.
     ///
     /// Because attributes can change the behavior or semantics of function
@@ -816,6 +841,7 @@ pub enum SafetyAnnotation {
 pub struct Func {
     pub cc_name: UnqualifiedIdentifier,
     pub rs_name: UnqualifiedIdentifier,
+    pub unique_name: Rc<str>,
     pub owning_target: BazelLabel,
     pub mangled_name: Rc<str>,
     pub doc_comment: Option<Rc<str>>,
@@ -828,7 +854,7 @@ pub struct Func {
     /// not originally part of the IR.
     pub lifetime_params: Vec<LifetimeName>,
     pub is_inline: bool,
-    pub member_func_metadata: Option<MemberFuncMetadata>,
+    pub instance_method_metadata: Option<InstanceMethodMetadata>,
     pub is_extern_c: bool,
     pub is_noreturn: bool,
     pub is_variadic: bool,
@@ -850,6 +876,11 @@ pub struct Func {
     pub safety_annotation: SafetyAnnotation,
     pub source_loc: Rc<str>,
     pub id: ItemId,
+    /// The enclosing item ID.
+    ///
+    /// If this is a free function, then this will be None or a namespace. If this is
+    /// a member function, it will be a record type in C++, but might be an
+    /// `ExistingRustType` if it was renamed.
     pub enclosing_item_id: Option<ItemId>,
 
     /// If this function was declared as a `friend` inside of a record
@@ -860,35 +891,21 @@ pub struct Func {
     /// invoke this function.
     pub adl_enclosing_record: Option<ItemId>,
     pub must_bind: bool,
+
+    // Lifetime variable names bound by this function.
+    #[serde(default)]
+    pub lifetime_inputs: Vec<Rc<str>>,
 }
 
 impl GenericItem for Func {
     fn id(&self) -> ItemId {
         self.id
     }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        Some(self.unique_name.clone())
+    }
     fn owning_target(&self) -> Option<BazelLabel> {
         Some(self.owning_target.clone())
-    }
-    fn debug_name(&self, ir: &IR) -> Rc<str> {
-        let record: Option<Rc<str>> = ir.record_for_member_func(self).map(|r| r.debug_name(ir));
-        let record: Option<&str> = record.as_deref();
-
-        let func_name = match &self.rs_name {
-            UnqualifiedIdentifier::Identifier(id) => id.identifier.to_string(),
-            UnqualifiedIdentifier::Operator(op) => op.cc_name(),
-            UnqualifiedIdentifier::Destructor => {
-                format!("~{}", record.expect("destructor must be associated with a record"))
-            }
-            UnqualifiedIdentifier::Constructor => {
-                record.expect("constructor must be associated with a record").to_string()
-            }
-        };
-
-        if let Some(record_name) = record {
-            format!("{}::{}", record_name, func_name).into()
-        } else {
-            func_name.into()
-        }
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         if self.cc_name == UnqualifiedIdentifier::Constructor {
@@ -910,10 +927,7 @@ impl GenericItem for Func {
 
 impl Func {
     pub fn is_instance_method(&self) -> bool {
-        self.member_func_metadata
-            .as_ref()
-            .filter(|meta| meta.instance_method_metadata.is_some())
-            .is_some()
+        self.instance_method_metadata.is_some()
     }
 }
 
@@ -931,7 +945,7 @@ pub struct Field {
     pub cpp_identifier: Option<Identifier>,
     pub doc_comment: Option<Rc<str>>,
     #[serde(rename(deserialize = "type"))]
-    pub type_: Result<CcType, String>,
+    pub type_: CcType,
     pub access: AccessSpecifier,
     pub offset: usize,
     pub size: usize,
@@ -945,6 +959,11 @@ pub struct Field {
     // TODO(kinuko): Consider removing this, it is a duplicate of the same information
     // in `Record`.
     pub is_inheritable: bool,
+
+    /// The `[[deprecated("...")]]` string. If `[[deprecated]]`, then the empty
+    /// string is used.
+    #[serde(default)]
+    pub deprecated: Option<Rc<str>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize)]
@@ -967,6 +986,7 @@ pub struct BaseClass {
 pub struct IncompleteRecord {
     pub cc_name: Identifier,
     pub rs_name: Identifier,
+    pub unique_name: Rc<str>,
     pub id: ItemId,
     pub owning_target: BazelLabel,
     /// A human-readable list of attributes that Crubit doesn't understand.
@@ -984,11 +1004,11 @@ impl GenericItem for IncompleteRecord {
     fn id(&self) -> ItemId {
         self.id
     }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        Some(self.unique_name.clone())
+    }
     fn owning_target(&self) -> Option<BazelLabel> {
         Some(self.owning_target.clone())
-    }
-    fn debug_name(&self, _: &IR) -> Rc<str> {
-        self.cc_name.identifier.clone()
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         self.record_type.unsupported_item_kind()
@@ -1039,14 +1059,24 @@ pub struct SizeAlign {
     pub alignment: usize,
 }
 
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum BackingType {
+    DynCallable,
+    AnyInvocable,
+}
+
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub enum FnTrait {
+    Fn,
+    FnMut,
+    FnOnce,
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub enum BridgeType {
-    BridgeVoidConverters {
-        rust_name: Rc<str>,
-        rust_to_cpp_converter: Rc<str>,
-        cpp_to_rust_converter: Rc<str>,
-    },
     ProtoMessageBridge {
         rust_name: Rc<str>,
     },
@@ -1054,17 +1084,25 @@ pub enum BridgeType {
         rust_name: Rc<str>,
         abi_rust: Rc<str>,
         abi_cpp: Rc<str>,
-        template_args: Rc<[TemplateArg]>,
+        template_args: Rc<[CcType]>,
     },
     StdOptional(CcType),
     StdPair(CcType, CcType),
     StdString,
+    Callable {
+        backing_type: BackingType,
+        fn_trait: FnTrait,
+        return_type: CcType,
+        param_types: Vec<CcType>,
+    },
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize)]
-pub struct TemplateArg {
-    #[serde(rename(deserialize = "type"))]
-    pub type_: Result<CcType, String>,
+#[serde(deny_unknown_fields)]
+pub enum TemplateArg {
+    Type(CcType),
+    Bool(bool),
+    Int(i64),
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize)]
@@ -1084,13 +1122,25 @@ pub enum TemplateSpecializationKind {
     /// std::basic_string_view<wchar_t, std::char_traits<wchar_t>>
     StdWStringView,
     /// std::vector<T, std::allocator<T>>
-    StdVector { element_type: TemplateArg },
+    StdVector {
+        #[serde(rename(deserialize = "element_type"))]
+        raw_element_type: CcType,
+    },
     /// std::unique_ptr<T, std::default_delete<T>>
-    StdUniquePtr { element_type: TemplateArg },
+    StdUniquePtr {
+        #[serde(rename(deserialize = "element_type"))]
+        raw_element_type: CcType,
+    },
     /// c9::Co<T>
-    C9Co { element_type: TemplateArg },
+    C9Co {
+        #[serde(rename(deserialize = "element_type"))]
+        raw_element_type: CcType,
+    },
     /// absl::Span<T>
-    AbslSpan { element_type: TemplateArg },
+    AbslSpan {
+        #[serde(rename(deserialize = "element_type"))]
+        raw_element_type: CcType,
+    },
     /// Some other template specialization.
     NonSpecial,
 }
@@ -1115,6 +1165,13 @@ pub struct TraitDerives {
     pub custom: Vec<Rc<str>>,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, Hash)]
+#[serde(deny_unknown_fields)]
+pub struct OwnedPtrConfig {
+    pub owned_ptr_type: Rc<str>,
+    pub drop_impl: Rc<str>,
+}
+
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Record {
@@ -1124,6 +1181,7 @@ pub struct Record {
     /// Today, cc_name is only used for debugging, checking for names starting in __, and generating
     /// parent modules for nested items which are disallowed for template specializations in Crubit.
     pub cc_name: Identifier,
+    pub unique_name: Rc<str>,
 
     /// Mangled record names are used to 1) provide valid Rust identifiers for
     /// C++ template specializations, and 2) help build unique names for virtual
@@ -1140,7 +1198,8 @@ pub struct Record {
     pub unknown_attr: Option<Rc<str>>,
     pub doc_comment: Option<Rc<str>>,
     pub bridge_type: Option<BridgeType>,
-    pub owned_ptr_type: Option<Rc<str>>,
+    #[serde(default)]
+    pub owned_ptr_config: Option<OwnedPtrConfig>,
     pub source_loc: Rc<str>,
     pub unambiguous_public_bases: Vec<BaseClass>,
     pub fields: Vec<Field>,
@@ -1149,7 +1208,7 @@ pub struct Record {
     pub trait_derives: TraitDerives,
     pub is_derived_class: bool,
     pub override_alignment: bool,
-    pub is_unsafe_type: bool,
+    pub safety_annotation: SafetyAnnotation,
     pub copy_constructor: SpecialMemberFunc,
     pub move_constructor: SpecialMemberFunc,
     pub destructor: SpecialMemberFunc,
@@ -1161,23 +1220,34 @@ pub struct Record {
     pub nodiscard: Option<Rc<str>>,
     pub record_type: RecordType,
     pub is_aggregate: bool,
-    pub is_anon_record_with_typedef: bool,
+    pub is_canonical_alias: bool,
     pub child_item_ids: Vec<ItemId>,
     pub enclosing_item_id: Option<ItemId>,
     pub must_bind: bool,
     /// Whether this type has an overload of `operator delete`.
     pub overloads_operator_delete: bool,
+    // Lifetime variable names bound by this record.
+    #[serde(default)]
+    pub lifetime_inputs: Vec<Rc<str>>,
+    pub detected_formatter: bool,
+    /// The `[[deprecated("...")]]` string. If `[[deprecated]]`, then the empty
+    /// string is used.
+    #[serde(default)]
+    pub deprecated: Option<Rc<str>>,
+    /// Whether this type is annotated as thread-safe (CRUBIT_THREAD_SAFE).
+    #[serde(default)]
+    pub is_thread_safe: bool,
 }
 
 impl GenericItem for Record {
     fn id(&self) -> ItemId {
         self.id
     }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        Some(self.unique_name.clone())
+    }
     fn owning_target(&self) -> Option<BazelLabel> {
         Some(self.owning_target.clone())
-    }
-    fn debug_name(&self, _: &IR) -> Rc<str> {
-        self.cc_name.identifier.clone()
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         self.record_type.unsupported_item_kind()
@@ -1209,6 +1279,45 @@ impl Record {
         self.is_trivial_abi
     }
 
+    // TODO(b/498977848): The record with cc_name
+    // "std::basic_string_view<char8_t, std::char_traits<char8_t>>" with
+    // rs_name "__CcTemplateInstNSt3__u17basic_string_viewIDuNS_11char_traitsIDuEEEE" is given
+    // TemplateSpecialization kind NonSpecial. This is unfortunate, since we want to exclude all
+    // flavors of string_view because of our special-casing.
+    pub fn is_string_view(&self) -> bool {
+        match &self.template_specialization {
+            Some(TemplateSpecialization { defining_target, kind, .. }) => {
+                let is_in_cc_std = *defining_target
+                    == BazelLabel("//support/cc_std:cc_std".into())
+                    || *defining_target
+                        == BazelLabel(
+                            "//third_party/crosstool/rust/stable/crubit/support/cc_std:cc_std"
+                                .into(),
+                        );
+                if is_in_cc_std {
+                    let is_string_view = *kind == TemplateSpecializationKind::StdStringView
+                        || *kind == TemplateSpecializationKind::StdWStringView;
+                    if is_string_view {
+                        return true;
+                    };
+                    self.cc_name.as_str().starts_with("std::basic_string_view<")
+                } else {
+                    false
+                }
+            }
+            _ => false,
+        }
+    }
+
+    /// Detect whether a `Record` is *specifically* the raw projection of `std::string_view`, as we
+    /// special-case this.
+    pub fn is_raw_string_view(&self) -> bool {
+        matches!(
+            self.template_specialization,
+            Some(TemplateSpecialization { kind: TemplateSpecializationKind::StdStringView, .. })
+        ) && self.rs_name.identifier.as_ref() == "raw_string_view"
+    }
+
     pub fn is_union(&self) -> bool {
         match self.record_type {
             RecordType::Union => true,
@@ -1218,10 +1327,11 @@ impl Record {
 
     /// Returns a `TokenStream` containing the C++ tag kind for this record.
     ///
-    /// This is the `struct`, `union`, or `class` keyword, or nothing if this
-    /// is an anonymous record with a typedef.
+    /// This is the `struct`, `union`, or `class` keyword, or nothing if this is a canonical alias
+    /// to a record type. (For example, typedefs to anonymous records, or template specializations
+    /// with a `preferred_name`.)
     pub fn cc_tag_kind(&self) -> TokenStream {
-        if self.is_anon_record_with_typedef {
+        if self.is_canonical_alias {
             quote! {}
         } else {
             self.record_type.into_token_stream()
@@ -1251,6 +1361,11 @@ impl Record {
     }
 
     pub fn should_derive_copy(&self) -> bool {
+        // Thread-safe types wrap their fields in UnsafeCell<[MaybeUninit<u8>; N]>,
+        // which prevents them from deriving Copy.
+        if self.is_thread_safe {
+            return false;
+        }
         match self.trait_derives.copy {
             TraitImplPolarity::Positive => true,
             TraitImplPolarity::Negative => false,
@@ -1270,12 +1385,12 @@ impl Record {
     pub fn check_by_value(&self) -> Result<()> {
         ensure!(
             self.destructor != SpecialMemberFunc::Unavailable,
-            "Can't directly construct values of type `{}` as it has a non-public or deleted destructor",
+            "`{}` can't be used by-value because it has a non-public or deleted destructor",
             self.cc_name
         );
         ensure!(
             !self.is_abstract,
-            "Can't directly construct values of type `{}`: it is abstract",
+            "`{}` can be used by-value because it has pure virtual functions that are not overridden",
             self.cc_name
         );
         Ok(())
@@ -1286,18 +1401,54 @@ impl Record {
     /// Notably, all records that have a unique owning target are supported, e.g. `std::string`, but
     /// not all supported records have a unique owning target, e.g. `std::vector<int>`.
     pub fn has_unique_owning_target(self: &Record) -> bool {
-        matches!(
-            &self.template_specialization,
-            Some(TemplateSpecialization {
-                kind: TemplateSpecializationKind::StdStringView
-                    | TemplateSpecializationKind::StdWStringView,
-                ..
-            }) | None
-        )
+        self.template_specialization.is_none() || self.is_canonical_alias
     }
+}
 
-    pub fn defining_target(&self) -> Option<&BazelLabel> {
-        self.template_specialization.as_ref().map(|ts| &ts.defining_target)
+#[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Constant {
+    pub value: IntegerConstant,
+    pub cc_name: Identifier,
+    pub rs_name: Identifier,
+    pub unique_name: Rc<str>,
+    pub id: ItemId,
+    pub owning_target: BazelLabel,
+    pub source_loc: Rc<str>,
+    pub unknown_attr: Option<Rc<str>>,
+    pub enclosing_item_id: Option<ItemId>,
+    #[serde(rename(deserialize = "type"))]
+    pub type_: CcType,
+    pub must_bind: bool,
+    /// The `[[deprecated("...")]]` string. If `[[deprecated]]`, then the empty
+    /// string is used.
+    #[serde(default)]
+    pub deprecated: Option<Rc<str>>,
+    #[serde(default)]
+    pub doc_comment: Option<Rc<str>>,
+}
+
+impl GenericItem for Constant {
+    fn id(&self) -> ItemId {
+        self.id
+    }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        Some(self.unique_name.clone())
+    }
+    fn owning_target(&self) -> Option<BazelLabel> {
+        Some(self.owning_target.clone())
+    }
+    fn unsupported_kind(&self) -> UnsupportedItemKind {
+        UnsupportedItemKind::GlobalVar
+    }
+    fn source_loc(&self) -> Option<Rc<str>> {
+        Some(self.source_loc.clone())
+    }
+    fn unknown_attr(&self) -> Option<Rc<str>> {
+        self.unknown_attr.clone()
+    }
+    fn must_bind(&self) -> bool {
+        self.must_bind
     }
 }
 
@@ -1306,6 +1457,7 @@ impl Record {
 pub struct GlobalVar {
     pub cc_name: Identifier,
     pub rs_name: Identifier,
+    pub unique_name: Rc<str>,
     pub id: ItemId,
     pub owning_target: BazelLabel,
     pub source_loc: Rc<str>,
@@ -1316,17 +1468,23 @@ pub struct GlobalVar {
     #[serde(rename(deserialize = "type"))]
     pub type_: CcType,
     pub must_bind: bool,
+    /// The `[[deprecated("...")]]` string. If `[[deprecated]]`, then the empty
+    /// string is used.
+    #[serde(default)]
+    pub deprecated: Option<Rc<str>>,
+    #[serde(default)]
+    pub doc_comment: Option<Rc<str>>,
 }
 
 impl GenericItem for GlobalVar {
     fn id(&self) -> ItemId {
         self.id
     }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        Some(self.unique_name.clone())
+    }
     fn owning_target(&self) -> Option<BazelLabel> {
         Some(self.owning_target.clone())
-    }
-    fn debug_name(&self, _: &IR) -> Rc<str> {
-        self.rs_name.identifier.clone()
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         UnsupportedItemKind::GlobalVar
@@ -1347,6 +1505,7 @@ impl GenericItem for GlobalVar {
 pub struct Enum {
     pub cc_name: Identifier,
     pub rs_name: Identifier,
+    pub unique_name: Rc<str>,
     pub id: ItemId,
     pub owning_target: BazelLabel,
     pub source_loc: Rc<str>,
@@ -1361,17 +1520,28 @@ pub struct Enum {
     pub unknown_attr: Option<Rc<str>>,
     pub enclosing_item_id: Option<ItemId>,
     pub must_bind: bool,
+    pub detected_formatter: bool,
+    /// The `[[nodiscard("...")]]` string. If `[[nodiscard]]`, then the empty
+    /// string is used.
+    #[serde(default)]
+    pub nodiscard: Option<Rc<str>>,
+    /// The `[[deprecated("...")]]` string. If `[[deprecated]]`, then the empty
+    /// string is used.
+    #[serde(default)]
+    pub deprecated: Option<Rc<str>>,
+    #[serde(default)]
+    pub doc_comment: Option<Rc<str>>,
 }
 
 impl GenericItem for Enum {
     fn id(&self) -> ItemId {
         self.id
     }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        Some(self.unique_name.clone())
+    }
     fn owning_target(&self) -> Option<BazelLabel> {
         Some(self.owning_target.clone())
-    }
-    fn debug_name(&self, _: &IR) -> Rc<str> {
-        self.rs_name.identifier.clone()
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         UnsupportedItemKind::Enum
@@ -1394,6 +1564,12 @@ pub struct Enumerator {
     pub value: IntegerConstant,
     /// A human-readable list of attributes that Crubit doesn't understand.
     pub unknown_attr: Option<Rc<str>>,
+    /// The `[[deprecated("...")]]` string. If `[[deprecated]]`, then the empty
+    /// string is used.
+    #[serde(default)]
+    pub deprecated: Option<Rc<str>>,
+    #[serde(default)]
+    pub doc_comment: Option<Rc<str>>,
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize)]
@@ -1401,6 +1577,7 @@ pub struct Enumerator {
 pub struct TypeAlias {
     pub cc_name: Identifier,
     pub rs_name: Identifier,
+    pub unique_name: Rc<str>,
     pub id: ItemId,
     pub owning_target: BazelLabel,
     pub doc_comment: Option<Rc<str>>,
@@ -1410,17 +1587,24 @@ pub struct TypeAlias {
     pub source_loc: Rc<str>,
     pub enclosing_item_id: Option<ItemId>,
     pub must_bind: bool,
+    /// The `[[deprecated("...")]]` string. If `[[deprecated]]`, then the empty
+    /// string is used.
+    #[serde(default)]
+    pub deprecated: Option<Rc<str>>,
+    // Lifetime variable names bound by this type alias.
+    #[serde(default)]
+    pub lifetime_inputs: Vec<Rc<str>>,
 }
 
 impl GenericItem for TypeAlias {
     fn id(&self) -> ItemId {
         self.id
     }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        Some(self.unique_name.clone())
+    }
     fn owning_target(&self) -> Option<BazelLabel> {
         Some(self.owning_target.clone())
-    }
-    fn debug_name(&self, _: &IR) -> Rc<str> {
-        self.rs_name.identifier.clone()
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         UnsupportedItemKind::TypeAlias
@@ -1465,7 +1649,7 @@ impl<T> Hash for IgnoredField<T> {
     fn hash<H: Hasher>(&self, _state: &mut H) {}
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FormattedError {
     pub fmt: Rc<str>,
@@ -1525,12 +1709,14 @@ pub struct UnsupportedItemPath {
 #[serde(deny_unknown_fields)]
 pub struct UnsupportedItem {
     pub name: Rc<str>,
+    pub unique_name: Option<Rc<str>>,
     pub kind: UnsupportedItemKind,
     pub path: Option<UnsupportedItemPath>,
     errors: Vec<Rc<FormattedError>>,
     pub source_loc: Option<Rc<str>>,
     pub id: ItemId,
     pub must_bind: bool,
+    pub defining_target: Option<BazelLabel>,
 
     /// Stores either one natively generated [`arc_anyhow::Error`] or the
     /// memoized result of converting `errors`.
@@ -1542,11 +1728,11 @@ impl GenericItem for UnsupportedItem {
     fn id(&self) -> ItemId {
         self.id
     }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        self.unique_name.clone()
+    }
     fn owning_target(&self) -> Option<BazelLabel> {
         None
-    }
-    fn debug_name(&self, _: &IR) -> Rc<str> {
-        self.name.clone()
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         self.kind
@@ -1563,49 +1749,30 @@ impl GenericItem for UnsupportedItem {
 }
 
 impl UnsupportedItem {
-    fn new(
-        ir: &IR,
-        item: &impl GenericItem,
+    pub fn new_raw(
+        name: Rc<str>,
+        unique_name: Option<Rc<str>>,
+        kind: UnsupportedItemKind,
+        id: ItemId,
+        source_loc: Option<Rc<str>>,
+        defining_target: Option<BazelLabel>,
+        must_bind: bool,
         path: Option<UnsupportedItemPath>,
         error: Option<Rc<FormattedError>>,
         cause: Option<Error>,
-        must_bind: bool,
     ) -> Self {
         Self {
-            name: item.debug_name(ir),
+            name,
+            unique_name,
             errors: error.into_iter().collect(),
-            kind: item.unsupported_kind(),
+            kind,
             path,
-            source_loc: item.source_loc(),
-            id: item.id(),
+            source_loc,
+            id,
             cause: IgnoredField(cause.map(|e| OnceCell::from(vec![e])).unwrap_or_default()),
             must_bind,
+            defining_target,
         }
-    }
-
-    pub fn new_with_static_message(
-        ir: &IR,
-        item: &impl GenericItem,
-        path: Option<UnsupportedItemPath>,
-        message: &'static str,
-    ) -> Self {
-        Self::new(
-            ir,
-            item,
-            path,
-            Some(Rc::new(FormattedError { fmt: message.into(), message: message.into() })),
-            None,
-            item.must_bind(),
-        )
-    }
-
-    pub fn new_with_cause(
-        ir: &IR,
-        item: &impl GenericItem,
-        path: Option<UnsupportedItemPath>,
-        cause: Error,
-    ) -> Self {
-        Self::new(ir, item, path, None, Some(cause), item.must_bind())
     }
 
     pub fn errors(&self) -> &[Error] {
@@ -1613,10 +1780,10 @@ impl UnsupportedItem {
             self.errors
                 .iter()
                 .map(|e| {
-                    error_report::FormattedError {
-                        fmt: e.fmt.to_string().into(),
-                        message: e.message.to_string().into(),
-                    }
+                    error_report::FormattedError::new(
+                        e.fmt.to_string().into(),
+                        e.message.to_string().into(),
+                    )
                     .into()
                 })
                 .collect()
@@ -1636,11 +1803,11 @@ impl GenericItem for Comment {
     fn id(&self) -> ItemId {
         self.id
     }
-    fn owning_target(&self) -> Option<BazelLabel> {
+    fn unique_name(&self) -> Option<Rc<str>> {
         None
     }
-    fn debug_name(&self, _: &IR) -> Rc<str> {
-        "comment".into()
+    fn owning_target(&self) -> Option<BazelLabel> {
+        None
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         UnsupportedItemKind::Other
@@ -1661,6 +1828,7 @@ impl GenericItem for Comment {
 pub struct Namespace {
     pub cc_name: Identifier,
     pub rs_name: Identifier,
+    pub unique_name: Rc<str>,
     pub id: ItemId,
     pub canonical_namespace_id: ItemId,
     /// A human-readable list of attributes that Crubit doesn't understand.
@@ -1671,17 +1839,23 @@ pub struct Namespace {
     pub enclosing_item_id: Option<ItemId>,
     pub is_inline: bool,
     pub must_bind: bool,
+    /// The `[[deprecated("...")]]` string. If `[[deprecated]]`, then the empty
+    /// string is used.
+    #[serde(default)]
+    pub deprecated: Option<Rc<str>>,
+    #[serde(default)]
+    pub doc_comment: Option<Rc<str>>,
 }
 
 impl GenericItem for Namespace {
     fn id(&self) -> ItemId {
         self.id
     }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        Some(self.unique_name.clone())
+    }
     fn owning_target(&self) -> Option<BazelLabel> {
         Some(self.owning_target.clone())
-    }
-    fn debug_name(&self, _: &IR) -> Rc<str> {
-        self.rs_name.to_string().into()
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         UnsupportedItemKind::Namespace
@@ -1710,11 +1884,11 @@ impl GenericItem for UseMod {
     fn id(&self) -> ItemId {
         self.id
     }
-    fn owning_target(&self) -> Option<BazelLabel> {
+    fn unique_name(&self) -> Option<Rc<str>> {
         None
     }
-    fn debug_name(&self, _: &IR) -> Rc<str> {
-        format!("[internal] use mod {}::* = {}", self.mod_name, self.path).into()
+    fn owning_target(&self) -> Option<BazelLabel> {
+        None
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         UnsupportedItemKind::Other
@@ -1730,12 +1904,22 @@ impl GenericItem for UseMod {
     }
 }
 
+/// A C++ type annotated with CRUBIT_INTERNAL_RUST_TYPE, indicating that Crubit should use the
+/// existing Rust type instead of generating a new Rust type. Note that this corresponds to concrete
+/// types, meaning non-template types or template instantiations, but not uninstantiated template
+/// declarations.
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ExistingRustType {
+    /// The name of the existing Rust type.
+    /// Note that it may contain interpolated type parameters, like `RustType<{T}>`.
+    /// This means that it's incorrect to directly parse as an Ident.
     pub rs_name: Rc<str>,
     pub cc_name: Rc<str>,
-    pub type_parameters: Vec<CcType>,
+    pub unique_name: Rc<str>,
+    /// The template arguments on this instance of the type instantiation (empty is no template
+    /// arguments). This list parallels `template_arg_names`.
+    pub template_args: Vec<TemplateArg>,
     pub owning_target: BazelLabel,
     pub size_align: Option<SizeAlign>,
     pub is_same_abi: bool,
@@ -1747,11 +1931,11 @@ impl GenericItem for ExistingRustType {
     fn id(&self) -> ItemId {
         self.id
     }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        Some(self.unique_name.clone())
+    }
     fn owning_target(&self) -> Option<BazelLabel> {
         Some(self.owning_target.clone())
-    }
-    fn debug_name(&self, _: &IR) -> Rc<str> {
-        self.cc_name.clone()
     }
     fn unsupported_kind(&self) -> UnsupportedItemKind {
         UnsupportedItemKind::Other
@@ -1773,6 +1957,7 @@ pub enum Item {
     IncompleteRecord(Rc<IncompleteRecord>),
     Record(Rc<Record>),
     Enum(Rc<Enum>),
+    Constant(Rc<Constant>),
     GlobalVar(Rc<GlobalVar>),
     TypeAlias(Rc<TypeAlias>),
     UnsupportedItem(Rc<UnsupportedItem>),
@@ -1789,6 +1974,7 @@ macro_rules! forward_item {
             Item::IncompleteRecord($item_name) => $expr,
             Item::Record($item_name) => $expr,
             Item::Enum($item_name) => $expr,
+            Item::Constant($item_name) => $expr,
             Item::GlobalVar($item_name) => $expr,
             Item::TypeAlias($item_name) => $expr,
             Item::UnsupportedItem($item_name) => $expr,
@@ -1808,17 +1994,17 @@ impl GenericItem for Item {
             }
         }
     }
+    fn unique_name(&self) -> Option<Rc<str>> {
+        forward_item! {
+            match self {
+                _(x) => x.unique_name()
+            }
+        }
+    }
     fn owning_target(&self) -> Option<BazelLabel> {
         forward_item! {
             match self {
                 _(x) => x.owning_target()
-            }
-        }
-    }
-    fn debug_name(&self, ir: &IR) -> Rc<str> {
-        forward_item! {
-            match self {
-                _(x) => x.debug_name(ir)
             }
         }
     }
@@ -1858,6 +2044,7 @@ impl Item {
             Item::Record(record) => record.enclosing_item_id,
             Item::IncompleteRecord(record) => record.enclosing_item_id,
             Item::Enum(enum_) => enum_.enclosing_item_id,
+            Item::Constant(constant) => constant.enclosing_item_id,
             Item::GlobalVar(type_) => type_.enclosing_item_id,
             Item::Func(func) => func.enclosing_item_id,
             Item::Namespace(namespace) => namespace.enclosing_item_id,
@@ -1871,15 +2058,6 @@ impl Item {
         }
     }
 
-    /// Returns the target that this was defined in, if it was defined somewhere
-    /// other than `owning_target()`.
-    pub fn defining_target(&self) -> Option<&BazelLabel> {
-        match self {
-            Item::Record(record) => record.defining_target(),
-            _ => None,
-        }
-    }
-
     /// Returns true if this corresponds to the definition of a new name for a
     /// type.
     pub fn is_type_definition(&self) -> bool {
@@ -1888,6 +2066,7 @@ impl Item {
             Item::IncompleteRecord(_) => true,
             Item::Record(_) => true,
             Item::Enum(_) => true,
+            Item::Constant(_) => false,
             Item::GlobalVar(_) => false,
             Item::TypeAlias(_) => true,
             Item::UnsupportedItem(_) => false,
@@ -1912,6 +2091,7 @@ impl Item {
             }
             Item::Record(record) => Some(record.cc_name.identifier.clone()),
             Item::Enum(enum_) => Some(enum_.cc_name.identifier.clone()),
+            Item::Constant(constant) => Some(constant.cc_name.identifier.clone()),
             Item::GlobalVar(global_var) => Some(global_var.cc_name.identifier.clone()),
             Item::TypeAlias(type_alias) => Some(type_alias.cc_name.identifier.clone()),
             Item::Namespace(namespace) => Some(namespace.cc_name.identifier.clone()),
@@ -1931,6 +2111,7 @@ impl Item {
             | Item::GlobalVar(_)
             | Item::TypeAlias(_)
             | Item::Enum(_)
+            | Item::Constant(_)
             | Item::UseMod(_)
             | Item::ExistingRustType(_) => true,
             Item::Func(_) | Item::UnsupportedItem(_) | Item::Comment(_) => false,
@@ -2024,6 +2205,23 @@ impl<'a> TryFrom<&'a Item> for &'a Rc<Namespace> {
     }
 }
 
+impl From<ExistingRustType> for Item {
+    fn from(existing_rust_type: ExistingRustType) -> Item {
+        Item::ExistingRustType(Rc::new(existing_rust_type))
+    }
+}
+
+impl<'a> TryFrom<&'a Item> for &'a Rc<ExistingRustType> {
+    type Error = Error;
+    fn try_from(value: &'a Item) -> Result<Self, Self::Error> {
+        if let Item::ExistingRustType(r) = value {
+            Ok(r)
+        } else {
+            bail!("Not an ExistingRustType: {:#?}", value)
+        }
+    }
+}
+
 // There's no reason to hide FlatIR or make_ir: deserialize_ir is just make_ir(from_json("ir")),
 // and transforming the json is strictly worse than transforming the ir itself.
 
@@ -2099,6 +2297,10 @@ impl IR {
         &self.flat_ir
     }
 
+    pub fn item_id_to_item_idx(&self) -> &HashMap<ItemId, usize> {
+        &self.item_id_to_item_idx
+    }
+
     pub fn lifetimes(&self) -> impl Iterator<Item = (&LifetimeId, &LifetimeName)> {
         self.lifetimes.iter()
     }
@@ -2144,6 +2346,20 @@ impl IR {
         })
     }
 
+    pub fn enums(&self) -> impl Iterator<Item = &Rc<Enum>> {
+        self.items().filter_map(|item| match item {
+            Item::Enum(enum_item) => Some(enum_item),
+            _ => None,
+        })
+    }
+
+    pub fn constants(&self) -> impl Iterator<Item = &Rc<Constant>> {
+        self.items().filter_map(|item| match item {
+            Item::Constant(constant) => Some(constant),
+            _ => None,
+        })
+    }
+
     pub fn unsupported_items(&self) -> impl Iterator<Item = &Rc<UnsupportedItem>> {
         self.items().filter_map(|item| match item {
             Item::UnsupportedItem(unsupported_item) => Some(unsupported_item),
@@ -2165,36 +2381,11 @@ impl IR {
         })
     }
 
-    pub fn item_for_type<T>(&self, ty: &T) -> Result<&Item>
-    where
-        T: TypeWithDeclId + Debug,
-    {
-        if let Some(decl_id) = ty.decl_id() {
-            Ok(self.find_untyped_decl(decl_id))
-        } else {
-            bail!("Type {:?} does not have an associated item.", ty)
-        }
-    }
-
-    #[track_caller]
-    pub fn find_decl<'a, T>(&'a self, decl_id: ItemId) -> Result<&'a T>
-    where
-        &'a T: TryFrom<&'a Item>,
-    {
-        self.find_untyped_decl(decl_id).try_into().map_err(|_| {
-            anyhow!("DeclId {:?} doesn't refer to a {}", decl_id, std::any::type_name::<T>())
+    pub fn existing_rust_types(&self) -> impl Iterator<Item = &Rc<ExistingRustType>> {
+        self.items().filter_map(|item| match item {
+            Item::ExistingRustType(existing_rust_type) => Some(existing_rust_type),
+            _ => None,
         })
-    }
-
-    #[track_caller]
-    pub fn find_untyped_decl(&self, decl_id: ItemId) -> &Item {
-        let Some(idx) = self.item_id_to_item_idx.get(&decl_id) else {
-            panic!("Couldn't find decl_id {:?} in the IR:\n{:#?}", decl_id, self.flat_ir)
-        };
-        let Some(item) = self.flat_ir.items.get(*idx) else {
-            panic!("Couldn't find an item at idx {} in IR:\n{:#?}", idx, self.flat_ir)
-        };
-        item
     }
 
     /// Returns whether `target` is the current target.
@@ -2265,20 +2456,6 @@ impl IR {
         Ok(idx == last_item_idx)
     }
 
-    /// Returns the `Item` defining `func`, or `None` if `func` is not a
-    /// member function.
-    ///
-    /// Note that even if `func` is a member function, the associated record
-    /// might not be a Record IR Item (e.g. it has its type changed via
-    /// crubit_internal_rust_type).
-    pub fn record_for_member_func(&self, func: &Func) -> Option<&Item> {
-        if let Some(meta) = func.member_func_metadata.as_ref() {
-            Some(self.find_untyped_decl(meta.record_id))
-        } else {
-            None
-        }
-    }
-
     pub fn crate_root_path(&self) -> Option<Rc<str>> {
         self.flat_ir.crate_root_path.clone()
     }
@@ -2295,40 +2472,6 @@ impl IR {
         function_name: &UnqualifiedIdentifier,
     ) -> impl Iterator<Item = &Rc<Func>> {
         self.function_name_to_functions.get(function_name).map_or([].iter(), |v| v.iter())
-    }
-
-    pub fn namespace_qualifier(&self, item: &impl GenericItem) -> NamespaceQualifier {
-        self.namespace_qualifier_from_id(item.id())
-    }
-
-    #[track_caller]
-    fn namespace_qualifier_from_id(&self, item: ItemId) -> NamespaceQualifier {
-        let mut namespaces = vec![];
-        let mut nested_records = vec![];
-        let mut enclosing_item_id = self.find_untyped_decl(item).enclosing_item_id();
-        while let Some(parent_id) = enclosing_item_id {
-            match self.find_untyped_decl(parent_id) {
-                Item::Namespace(ns) => {
-                    namespaces.push(ns.rs_name.identifier.clone());
-                    enclosing_item_id = ns.enclosing_item_id;
-                }
-                Item::Record(parent_record) => {
-                    assert!(
-                        namespaces.is_empty(),
-                        "Record was listed as the enclosing item for a namespace, this is a bug."
-                    );
-                    nested_records.push((
-                        parent_record.rs_name.identifier.clone(),
-                        parent_record.cc_name.identifier.clone(),
-                    ));
-                    enclosing_item_id = parent_record.enclosing_item_id;
-                }
-                _ => panic!("Expected namespace or parent record, found enclosing item {item:?}"),
-            }
-        }
-        namespaces.reverse();
-        nested_records.reverse();
-        NamespaceQualifier { namespaces, nested_records }
     }
 }
 

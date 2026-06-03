@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:unsafe_attrs_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes)]
+#![feature(custom_inner_attributes)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[inline(always)]
@@ -29,14 +30,21 @@ pub fn TotallySafe() {
     unsafe { crate::detail::__rust_thunk___Z11TotallySafev() }
 }
 
+/// # Safety
+///
+/// The caller must ensure that the following unsafe arguments are not misused by the function:
+/// * `__param_0`: raw pointer
 #[inline(always)]
-pub unsafe fn TotallyUnsafe(__param_0: *mut ::core::ffi::c_void) {
-    crate::detail::__rust_thunk___Z13TotallyUnsafePv(__param_0)
+pub unsafe fn TotallyUnsafe(__param_0: *mut ::ffi_11::c_void) {
+    unsafe { crate::detail::__rust_thunk___Z13TotallyUnsafePv(__param_0) }
 }
 
+/// # Safety
+///
+/// The C++ function is explicitly annotated as unsafe. Ensure that its safety requirements are upheld.
 #[inline(always)]
 pub unsafe fn SafeSignatureButAnnotatedUnsafe() {
-    crate::detail::__rust_thunk___Z31SafeSignatureButAnnotatedUnsafev()
+    unsafe { crate::detail::__rust_thunk___Z31SafeSignatureButAnnotatedUnsafev() }
 }
 
 #[inline(always)]
@@ -44,13 +52,19 @@ pub fn SafeSignatureButAnnotatedSafe() {
     unsafe { crate::detail::__rust_thunk___Z29SafeSignatureButAnnotatedSafev() }
 }
 
+/// # Safety
+///
+/// The C++ function is explicitly annotated as unsafe. Ensure that its safety requirements are upheld.
+///
+/// The caller must ensure that the following unsafe arguments are not misused by the function:
+/// * `__param_0`: raw pointer
 #[inline(always)]
-pub unsafe fn UnsafeSignatureButAnnotatedUnsafe(__param_0: *mut ::core::ffi::c_void) {
-    crate::detail::__rust_thunk___Z33UnsafeSignatureButAnnotatedUnsafePv(__param_0)
+pub unsafe fn UnsafeSignatureButAnnotatedUnsafe(__param_0: *mut ::ffi_11::c_void) {
+    unsafe { crate::detail::__rust_thunk___Z33UnsafeSignatureButAnnotatedUnsafePv(__param_0) }
 }
 
 #[inline(always)]
-pub fn UnsafeSignatureButAnnotatedSafe(__param_0: *mut ::core::ffi::c_void) {
+pub fn UnsafeSignatureButAnnotatedSafe(__param_0: *mut ::ffi_11::c_void) {
     unsafe { crate::detail::__rust_thunk___Z31UnsafeSignatureButAnnotatedSafePv(__param_0) }
 }
 
@@ -63,18 +77,18 @@ mod detail {
         #[link_name = "_Z11TotallySafev"]
         pub(crate) unsafe fn __rust_thunk___Z11TotallySafev();
         #[link_name = "_Z13TotallyUnsafePv"]
-        pub(crate) unsafe fn __rust_thunk___Z13TotallyUnsafePv(__param_0: *mut ::core::ffi::c_void);
+        pub(crate) unsafe fn __rust_thunk___Z13TotallyUnsafePv(__param_0: *mut ::ffi_11::c_void);
         #[link_name = "_Z31SafeSignatureButAnnotatedUnsafev"]
         pub(crate) unsafe fn __rust_thunk___Z31SafeSignatureButAnnotatedUnsafev();
         #[link_name = "_Z29SafeSignatureButAnnotatedSafev"]
         pub(crate) unsafe fn __rust_thunk___Z29SafeSignatureButAnnotatedSafev();
         #[link_name = "_Z33UnsafeSignatureButAnnotatedUnsafePv"]
         pub(crate) unsafe fn __rust_thunk___Z33UnsafeSignatureButAnnotatedUnsafePv(
-            __param_0: *mut ::core::ffi::c_void,
+            __param_0: *mut ::ffi_11::c_void,
         );
         #[link_name = "_Z31UnsafeSignatureButAnnotatedSafePv"]
         pub(crate) unsafe fn __rust_thunk___Z31UnsafeSignatureButAnnotatedSafePv(
-            __param_0: *mut ::core::ffi::c_void,
+            __param_0: *mut ::ffi_11::c_void,
         );
     }
 }

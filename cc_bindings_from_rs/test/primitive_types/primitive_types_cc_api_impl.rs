@@ -4,12 +4,13 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // primitive_types_golden
-// Features: custom_ffi_types, experimental, non_unpin_ctor, std_unique_ptr, std_vector, supported, wrapper
 
 #![allow(unused_unsafe, deprecated, non_snake_case, unreachable_code)]
 #![allow(improper_ctypes_definitions)]
 #![deny(warnings)]
 
+extern crate alloc;
+extern crate core;
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __crubit_thunk_c_uchar_umut_uptr_uarg(__param_0: *mut ::ffi_11::c_char) -> () {
     unsafe { ::primitive_types_golden::argument_types::c_char_mut_ptr_arg(__param_0) }

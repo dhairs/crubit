@@ -7,8 +7,9 @@
 //! Unit tests for the `ctor` crate.
 
 use ctor::{
-    copy, ctor, emplace, mov, try_emplace, Assign, Ctor, CtorNew, Emplace, FnCtor,
-    ManuallyDropCtor, Reconstruct, RecursivelyPinned, RvalueReference, Slot, UnreachableCtor,
+    copy, ctor, emplace, mov, raw_ctor, recursively_pinned, try_emplace, Assign, Ctor, CtorNew,
+    Emplace, FnCtor, ManuallyDropCtor, RecursivelyPinned, RvalueReference, SelfCtor, Slot,
+    UnreachableCtor,
 };
 use googletest::gtest;
 use std::cell::RefCell;
@@ -17,6 +18,12 @@ use std::mem::ManuallyDrop;
 use std::pin::Pin;
 use std::rc::Rc;
 use std::sync::{Arc, Mutex};
+
+#[gtest]
+fn test_construct() {
+    let x = ctor::construct(u32::ctor_new(()));
+    assert_eq!(x, 0);
+}
 
 /// Only really need one test for the new super-let syntax, as it uses the same
 /// building blocks as the old syntax.
@@ -72,7 +79,7 @@ fn test_emplace_macro() {
 #[gtest]
 fn test_try_emplace_returns_ok() {
     struct OkCtor;
-    impl !Unpin for OkCtor {}
+    impl !SelfCtor for OkCtor {}
     // SAFETY: unconditionally initializes dest.
     unsafe impl Ctor for OkCtor {
         type Output = i32;
@@ -90,7 +97,7 @@ fn test_try_emplace_returns_ok() {
 #[gtest]
 fn test_try_emplace_returns_err() {
     struct ErrCtor;
-    impl !Unpin for ErrCtor {}
+    impl !SelfCtor for ErrCtor {}
     // SAFETY: unconditionally returns error.
     unsafe impl Ctor for ErrCtor {
         type Output = i32;
@@ -177,10 +184,7 @@ fn test_ctor_macro_generic_struct() {
         type CtorInitializedFields = Self;
     }
 
-    let my_struct = emplace!(ctor!(MyStruct<u32> {
-        x: 4,
-        y: 2,
-    }));
+    let my_struct = emplace!(ctor!(MyStruct::<u32> { x: 4, y: 2 }));
 
     assert_eq!(my_struct.x, 4);
     assert_eq!(my_struct.y, 2);
@@ -259,7 +263,9 @@ fn test_ctor_macro_union() {
     // First, should drop myunion.x.
     unsafe { ManuallyDrop::drop(&mut Pin::into_inner_unchecked(my_union.as_mut()).x) }
     // Second, we can overwrite.
-    my_union.as_mut().reconstruct(ctor!(MyUnion { y: 24 }));
+    unsafe {
+        ctor::reconstruct(my_union.as_mut(), ctor!(MyUnion { y: 24 }));
+    }
     assert_eq!(unsafe { my_union.y }, 24);
 }
 
@@ -337,12 +343,12 @@ unsafe impl<'a> Ctor for PanicCtor<'a> {
     type Output = DropNotify<'a>;
     type Error = Infallible;
     unsafe fn ctor(self, dest: *mut Self::Output) -> Result<(), Infallible> {
-        self.0.ctor(dest)?;
+        unsafe { self.0.ctor(dest) }?;
         panic!();
     }
 }
 
-impl !Unpin for PanicCtor<'_> {}
+impl !SelfCtor for PanicCtor<'_> {}
 
 /// Tests that drop() is called when the Ctor doesn't panic.
 #[gtest]
@@ -455,11 +461,11 @@ unsafe impl<'a> Ctor for LoggingCtor<'a> {
     type Error = Infallible;
     unsafe fn ctor(self, dest: *mut Self::Output) -> Result<(), Infallible> {
         self.log.borrow_mut().push(self.ctor_message);
-        dest.write(DropCtorLogger { log: self.log });
+        unsafe { dest.write(DropCtorLogger { log: self.log }) };
         Ok(())
     }
 }
-impl !Unpin for LoggingCtor<'_> {}
+impl !SelfCtor for LoggingCtor<'_> {}
 
 impl<'a> CtorNew<&DropCtorLogger<'a>> for DropCtorLogger<'a> {
     type CtorType = LoggingCtor<'a>;
@@ -498,7 +504,7 @@ fn test_move_ctor_drop_order() {
     let log = &log;
 
     let notify_tester = emplace!(DropCtorLogger { log });
-    let new_value = emplace!(DropCtorLogger { log });
+    let mut new_value = emplace!(DropCtorLogger { log });
     notify_tester.assign(mov!(new_value));
     assert_eq!(*log.borrow(), vec!["move ctor", "drop"]);
 }
@@ -510,7 +516,7 @@ fn takes_rvalue_reference<T>(_: RvalueReference<T>) {}
 #[gtest]
 fn test_mov_box() {
     struct S;
-    let x: Pin<Box<S>> = Box::pin(S);
+    let mut x: Pin<Box<S>> = Box::pin(S);
     takes_rvalue_reference(mov!(x));
     // let _x = x; // fails to compile: x is moved!
 }
@@ -523,7 +529,7 @@ fn test_mov_mut_ref_to_unpin() {
 #[gtest]
 fn test_mov_pinned_mut_ref() {
     let x = &mut 2;
-    let pinned_mut_ref = Pin::new(x);
+    let mut pinned_mut_ref = Pin::new(x);
     takes_rvalue_reference(mov!(pinned_mut_ref));
 }
 
@@ -609,12 +615,14 @@ fn test_ctor_trait_captures() {
         x: &'a i32,
         y: &'b i32,
     ) -> impl Ctor<Output = i32, Error = Infallible> + use<'a, 'b> {
-        FnCtor::new(|dest: *mut i32| {
+        let init = |dest: *mut i32| {
             // SAFETY: dest is valid and uninitialized.
             unsafe {
                 dest.write(*x + *y);
             }
-        })
+        };
+        // SAFETY: unconditionally initializes dest.
+        unsafe { FnCtor::new(init) }
     }
 
     let sum = emplace!(adder(&40, &2));
@@ -629,4 +637,62 @@ fn test_ctor_dst() {
         #[allow(unreachable_code)]
         UnreachableCtor::new()
     }
+}
+
+/// raw_ctor allows use for arbitrary struct types, just be careful! It pins!
+#[gtest]
+fn test_raw_ctor() {
+    struct MyStruct {
+        x: i32,
+    }
+    let x = emplace!(unsafe { raw_ctor!(MyStruct { x: 42 }) }).x;
+    assert_eq!(x, 42);
+}
+
+#[gtest]
+fn test_raw_ctor_partial_init() {
+    struct MyStruct {
+        x: i32,
+        _y: (),
+    }
+    #[allow(dead_code)]
+    struct MyStructCtorFields {
+        x: i32,
+    }
+    let x = emplace!(unsafe {
+        raw_ctor!(
+            #[fields = MyStructCtorFields]
+            MyStruct { x: 42 }
+        )
+    })
+    .x;
+    assert_eq!(x, 42);
+}
+
+#[gtest]
+fn test_move_params() {
+    // If MyRustStruct is Copy, then a closure using it by value will only borrow it
+    // by reference, unless it is a `move` closure. This test checks that it does
+    // in fact capture it by value.
+    #[derive(Copy, Clone)]
+    struct MyRustStruct(i32);
+
+    #[recursively_pinned]
+    struct Composite(MyRustStruct);
+
+    // fn returns_ctor(rust: MyRustStruct) -> Ctor![Composite] {
+    fn returns_ctor(rust: MyRustStruct) -> impl Ctor<Output = Composite, Error = Infallible> {
+        ctor!(Composite(rust))
+    }
+
+    let composite = emplace!(returns_ctor(MyRustStruct(42)));
+    assert_eq!(composite.0 .0, 42);
+}
+
+#[gtest]
+fn test_ctor_macro_generic_tuple_struct() {
+    #[recursively_pinned]
+    struct MyStruct<T>(T);
+    let my_struct = emplace!(ctor!(MyStruct::<u32>(42)));
+    assert_eq!(my_struct.0, 42);
 }

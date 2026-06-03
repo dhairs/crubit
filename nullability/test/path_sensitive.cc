@@ -48,11 +48,7 @@ TEST(PointerNullabilityTest, ConditionalInitialization2) {
       b = return_bool();
       if (!b) p = produce_int();
 
-      // TODO(b/307492164): False negative. This dereference is unsafe.
-      // This false negative likely happens because we don't model a return
-      // value for the `return_bool()` call above, so the `false` value that `b`
-      // is initialized with does not get overwritten.
-      (void)*p;
+      (void)*p;  // [[unsafe]]
     }
   )cc"));
 }
@@ -80,6 +76,37 @@ TEST(PointerNullabilityTest, OnePointerGuaranteedNonnull) {
       else
         // `p2` must be nonnull or we would have returned above.
         *p2;
+    }
+  )cc"));
+}
+
+// The check cannot reason about integer inequalities, so does not know that the
+// loop has at least one iteration.
+TEST(PointerNullabilityTest, DereferencePointerSetInLoop) {
+  EXPECT_TRUE(checkDiagnostics(R"cc(
+    void target() {
+      int* _Nullable p = nullptr;
+      int x = 0;
+      for (int i = 0; i < 10; ++i) {
+        p = &x;
+      }
+      *p = 1;  // [[unsafe]]
+    }
+  )cc"));
+}
+
+// A do-while loop makes it clear there's at least one iteration.
+TEST(PointerNullabilityTest, DereferencePointerSetInDoWhileLoop) {
+  EXPECT_TRUE(checkDiagnostics(R"cc(
+    void target() {
+      int* _Nullable p = nullptr;
+      int x = 0;
+      int i = 0;
+      do {
+        p = &x;
+        ++i;
+      } while (i < 10);
+      *p = 1;
     }
   )cc"));
 }

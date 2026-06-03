@@ -4,7 +4,8 @@
 
 #include "nullability/inference/collect_evidence_test_utilities.h"
 
-#include <string>
+#include <memory>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -21,15 +22,18 @@
 #include "llvm/ADT/StringRef.h"
 #include "llvm/Support/Error.h"
 #include "llvm/Support/ErrorHandling.h"
-#include "llvm/Testing/Support/Error.h"
 #include "external/llvm-project/third-party/unittest/googlemock/include/gmock/gmock.h"
 #include "external/llvm-project/third-party/unittest/googletest/include/gtest/gtest.h"
 
 namespace clang::tidy::nullability {
 namespace {
-MATCHER_P3(isEvidenceMatcher, SlotMatcher, KindMatcher, SymbolMatcher, "") {
+MATCHER_P4(isEvidenceMatcher, SlotMatcher, KindMatcher, SymbolMatcher,
+           CrossesFromTestToNontestMatcher, "") {
   return SlotMatcher.Matches(static_cast<Slot>(arg.slot())) &&
-         KindMatcher.Matches(arg.kind()) && SymbolMatcher.Matches(arg.symbol());
+         KindMatcher.Matches(arg.kind()) &&
+         SymbolMatcher.Matches(arg.symbol()) &&
+         CrossesFromTestToNontestMatcher.Matches(
+             arg.crosses_from_test_to_nontest());
 }
 
 MATCHER(notPropagated, "") { return !arg.has_propagated_from(); }
@@ -41,75 +45,72 @@ MATCHER_P(propagatedFrom, PropagatedFromMatcher, "") {
 
 testing::Matcher<const Evidence&> evidence(
     testing::Matcher<Slot> S, testing::Matcher<Evidence::Kind> Kind,
-    testing::Matcher<const Symbol&> SymbolMatcher) {
-  return AllOf(isEvidenceMatcher(S, Kind, SymbolMatcher), notPropagated());
+    testing::Matcher<const Symbol&> SymbolMatcher,
+    testing::Matcher<bool> CrossesFromTestToNontest) {
+  return AllOf(
+      isEvidenceMatcher(S, Kind, SymbolMatcher, CrossesFromTestToNontest),
+      notPropagated());
 }
 
 testing::Matcher<const Evidence&> evidencePropagatedFrom(
     testing::Matcher<const Symbol&> PropagatedFromMatcher,
     testing::Matcher<Slot> S, testing::Matcher<Evidence::Kind> Kind,
-    testing::Matcher<const Symbol&> SymbolMatcher) {
-  return AllOf(isEvidenceMatcher(S, Kind, SymbolMatcher),
-               propagatedFrom(PropagatedFromMatcher));
+    testing::Matcher<const Symbol&> SymbolMatcher,
+    testing::Matcher<bool> CrossesFromTestToNontest) {
+  return AllOf(
+      isEvidenceMatcher(S, Kind, SymbolMatcher, CrossesFromTestToNontest),
+      propagatedFrom(PropagatedFromMatcher));
 }
 
-std::string printToString(DefinitionCollectionMode Mode) {
-  switch (Mode) {
-    case DefinitionCollectionMode::kTestWithSummaries:
-      return "WithSummaries";
-    case DefinitionCollectionMode::kTestDirectly:
-      return "Directly";
-  }
-  llvm_unreachable("Unknown CollectionMode");
-}
-
-static llvm::Expected<CFGSummary> summarizeDefinitionNamed(
+static llvm::Expected<std::optional<CFGSummary>> summarizeDefinitionNamed(
     llvm::StringRef TargetName, llvm::StringRef Source) {
   USRCache UsrCache;
   NullabilityPragmas Pragmas;
   clang::TestAST AST(getAugmentedTestInputs(Source, Pragmas));
   const Decl& Definition =
       *dataflow::test::findValueDecl(AST.context(), TargetName);
-  return summarizeDefinition(Definition, UsrCache, Pragmas);
+  return summarizeDefinition(Definition, UsrCache, Pragmas,
+                             getVirtualMethodIndex(AST.context(), UsrCache));
 }
 
-llvm::Expected<CFGSummary> summarizeTargetFuncDefinition(
+llvm::Expected<std::optional<CFGSummary>> summarizeTargetFuncDefinition(
     llvm::StringRef Source) {
   return summarizeDefinitionNamed("target", Source);
 }
 
-std::pair<llvm::Error, std::vector<Evidence>>
-collectFromDefinitionViaSummaryWithErrors(
+std::pair<llvm::Error, std::vector<Evidence>> collectFromDefinitionWithErrors(
     clang::ASTContext& ASTCtx, const Decl& Definition,
     const NullabilityPragmas& Pragmas,
     const PreviousInferences& InputInferences,
     const SolverFactory& MakeSolver) {
   USRCache UsrCache;
   std::vector<Evidence> Results;
-  auto Summary = summarizeDefinition(Definition, UsrCache, Pragmas, MakeSolver);
-  if (!Summary) return {Summary.takeError(), Results};
+  VirtualMethodIndex TUScopeVMI = getVirtualMethodIndex(ASTCtx, UsrCache);
+  llvm::Expected<std::optional<CFGSummary>> SummaryResult = summarizeDefinition(
+      Definition, UsrCache, Pragmas, TUScopeVMI, MakeSolver);
+  if (!SummaryResult) return {SummaryResult.takeError(), Results};
+  if (!SummaryResult->has_value())
+    return {llvm::Error::success(), std::vector<Evidence>{}};
+  CFGSummary& Summary = **SummaryResult;
 
-  // In the context of a pipeline, the index would be created from the AST and
-  // then serialized to proto, along with the summaries. We round-trip the index
-  // here to ensure proper testing of the full save/restore flow.
-  VirtualMethodIndex VMI = getVirtualMethodIndex(ASTCtx, UsrCache);
-  VirtualMethodIndexSummary VMIProto = saveVirtualMethodsIndex(VMI);
-
-  VirtualMethodIndex PostVMI = loadVirtualMethodsIndex(VMIProto);
-  PostVMI.Overrides = std::move(VMI.Overrides);
+  auto VMIForPropagation = std::make_shared<VirtualMethodIndex>(
+      loadVirtualMethodsIndex(Summary.virtual_method_index()));
+  // All overrides from anywhere in the TU are relevant for propagating
+  // evidence, so we use the entire TU-scoped collection for this direction.
+  VMIForPropagation->Overrides = std::move(TUScopeVMI.Overrides);
   return {collectEvidenceFromSummary(
-              *Summary,
+              Summary,
               evidenceEmitterWithPropagation(
                   [&Results](const Evidence& E) { Results.push_back(E); },
-                  std::move(PostVMI)),
+                  VMIForPropagation),
               InputInferences, MakeSolver),
           Results};
 }
 
-static std::vector<Evidence> collectFromDefinitionViaSummary(
+std::vector<Evidence> collectFromDefinition(
     clang::ASTContext& ASTCtx, const Decl& Definition,
     const NullabilityPragmas& Pragmas, PreviousInferences InputInferences) {
-  auto [Err, Results] = collectFromDefinitionViaSummaryWithErrors(
+  auto [Err, Results] = collectFromDefinitionWithErrors(
       ASTCtx, Definition, Pragmas, InputInferences);
   if (Err) {
     // Can't assert from within a non-void helper function, so only ADD_FAILURE.
@@ -119,55 +120,22 @@ static std::vector<Evidence> collectFromDefinitionViaSummary(
   return Results;
 }
 
-static std::vector<Evidence> collectFromDefinitionDirectly(
-    clang::ASTContext& ASTCtx, const Decl& Definition,
-    const NullabilityPragmas& Pragmas,
-    PreviousInferences InputInferences = {}) {
-  std::vector<Evidence> Results;
-  USRCache UsrCache;
-  // Can't assert from within a non-void helper function, so only EXPECT.
-  EXPECT_THAT_ERROR(
-      collectEvidenceFromDefinition(
-          Definition,
-          evidenceEmitterWithPropagation(
-              [&Results](Evidence E) { Results.push_back(std::move(E)); },
-              UsrCache, ASTCtx),
-          UsrCache, Pragmas, InputInferences),
-      llvm::Succeeded());
-  return Results;
-}
-
-std::vector<Evidence> collectFromDefinition(
-    clang::ASTContext& ASTCtx, const Decl& Definition,
-    const NullabilityPragmas& Pragmas, DefinitionCollectionMode Mode,
-    PreviousInferences InputInferences) {
-  switch (Mode) {
-    case DefinitionCollectionMode::kTestWithSummaries:
-      return collectFromDefinitionViaSummary(ASTCtx, Definition, Pragmas,
-                                             InputInferences);
-    case DefinitionCollectionMode::kTestDirectly:
-      return collectFromDefinitionDirectly(ASTCtx, Definition, Pragmas,
-                                           InputInferences);
-  }
-  llvm_unreachable("Unexpected collection mode");
-}
-
 std::vector<Evidence> collectFromDefinitionNamed(
     llvm::StringRef TargetName, llvm::StringRef Source,
-    DefinitionCollectionMode Mode, PreviousInferences InputInferences) {
+    PreviousInferences InputInferences) {
   NullabilityPragmas Pragmas;
   clang::TestAST AST(getAugmentedTestInputs(Source, Pragmas));
   const Decl& Definition =
       *dataflow::test::findValueDecl(AST.context(), TargetName);
-  return collectFromDefinition(AST.context(), Definition, Pragmas, Mode,
+  return collectFromDefinition(AST.context(), Definition, Pragmas,
                                InputInferences);
 }
 
 std::vector<Evidence> collectFromTargetFuncDefinition(
-    llvm::StringRef Source, DefinitionCollectionMode Mode,
-    PreviousInferences InputInferences) {
-  return collectFromDefinitionNamed("target", Source, Mode, InputInferences);
+    llvm::StringRef Source, PreviousInferences InputInferences) {
+  return collectFromDefinitionNamed("target", Source, InputInferences);
 }
+
 std::vector<Evidence> collectFromDecl(llvm::StringRef Source,
                                       llvm::StringRef DeclName) {
   std::vector<Evidence> Results;

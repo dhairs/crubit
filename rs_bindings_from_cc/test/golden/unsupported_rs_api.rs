@@ -6,19 +6,20 @@
 // //rs_bindings_from_cc/test/golden:unsupported_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=TrivialCustomType
 pub struct TrivialCustomType {
-    pub i: ::core::ffi::c_int,
+    pub i: ::ffi_11::c_int,
 }
 impl !Send for TrivialCustomType {}
 impl !Sync for TrivialCustomType {}
@@ -38,36 +39,38 @@ impl Default for TrivialCustomType {
     }
 }
 
-// Error while generating bindings for constructor 'TrivialCustomType::TrivialCustomType':
-// Can't generate bindings for TrivialCustomType::TrivialCustomType, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:unsupported_cc needs [//features:experimental] for TrivialCustomType::TrivialCustomType (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `TrivialCustomType::TrivialCustomType` could not be bound
+//   Unsupported parameter type `const TrivialCustomType& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'TrivialCustomType::TrivialCustomType':
-// Can't generate bindings for TrivialCustomType::TrivialCustomType, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:unsupported_cc needs [//features:experimental] for TrivialCustomType::TrivialCustomType (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `TrivialCustomType::TrivialCustomType` could not be bound
+//   Unsupported parameter type `TrivialCustomType&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'TrivialCustomType::operator=':
-// Can't generate bindings for TrivialCustomType::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:unsupported_cc needs [//features:experimental] for TrivialCustomType::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:unsupported_cc needs [//features:experimental] for TrivialCustomType::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `TrivialCustomType::operator=` could not be bound
+//   Unsupported parameter type `const TrivialCustomType& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `TrivialCustomType&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'TrivialCustomType::operator=':
-// Can't generate bindings for TrivialCustomType::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:unsupported_cc needs [//features:experimental] for TrivialCustomType::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:unsupported_cc needs [//features:experimental] for TrivialCustomType::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `TrivialCustomType::operator=` could not be bound
+//   Unsupported parameter type `TrivialCustomType&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `TrivialCustomType&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'TrivialCustomType::operator||':
-// Bindings for this kind of operator (operator || with 2 parameter(s)) are not supported
+// error: function `TrivialCustomType::operator||` could not be bound
+//   Bindings for this kind of operator (operator || with 2 parameter(s)) are not supported
 
-// Error while generating bindings for function 'TrivialCustomType::operator int':
-// Function name is not supported: Unsupported name: operator int
+// error: function `TrivialCustomType::operator int` could not be bound
+//   Function name is not supported: Unsupported name: operator int
 
 #[::ctor::recursively_pinned]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=NontrivialCustomType
 pub struct NontrivialCustomType {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 0],
-    pub i: ::core::ffi::c_int,
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 0],
+    pub i: ::ffi_11::c_int,
 }
 impl !Send for NontrivialCustomType {}
 impl !Sync for NontrivialCustomType {}
@@ -76,32 +79,29 @@ unsafe impl ::cxx::ExternType for NontrivialCustomType {
     type Kind = ::cxx::kind::Opaque;
 }
 
-// Error while generating bindings for constructor 'NontrivialCustomType::NontrivialCustomType':
-// Can't generate bindings for NontrivialCustomType::NontrivialCustomType, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:unsupported_cc needs [//features:experimental] for NontrivialCustomType::NontrivialCustomType (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `NontrivialCustomType::NontrivialCustomType` could not be bound
+//   Unsupported parameter type `NontrivialCustomType&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'NontrivialCustomType::operator||':
-// Bindings for this kind of operator (operator || with 2 parameter(s)) are not supported
+// error: function `NontrivialCustomType::operator||` could not be bound
+//   Bindings for this kind of operator (operator || with 2 parameter(s)) are not supported
 
-// Error while generating bindings for struct 'PackedLayout':
-// Records with packed layout are not supported
+// error: struct `PackedLayout` could not be bound
+//   Records with packed layout are not supported
 
-// Error while generating bindings for function 'MultipleReasons':
-// Parameter #0 is not supported: Unsupported type 'volatile int *': Unsupported `volatile` qualifier: volatile int
-//
-// Return type is not supported: Unsupported type 'volatile int *': Unsupported `volatile` qualifier: volatile int
+// error: function `MultipleReasons` could not be bound
+//   Parameter #0 is not supported: Unsupported `volatile` qualifier: volatile int
+//   Return type is not supported: Unsupported `volatile` qualifier: volatile int
 
-// Error while generating bindings for struct 'TypeWithUnknownAttribute':
-// Can't generate bindings for TypeWithUnknownAttribute, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:unsupported_cc needs [//features:experimental] for TypeWithUnknownAttribute (unknown attribute(s): gnu::abi_tag)
+// error: struct `TypeWithUnknownAttribute` could not be bound
+//   crubit.rs/errors/unknown_attribute: unknown attribute(s): gnu::abi_tag
 
-// Error while generating bindings for function 'FuncWithUnknownAttribute':
-// unknown function attributes are only supported with experimental features enabled on //rs_bindings_from_cc/test/golden:unsupported_cc
-// Unknown attribute: gnu::abi_tag`
+// error: function `FuncWithUnknownAttribute` could not be bound
+//   crubit.rs/errors/unknown_attribute: unknown function attributes are only supported with experimental features enabled on //rs_bindings_from_cc/test/golden:unsupported_cc
+//   Unknown attribute: gnu::cold`
 
-// Error while generating bindings for function 'ParamWithUnknownAttribute':
-// Can't generate bindings for ParamWithUnknownAttribute, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:unsupported_cc needs [//features:experimental] for ParamWithUnknownAttribute (param i has unknown attribute(s): gnu::abi_tag)
+// error: function `ParamWithUnknownAttribute` could not be bound
+//   crubit.rs/errors/unknown_attribute: param i has unknown attribute(s): gnu::abi_tag
 
 mod detail {
     #[allow(unused_imports)]

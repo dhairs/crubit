@@ -36,8 +36,6 @@ cc_library(
     deps = [
         ":type_nullability",
         "@abseil-cpp//absl/base:nullability",
-        "@abseil-cpp//absl/container:flat_hash_map",
-        "@abseil-cpp//absl/log:check",
         "@llvm-project//clang:analysis",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:basic",
@@ -147,7 +145,6 @@ cc_library(
         ":pragma",
         ":type_nullability",
         "@abseil-cpp//absl/base:nullability",
-        "@abseil-cpp//absl/log:check",
         "@llvm-project//clang:analysis",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:ast_matchers",
@@ -201,7 +198,6 @@ cc_library(
         ":pragma",
         ":type_and_maybe_loc_visitor",
         "@abseil-cpp//absl/base:nullability",
-        "@abseil-cpp//absl/log:check",
         "@llvm-project//clang:analysis",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:basic",
@@ -215,8 +211,6 @@ cc_test(
     deps = [
         ":pragma",
         ":type_nullability",
-        "//nullability/test:test_headers",
-        "@abseil-cpp//absl/log:check",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:ast_matchers",
         "@llvm-project//clang:basic",
@@ -264,21 +258,6 @@ cc_test(
 )
 
 cc_library(
-    name = "proto_matchers",
-    testonly = 1,
-    srcs = ["proto_matchers.cc"],
-    hdrs = ["proto_matchers.h"],
-    visibility = [":__subpackages__"],
-    deps = [
-        "//third_party/protobuf",
-        "@abseil-cpp//absl/base:nullability",
-        "@llvm-project//llvm:Support",
-        "@llvm-project//third-party/unittest:gmock",
-        "@llvm-project//third-party/unittest:gtest",
-    ],
-)
-
-cc_library(
     name = "type_and_maybe_loc_visitor",
     hdrs = ["type_and_maybe_loc_visitor.h"],
     deps = [
@@ -301,7 +280,6 @@ cc_library(
     hdrs = ["loc_filter.h"],
     visibility = ["//nullability/inference:__pkg__"],
     deps = [
-        "@abseil-cpp//absl/log:check",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:basic",
         "@llvm-project//llvm:Support",
@@ -327,7 +305,6 @@ cc_library(
         ":pointer_nullability_matchers",
         ":type_nullability",
         "@abseil-cpp//absl/base:nullability",
-        "@abseil-cpp//absl/log:check",
         "@llvm-project//clang:analysis",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:ast_matchers",
@@ -345,7 +322,6 @@ cc_library(
         ":pointer_nullability_lattice",
         ":type_nullability",
         "@abseil-cpp//absl/base:nullability",
-        "@abseil-cpp//absl/log:check",
         "@llvm-project//clang:analysis",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:ast_matchers",
@@ -372,17 +348,15 @@ cc_test(
     srcs = ["pointer_nullability_analysis_benchmark.cc"],
     tags = ["benchmark"],
     deps = [
-        ":pointer_nullability_analysis",
         ":pointer_nullability_diagnosis",
         ":pragma",
         "@abseil-cpp//absl/base:nullability",
-        "@abseil-cpp//absl/log:check",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:string_view",
         "@google_benchmark",
-        "@llvm-project//clang:analysis",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:basic",
         "@llvm-project//clang:testing",
+        "@llvm-project//llvm:Support",
     ],
 )

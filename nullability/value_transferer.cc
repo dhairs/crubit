@@ -9,7 +9,6 @@
 #include <optional>
 
 #include "absl/base/nullability.h"
-#include "absl/log/check.h"
 #include "nullability/ast_helpers.h"
 #include "nullability/macro_arg_capture.h"
 #include "nullability/pointer_nullability.h"
@@ -41,6 +40,7 @@
 #include "clang/Basic/LLVM.h"
 #include "clang/Basic/OperatorKinds.h"
 #include "clang/Basic/Specifiers.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 namespace clang::tidy::nullability {
@@ -756,6 +756,8 @@ static BoolValue* absl_nullable processPointerComparison(
     return &A.makeTopValue();
   }
 
+  assert(Opcode == BO_EQ || Opcode == BO_NE);
+
   // Special case: Are we comparing against `nullptr`?
   // We can avoid modifying the flow condition in this case and simply propagate
   // the nullability of the other operand (potentially with a negation).
@@ -765,7 +767,6 @@ static BoolValue* absl_nullable processPointerComparison(
   if (RHSNull->isLiteral(true))
     return &A.makeBoolValue(Opcode == BO_EQ ? *LHSNull : A.makeNot(*LHSNull));
 
-  CHECK(Opcode == BO_EQ || Opcode == BO_NE);
   auto& PointerEQ =
       Opcode == BO_EQ ? ComparisonFormula : A.makeNot(ComparisonFormula);
   auto& PointerNE =
@@ -784,9 +785,6 @@ static BoolValue* absl_nullable processPointerComparison(
   return nullptr;
 }
 
-// TODO(b/233582219): Implement promotion of nullability for initially
-// unknown pointers when there is evidence that it is nullable, for example
-// when the pointer is compared to nullptr, or cast to boolean.
 static void transferNullCheckComparison(
     const BinaryOperator* absl_nonnull BinaryOp,
     const MatchFinder::MatchResult& Result,
@@ -912,6 +910,18 @@ static bool isDeclaredInAbseilOrUtil(const Decl& D) {
          (NS->getName() == "absl" || NS->getName() == "util");
 }
 
+// Models our macro replacement argument-capture functions (supporting
+// inference).
+static void modelArgCaptureAbortIfPassThrough(const CallExpr& CE,
+                                              Environment& Env) {
+  assert(CE.isGLValue());
+  assert(CE.getNumArgs() >= 1);
+  assert(CE.getArg(0) != nullptr);
+  // Pass through the storage location of the first argument to the result.
+  if (StorageLocation* Loc = Env.getStorageLocation(*CE.getArg(0)))
+    Env.setStorageLocation(CE, *Loc);
+}
+
 // Models the `GetReferenceableValue` functions used in Abseil logging and
 // elsewhere.
 static void modelGetReferenceableValue(const CallExpr& CE, Environment& Env) {
@@ -920,8 +930,18 @@ static void modelGetReferenceableValue(const CallExpr& CE, Environment& Env) {
   if (!CE.isGLValue()) return;
   assert(CE.getNumArgs() == 1);
   assert(CE.getArg(0) != nullptr);
-  if (StorageLocation* Loc = Env.getStorageLocation(*CE.getArg(0)))
+  if (StorageLocation* Loc = Env.getStorageLocation(*CE.getArg(0))) {
     Env.setStorageLocation(CE, *Loc);
+    // Normally, we do unpackPointerValue during an LValueToRValue conversion
+    // for raw pointers (smart pointers are already unpacked during
+    // ensureSmartPointerInitialized). Since the result of GetReferenceableValue
+    // is passed to a helper function (`CheckNE_Impl`), the LValueToRValue
+    // cast is in the separate function and not in the current function.
+    // Unpack as if the LValueToRValue happens in the current function.
+    if (isSupportedRawPointerType(CE.getArg(0)->getType())) {
+      unpackPointerValue(*Loc, Env);
+    }
+  }
 }
 
 // Models the Abseil-logging `CheckNE_Impl` function. Essentially, associates
@@ -1011,6 +1031,11 @@ static void transferCallExpr(const CallExpr* absl_nonnull CE,
         modelCheckNE(*CE, State.Env);
         return;
       }
+      if (FunII->isStr(ArgCaptureAbortIfFalse) ||
+          FunII->isStr(ArgCaptureAbortIfEqual)) {
+        modelArgCaptureAbortIfPassThrough(*CE, State.Env);
+        return;
+      }
     }
   }
 
@@ -1063,11 +1088,8 @@ static void transferCallExpr(const CallExpr* absl_nonnull CE,
 
   if (CE->isCallToStdMove() || FuncDecl == nullptr) return;
 
-  // Don't treat parameters of our macro replacement argument-capture functions
-  // or of absl::StatusOr::value_or as output parameters.
-  if (FunII && (FunII->isStr(ArgCaptureAbortIfFalse) ||
-                FunII->isStr(ArgCaptureAbortIfEqual) ||
-                (FunII->isStr("value_or") && isMethodOfAbslStatusOr(FuncDecl))))
+  // Don't treat parameters of absl::StatusOr::value_or as output parameters.
+  if (FunII && ((FunII->isStr("value_or") && isMethodOfAbslStatusOr(FuncDecl))))
     return;
   // Make output parameters (with unknown nullability) initialized to unknown.
   for (ParamAndArgIterator<CallExpr> Iter(*FuncDecl, *CE); Iter; ++Iter)

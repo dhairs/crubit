@@ -13,8 +13,11 @@
 #include "absl/status/statusor.h"
 #include "lifetime_annotations/type_lifetimes.h"
 #include "rs_bindings_from_cc/ast_util.h"
+#include "rs_bindings_from_cc/bazel_types.h"
 #include "rs_bindings_from_cc/ir.h"
+#include "clang/AST/Attrs.inc"
 #include "clang/AST/Decl.h"
+#include "clang/AST/DeclarationName.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/LLVM.h"
 
@@ -22,28 +25,23 @@ namespace crubit {
 
 std::optional<IR::Item> EnumDeclImporter::Import(clang::EnumDecl* enum_decl) {
   if (enum_decl->getName().empty()) {
-    // TODO(b/208945197): This corresponds to an unnamed enum declaration like
-    // `enum { kFoo = 1 }`, which only exists to provide constants into the
-    // surrounding scope and doesn't actually introduce an enum namespace. It
-    // seems like it should probably be handled with other constants.
-    return ictx_.ImportUnsupportedItem(
-        *enum_decl, std::nullopt,
-        FormattedError::Static("Unnamed enums are not supported yet"));
+    // Anonymous enums are handled by `EnumConstantDeclImporter`.
+    return std::nullopt;
   }
   absl::StatusOr<TranslatedIdentifier> enum_name =
       ictx_.GetTranslatedIdentifier(enum_decl);
   if (!enum_name.ok()) {
     return ictx_.ImportUnsupportedItem(
         *enum_decl, std::nullopt,
-        FormattedError::PrefixedStrCat("Enum name is not supported",
-                                       enum_name.status().message()));
+        {FormattedError::PrefixedStrCat("Enum name is not supported",
+                                        enum_name.status().message())});
   }
 
   auto enclosing_item_id = ictx_.GetEnclosingItemId(enum_decl);
   if (!enclosing_item_id.ok()) {
     return ictx_.ImportUnsupportedItem(
         *enum_decl, std::nullopt,
-        FormattedError::FromStatus(std::move(enclosing_item_id.status())));
+        {FormattedError::FromStatus(std::move(enclosing_item_id.status()))});
   }
 
   // Reports an unsupported enum with the given error.
@@ -57,7 +55,7 @@ std::optional<IR::Item> EnumDeclImporter::Import(clang::EnumDecl* enum_decl) {
         *enum_decl,
         UnsupportedItem::Path{.ident = (*enum_name).rs_identifier(),
                               .enclosing_item_id = *enclosing_item_id},
-        error);
+        {std::move(error)});
   };
 
   clang::QualType cpp_type = enum_decl->getIntegerType();
@@ -72,7 +70,10 @@ std::optional<IR::Item> EnumDeclImporter::Import(clang::EnumDecl* enum_decl) {
                                "specifiers are not supported"));
   }
   const clang::tidy::lifetimes::ValueLifetimes* no_lifetimes = nullptr;
-  absl::StatusOr<CcType> type = ictx_.ConvertQualType(cpp_type, no_lifetimes);
+  absl::StatusOr<CcType> type =
+      ictx_.ConvertQualType(cpp_type, no_lifetimes, /*nullable=*/true,
+                            ictx_.AreAssumedLifetimesEnabledForTarget(
+                                ictx_.GetOwningTarget(enum_decl)));
   if (!type.ok()) {
     return unsupported(FormattedError::FromStatus(std::move(type.status())));
   }
@@ -89,22 +90,50 @@ std::optional<IR::Item> EnumDeclImporter::Import(clang::EnumDecl* enum_decl) {
                                          enumerator_name.status().message()));
     }
 
+    std::optional<std::string> deprecated;
     absl::StatusOr<std::optional<std::string>> unknown_attr =
-        CollectUnknownAttrs(*enumerator);
+        CollectUnknownAttrs(*enumerator, [&](const clang::Attr& attr) {
+          if (auto* deprecated_attr =
+                  clang::dyn_cast<clang::DeprecatedAttr>(&attr)) {
+            deprecated.emplace(deprecated_attr->getMessage());
+            return true;
+          }
+          return false;
+        });
     if (!unknown_attr.ok()) {
       return unsupported(
           FormattedError::FromStatus(std::move(unknown_attr.status())));
     }
 
+    absl::StatusOr<IntegerConstant> value =
+        IntegerConstant::FromAPValue(enumerator->getInitVal());
+    if (!value.ok()) {
+      return unsupported(FormattedError::FromStatus(std::move(value.status())));
+    }
     enumerators.push_back(Enumerator{
         .identifier = (*enumerator_name).rs_identifier(),
-        .value = IntegerConstant(enumerator->getInitVal()),
+        .value = std::move(*value),
         .unknown_attr = std::move(*unknown_attr),
+        .deprecated = std::move(deprecated),
+        .doc_comment = ictx_.GetComment(enumerator),
     });
   }
 
+  std::optional<std::string> nodiscard;
+  std::optional<std::string> deprecated;
   absl::StatusOr<std::optional<std::string>> unknown_attr =
-      CollectUnknownAttrs(*enum_decl);
+      CollectUnknownAttrs(*enum_decl, [&](const clang::Attr& attr) {
+        if (auto* unused_attr =
+                clang::dyn_cast<clang::WarnUnusedResultAttr>(&attr)) {
+          nodiscard.emplace(unused_attr->getMessage());
+          return true;
+        } else if (auto* deprecated_attr =
+                       clang::dyn_cast<clang::DeprecatedAttr>(&attr)) {
+          deprecated.emplace(deprecated_attr->getMessage());
+          return true;
+        }
+        return false;
+      });
   if (!unknown_attr.ok()) {
     return unsupported(
         FormattedError::FromStatus(std::move(unknown_attr.status())));
@@ -137,7 +166,7 @@ std::optional<IR::Item> EnumDeclImporter::Import(clang::EnumDecl* enum_decl) {
     return ExistingRustType{
         .rs_name = std::string(enum_decl->getName()),
         .cc_name = enum_decl->getQualifiedNameAsString(),
-        .type_parameters = {},
+        .unique_name = ictx_.GetUniqueName(*enum_decl),
         .owning_target = ictx_.GetOwningTarget(enum_decl),
         .size_align = std::nullopt,
         // To be paranoid, assume Rust proto enums are not ABI compatible.
@@ -146,19 +175,36 @@ std::optional<IR::Item> EnumDeclImporter::Import(clang::EnumDecl* enum_decl) {
     };
   }
 
+  BazelLabel owning_target = ictx_.GetOwningTarget(enum_decl);
+  absl::StatusOr<bool> detected_formatter = ictx_.DetectFormatter(*enum_decl);
+  if (!detected_formatter.ok()) {
+    return unsupported(
+        FormattedError::FromStatus(std::move(detected_formatter).status()));
+  }
+
+  std::optional<std::string> doc_comment = ictx_.GetComment(enum_decl);
+
   ictx_.MarkAsSuccessfullyImported(enum_decl);
+  clang::DeclarationNameInfo name_info(enum_decl->getDeclName(),
+                                       enum_decl->getLocation());
   return Enum{
       .cc_name = (*enum_name).cc_identifier,
       .rs_name = (*enum_name).rs_identifier(),
+      .unique_name = ictx_.GetUniqueName(*enum_decl),
       .id = ictx_.GenerateItemId(enum_decl),
-      .owning_target = ictx_.GetOwningTarget(enum_decl),
-      .source_loc = ictx_.ConvertSourceLocation(enum_decl->getBeginLoc()),
+      .owning_target = std::move(owning_target),
+      .source_loc =
+          ictx_.ConvertSourceLocation(enum_decl->getBeginLoc(), &name_info),
       .underlying_type = *std::move(type),
       .enumerators = enum_decl->isCompleteDefinition()
                          ? std::make_optional(std::move(enumerators))
                          : std::nullopt,
       .unknown_attr = std::move(*unknown_attr),
       .enclosing_item_id = *std::move(enclosing_item_id),
+      .detected_formatter = *detected_formatter,
+      .nodiscard = std::move(nodiscard),
+      .deprecated = std::move(deprecated),
+      .doc_comment = std::move(doc_comment),
   };
 }
 

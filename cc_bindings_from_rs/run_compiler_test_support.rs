@@ -20,11 +20,7 @@ extern crate rustc_target;
 use itertools::Itertools;
 
 use rustc_middle::ty::TyCtxt;
-use rustc_session::config::{CrateType, Input, Options, OutputType, OutputTypes};
-
-#[rustversion::since(2025-06-25)]
-use rustc_session::config::Sysroot;
-
+use rustc_session::config::{CrateType, Input, Options, OutputType, OutputTypes, Sysroot};
 use rustc_span::def_id::LocalDefId;
 use rustc_target::spec::TargetTuple;
 
@@ -111,7 +107,7 @@ static USING_INTERNAL_FEATURES: std::sync::atomic::AtomicBool =
 
 const TEST_FILENAME: &str = "crubit_unittests.rs";
 
-#[rustversion::before(2025-10-22)]
+#[rustversion::all(before(1.94), before(2025-10-22))]
 fn rustc_interface_config(opts: Options, source: String) -> rustc_interface::interface::Config {
     rustc_interface::interface::Config {
         opts,
@@ -139,7 +135,8 @@ fn rustc_interface_config(opts: Options, source: String) -> rustc_interface::int
     }
 }
 
-#[rustversion::since(2025-10-22)]
+#[rustversion::any(since(1.94), since(2025-10-22))]
+#[rustversion::all(before(1.95), before(2026-02-07))]
 fn rustc_interface_config(opts: Options, source: String) -> rustc_interface::interface::Config {
     rustc_interface::interface::Config {
         opts,
@@ -166,12 +163,91 @@ fn rustc_interface_config(opts: Options, source: String) -> rustc_interface::int
     }
 }
 
+#[rustversion::any(since(1.95), since(2026-02-07))]
+#[rustversion::all(before(1.95), before(2026-02-08))]
+fn rustc_interface_config(opts: Options, source: String) -> rustc_interface::interface::Config {
+    rustc_interface::interface::Config {
+        opts,
+        crate_cfg: Default::default(),
+        crate_check_cfg: Default::default(),
+        input: Input::Str {
+            name: rustc_span::FileName::Custom(TEST_FILENAME.to_string()),
+            input: source,
+        },
+        output_file: None,
+        output_dir: None,
+        file_loader: None,
+        lint_caps: Default::default(),
+        psess_created: None,
+        register_lints: None,
+        override_queries: None,
+        make_codegen_backend: None,
+        hash_untracked_state: None,
+        locale_resources: rustc_driver::DEFAULT_LOCALE_RESOURCES.to_vec(),
+        ice_file: None,
+        extra_symbols: vec![],
+        using_internal_features: &USING_INTERNAL_FEATURES,
+    }
+}
+
+#[rustversion::any(since(1.95), since(2026-02-08))]
+#[rustversion::all(before(1.95), before(2026-03-18))]
+fn rustc_interface_config(opts: Options, source: String) -> rustc_interface::interface::Config {
+    rustc_interface::interface::Config {
+        opts,
+        crate_cfg: Default::default(),
+        crate_check_cfg: Default::default(),
+        input: Input::Str {
+            name: rustc_span::FileName::Custom(TEST_FILENAME.to_string()),
+            input: source,
+        },
+        output_file: None,
+        output_dir: None,
+        file_loader: None,
+        lint_caps: Default::default(),
+        psess_created: None,
+        register_lints: None,
+        override_queries: None,
+        make_codegen_backend: None,
+        hash_untracked_state: None,
+        ice_file: None,
+        extra_symbols: vec![],
+        using_internal_features: &USING_INTERNAL_FEATURES,
+    }
+}
+
+#[rustversion::any(since(1.95), since(2026-03-18))]
+fn rustc_interface_config(opts: Options, source: String) -> rustc_interface::interface::Config {
+    rustc_interface::interface::Config {
+        opts,
+        crate_cfg: Default::default(),
+        crate_check_cfg: Default::default(),
+        input: Input::Str {
+            name: rustc_span::FileName::Custom(TEST_FILENAME.to_string()),
+            input: source,
+        },
+        output_file: None,
+        output_dir: None,
+        file_loader: None,
+        lint_caps: Default::default(),
+        psess_created: None,
+        register_lints: None,
+        override_queries: None,
+        make_codegen_backend: None,
+        track_state: None,
+        ice_file: None,
+        extra_symbols: vec![],
+        using_internal_features: &USING_INTERNAL_FEATURES,
+    }
+}
+
 /// A non-generic implementation of `run_compiler_for_testing`.
 ///
 /// This is used to ensure that the body of `run_compiler_for_testing` is not recompiled for every
 /// invocation. This saves some targets
 /// (e.g. `//cc_bindings_from_rs/generate_bindings:bindings_test`)
 /// several minutes of compilation time.
+#[allow(rustc::internal)]
 fn run_compiler_for_testing_impl(
     source: String,
     callback: Box<dyn for<'tcx> FnOnce(TyCtxt<'tcx>) + Send + '_>,
@@ -194,6 +270,12 @@ fn run_compiler_for_testing_impl(
         ],
         ..Default::default()
     };
+
+    // Needed for using target.json; avoids:
+    // error loading target specification: custom targets are unstable and require `-Zunstable-options`
+    // TODO: use `Session::unstable_options` instead of
+    // `unstable_opts.unstable_options` and remove the function #[allow(rustc::internal)].
+    opts.unstable_opts.unstable_options = true;
 
     let target_dir = tempfile::TempDir::new().unwrap();
 
@@ -220,7 +302,7 @@ fn run_compiler_for_testing_impl(
             // errors that the earlier stages might miss.  This helps ensure that the
             // test inputs are valid Rust (even if `callback` wouldn't
             // have triggered full analysis).
-            catch_unwind(AssertUnwindSafe(|| tcx_ensure_ok_analysis(&tcx)))
+            catch_unwind(AssertUnwindSafe(|| tcx.ensure_ok().analysis(())))
                 .expect("Test input compilation failed while analyzing");
             callback(tcx)
         });
@@ -231,16 +313,6 @@ fn run_compiler_for_testing_impl(
         }
         result
     });
-}
-
-#[rustversion::since(2025-01-31)]
-fn tcx_ensure_ok_analysis(tcx: &TyCtxt) {
-    tcx.ensure_ok().analysis(())
-}
-
-#[rustversion::before(2025-01-31)]
-fn tcx_ensure_ok_analysis(tcx: &TyCtxt) {
-    tcx.ensure().analysis(())
 }
 
 /// Finds the definition id of a Rust item with the specified `name`.

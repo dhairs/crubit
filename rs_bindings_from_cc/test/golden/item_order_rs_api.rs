@@ -6,19 +6,20 @@
 // //rs_bindings_from_cc/test/golden:item_order_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=FirstStruct
 pub struct FirstStruct {
-    pub field: ::core::ffi::c_int,
+    pub field: ::ffi_11::c_int,
 }
 impl !Send for FirstStruct {}
 impl !Sync for FirstStruct {}
@@ -38,26 +39,8 @@ impl Default for FirstStruct {
     }
 }
 
-// Error while generating bindings for constructor 'FirstStruct::FirstStruct':
-// Can't generate bindings for FirstStruct::FirstStruct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for FirstStruct::FirstStruct (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for constructor 'FirstStruct::FirstStruct':
-// Can't generate bindings for FirstStruct::FirstStruct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for FirstStruct::FirstStruct (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'FirstStruct::operator=':
-// Can't generate bindings for FirstStruct::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for FirstStruct::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for FirstStruct::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'FirstStruct::operator=':
-// Can't generate bindings for FirstStruct::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for FirstStruct::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for FirstStruct::operator= (the type of __param_0 (parameter #1): references are not supported)
-
 #[inline(always)]
-pub fn first_func() -> ::core::ffi::c_int {
+pub fn first_func() -> ::ffi_11::c_int {
     unsafe { crate::detail::__rust_thunk___Z10first_funcv() }
 }
 
@@ -65,7 +48,7 @@ pub fn first_func() -> ::core::ffi::c_int {
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=SecondStruct
 pub struct SecondStruct {
-    pub field: ::core::ffi::c_int,
+    pub field: ::ffi_11::c_int,
 }
 impl !Send for SecondStruct {}
 impl !Sync for SecondStruct {}
@@ -85,26 +68,8 @@ impl Default for SecondStruct {
     }
 }
 
-// Error while generating bindings for constructor 'SecondStruct::SecondStruct':
-// Can't generate bindings for SecondStruct::SecondStruct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for SecondStruct::SecondStruct (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for constructor 'SecondStruct::SecondStruct':
-// Can't generate bindings for SecondStruct::SecondStruct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for SecondStruct::SecondStruct (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SecondStruct::operator=':
-// Can't generate bindings for SecondStruct::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for SecondStruct::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for SecondStruct::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SecondStruct::operator=':
-// Can't generate bindings for SecondStruct::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for SecondStruct::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:item_order_cc needs [//features:experimental] for SecondStruct::operator= (the type of __param_0 (parameter #1): references are not supported)
-
 #[inline(always)]
-pub fn second_func() -> ::core::ffi::c_int {
+pub fn second_func() -> ::ffi_11::c_int {
     unsafe { crate::detail::__rust_thunk___Z11second_funcv() }
 }
 
@@ -113,9 +78,9 @@ mod detail {
     use super::*;
     unsafe extern "C" {
         pub(crate) unsafe fn __rust_thunk___ZN11FirstStructC1Ev(__this: *mut ::core::ffi::c_void);
-        pub(crate) unsafe fn __rust_thunk___Z10first_funcv() -> ::core::ffi::c_int;
+        pub(crate) unsafe fn __rust_thunk___Z10first_funcv() -> ::ffi_11::c_int;
         pub(crate) unsafe fn __rust_thunk___ZN12SecondStructC1Ev(__this: *mut ::core::ffi::c_void);
-        pub(crate) unsafe fn __rust_thunk___Z11second_funcv() -> ::core::ffi::c_int;
+        pub(crate) unsafe fn __rust_thunk___Z11second_funcv() -> ::ffi_11::c_int;
     }
 }
 

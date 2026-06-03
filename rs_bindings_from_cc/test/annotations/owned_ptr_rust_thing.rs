@@ -2,10 +2,18 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-impl Drop for crate::OwnedThing {
-    fn drop(&mut self) {
+impl crate::OwnedThing {
+    pub(crate) fn DropImpl(&mut self) {
         unsafe {
             crate::RawThing::Close(self.0.as_mut());
+        }
+    }
+}
+
+impl crate::CustomOwnedThing {
+    pub(crate) fn CustomDropImpl(&mut self) {
+        unsafe {
+            crate::CustomRawThing::CustomDropImpl(self.0.as_mut());
         }
     }
 }

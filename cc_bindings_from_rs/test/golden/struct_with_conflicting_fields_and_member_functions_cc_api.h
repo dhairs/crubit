@@ -4,24 +4,26 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // struct_with_conflicting_fields_and_member_functions_rust_golden
-// Features: custom_ffi_types, experimental, non_unpin_ctor, std_unique_ptr,
-// std_vector, supported, wrapper
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_GOLDEN_STRUCT_WITH_CONFLICTING_FIELDS_AND_MEMBER_FUNCTIONS_RUST_GOLDEN
 #define THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_GOLDEN_STRUCT_WITH_CONFLICTING_FIELDS_AND_MEMBER_FUNCTIONS_RUST_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 #include "support/internal/slot.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 namespace struct_with_conflicting_fields_and_member_functions_rust {
 
-// Generated from:
-// cc_bindings_from_rs/test/golden/struct_with_conflicting_fields_and_member_functions.rs;l=6
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: struct_with_conflicting_fields_and_member_functions_rust_golden :: "
     "X") alignas(4) [[clang::trivial_abi]] X final {
@@ -40,33 +42,23 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   X(const X&) = delete;
   X& operator=(const X&) = delete;
   X(::crubit::UnsafeRelocateTag, X&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
-  // Generated from:
-  // cc_bindings_from_rs/test/golden/struct_with_conflicting_fields_and_member_functions.rs;l=13
-  std::int32_t a() const;
+  ::std::int32_t a() const;
 
-  // Generated from:
-  // cc_bindings_from_rs/test/golden/struct_with_conflicting_fields_and_member_functions.rs;l=16
-  std::int32_t b() const;
+  ::std::int32_t b() const;
 
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/golden/struct_with_conflicting_fields_and_member_functions.rs;l=7
-    std::int32_t a_;
+    ::std::int32_t a_;
   };
 
  private:
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/golden/struct_with_conflicting_fields_and_member_functions.rs;l=8
-    std::int32_t b_;
+    ::std::int32_t b_;
   };
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/golden/struct_with_conflicting_fields_and_member_functions.rs;l=9
-    std::int32_t c;
+    ::std::int32_t c;
   };
 
  private:
@@ -79,23 +71,25 @@ static_assert(
 static_assert(
     alignof(X) == 4,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<X>);
-static_assert(std::is_trivially_move_constructible_v<X>);
-static_assert(std::is_trivially_move_assignable_v<X>);
+static_assert(::std::is_trivially_destructible_v<X>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::struct_with_conflicting_fields_and_member_functions_rust::X>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::struct_with_conflicting_fields_and_member_functions_rust::X>);
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_a(
+extern "C" ::std::int32_t __crubit_thunk_a(
     ::struct_with_conflicting_fields_and_member_functions_rust::X const&);
 }
-inline std::int32_t X::a() const {
+inline ::std::int32_t X::a() const {
   auto&& self = *this;
   return __crubit_internal::__crubit_thunk_a(self);
 }
 
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_b(
+extern "C" ::std::int32_t __crubit_thunk_b(
     ::struct_with_conflicting_fields_and_member_functions_rust::X const&);
 }
-inline std::int32_t X::b() const {
+inline ::std::int32_t X::b() const {
   auto&& self = *this;
   return __crubit_internal::__crubit_thunk_b(self);
 }
@@ -105,4 +99,6 @@ inline void X::__crubit_field_offset_assertions() {
   static_assert(8 == offsetof(X, c));
 }
 }  // namespace struct_with_conflicting_fields_and_member_functions_rust
+
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_GOLDEN_STRUCT_WITH_CONFLICTING_FIELDS_AND_MEMBER_FUNCTIONS_RUST_GOLDEN

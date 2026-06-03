@@ -6,6 +6,7 @@ load(
 )
 load(
     "//common:crubit_wrapper_macros_oss.bzl",
+    "LLVM_UNSTABLE_ONLY",
     "crubit_rust_test",
 )
 
@@ -17,17 +18,20 @@ package(
 rust_library(
     name = "generate_bindings",
     srcs = [
+        "avoid_colliding_types.rs",
         "format_type.rs",
         "generate_function.rs",
         "generate_function_thunk.rs",
         "generate_struct_and_union.rs",
+        "generate_template_specialization.rs",
+        "get_generic_args.rs",
         "lib.rs",
     ],
     proc_macro_deps = [
         "@crate_index//:rustversion",  # v1
     ],
     # LINT.IfChange
-    rustc_flags = ["-Zallow-features=rustc_private,rustc_attr,cfg_accessible,stmt_expr_attributes,proc_macro_hygiene"],
+    rustc_flags = ["-Zallow-features=rustc_private,rustc_attr,cfg_accessible,stmt_expr_attributes,proc_macro_hygiene,cfg_accessible"],
     # LINT.ThenChange(//docs/overview/unstable_features.md)
     deps = [
         ":query_compiler",
@@ -55,6 +59,7 @@ crubit_rust_test(
     rustc_flags = ["-Zallow-features=rustc_private"],
     deps = [
         ":generate_bindings",
+        ":query_compiler",
         ":test_helpers",
         "//cc_bindings_from_rs:run_compiler_test_support",
         "//cc_bindings_from_rs/generate_bindings/database",
@@ -66,14 +71,28 @@ crubit_rust_test(
 )
 
 crubit_rust_test(
+    name = "avoid_colliding_types_test",
+    srcs = ["avoid_colliding_types_test.rs"],
+    rustc_flags = ["-Zallow-features=rustc_private"],
+    deps = [
+        ":generate_bindings",
+        "//cc_bindings_from_rs:run_compiler_test_support",
+    ],
+)
+
+crubit_rust_test(
     name = "generate_bindings_test",
     srcs = ["generate_bindings_test.rs"],
+    proc_macro_deps = [
+        "@crate_index//:rustversion",  # v1
+    ],
     rustc_flags = ["-Zallow-features=rustc_private"],
     deps = [
         ":generate_bindings",
         ":test_helpers",
         "//cc_bindings_from_rs:run_compiler_test_support",
         "//common:code_gen_utils",
+        "//common:crubit_feature",
         "//common:token_stream_matchers",
         "//common:token_stream_printer",
         "@crate_index//:proc-macro2",
@@ -100,6 +119,7 @@ crubit_rust_test(
     srcs = ["generate_struct_and_union_test.rs"],
     deps = [
         ":test_helpers",
+        "//common:crubit_feature",
         "//common:token_stream_matchers",
         "@crate_index//:quote",  # v1
     ],
@@ -114,14 +134,12 @@ rust_library(
     # LINT.IfChange
     rustc_flags = ["-Zallow-features=rustc_private,rustc_attr,cfg_accessible,stmt_expr_attributes,proc_macro_hygiene"],
     # LINT.ThenChange(//docs/overview/unstable_features.md)
-    tags = [
-        "manual",
-    ],
     deps = [
         ":generate_bindings",
         "//cc_bindings_from_rs:run_compiler_test_support",
         "//cc_bindings_from_rs/generate_bindings/database",
         "//common:arc_anyhow",
+        "//common:code_gen_utils",
         "//common:crubit_feature",
         "//common:dyn_format",
         "//common:error_report",
@@ -134,8 +152,11 @@ rust_library(
     srcs = [
         "query_compiler.rs",
     ],
+    proc_macro_deps = [
+        "@crate_index//:rustversion",  # v1
+    ],
     # LINT.IfChange
-    rustc_flags = ["-Zallow-features=rustc_private,rustc_attr"],
+    rustc_flags = ["-Zallow-features=rustc_private,rustc_attr,stmt_expr_attributes,proc_macro_hygiene"],
     # LINT.ThenChange(//docs/overview/unstable_features.md)
     deps = [
         "//common:arc_anyhow",

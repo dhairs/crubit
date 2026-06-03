@@ -6,6 +6,7 @@ extern crate alloc;
 extern crate std;
 
 use crate::crubit_cc_std_internal::conversion_function_helpers;
+use crate::lossy_utf8::LossyUtf8Display;
 use alloc::string::String;
 use alloc::vec::Vec;
 use bridge_rust::{transmute_abi, CrubitAbi, Decoder, Encoder};
@@ -16,6 +17,7 @@ use core::ffi::c_void;
 use core::mem::{ManuallyDrop, MaybeUninit};
 use core::ops::Deref;
 use core::ptr::NonNull;
+use std::fmt::Display;
 
 #[cfg(unix)]
 use std::os::unix::ffi::OsStrExt;
@@ -34,15 +36,17 @@ use std::os::unix::ffi::OsStrExt;
 #[doc = "CRUBIT_ANNOTATE: rust_to_cpp_converter=rust_string_to_cpp_string"]
 #[allow(non_snake_case)]
 #[repr(C)]
-pub struct string {
+pub struct string_wrapper {
     owned_cpp_string: NonNull<c_void>,
 }
 
-// We have no reason to restrict access to the string data to particular threads.
-unsafe impl Send for string {}
-unsafe impl Sync for string {}
+pub type string = string_wrapper;
 
-impl string {
+// We have no reason to restrict access to the string data to particular threads.
+unsafe impl Send for string_wrapper {}
+unsafe impl Sync for string_wrapper {}
+
+impl string_wrapper {
     pub fn as_slice(&self) -> &[u8] {
         self.as_ref()
     }
@@ -94,14 +98,15 @@ impl string {
         self.owned_cpp_string.as_ptr()
     }
 
-    /// Returns an object that implements `Display` for safely printing paths that may contain
-    /// non-Unicode data. This may perform lossy conversion, depending on the underlying data.
-    pub fn display(&self) -> Display<'_> {
-        Display(self.as_slice())
+    /// Returns an object that implements `Display` for safely printing strings that may contain
+    /// non-Unicode data. The Display implementation replaces invalid UTF-8 with the Unicode
+    /// replacement character (�), and is potentially lossy.
+    pub fn display(&self) -> impl Display + use<'_> {
+        LossyUtf8Display(self.as_slice())
     }
 }
 
-impl PartialEq for string {
+impl PartialEq for string_wrapper {
     fn eq(&self, other: &Self) -> bool {
         unsafe {
             // SAFETY: `owned_cpp_string` is guaranteed to be a non-null C++ allocated
@@ -114,15 +119,15 @@ impl PartialEq for string {
     }
 }
 
-impl Eq for string {}
+impl Eq for string_wrapper {}
 
-impl Default for string {
+impl Default for string_wrapper {
     fn default() -> Self {
         "".into()
     }
 }
 
-impl Clone for string {
+impl Clone for string_wrapper {
     fn clone(&self) -> Self {
         // SAFETY: `owned_cpp_string` is guaranteed to be a non-null C++ allocated
         // pointer to std::string.
@@ -137,7 +142,7 @@ impl Clone for string {
     }
 }
 
-impl Drop for string {
+impl Drop for string_wrapper {
     fn drop(&mut self) {
         unsafe {
             // SAFETY: `owned_cpp_string` is guaranteed to be a non-null C++ allocated
@@ -147,31 +152,31 @@ impl Drop for string {
     }
 }
 
-impl From<String> for string {
+impl From<String> for string_wrapper {
     fn from(s: String) -> Self {
         s.as_bytes().into()
     }
 }
 
-impl From<&String> for string {
+impl From<&String> for string_wrapper {
     fn from(s: &String) -> Self {
         s.as_bytes().into()
     }
 }
 
-impl From<&Vec<u8>> for string {
+impl From<&Vec<u8>> for string_wrapper {
     fn from(s: &Vec<u8>) -> Self {
         s.as_slice().into()
     }
 }
 
-impl From<&str> for string {
+impl From<&str> for string_wrapper {
     fn from(s: &str) -> Self {
         s.as_bytes().into()
     }
 }
 
-impl From<&[u8]> for string {
+impl From<&[u8]> for string_wrapper {
     fn from(s: &[u8]) -> Self {
         // SAFETY: Rust slice returns a valid pointer to a buffer of bytes.
         let raw_string = unsafe {
@@ -185,7 +190,7 @@ impl From<&[u8]> for string {
     }
 }
 
-impl Deref for string {
+impl Deref for string_wrapper {
     type Target = [u8];
     fn deref(&self) -> &Self::Target {
         let ptr = self.owned_cpp_string.as_ptr();
@@ -209,34 +214,28 @@ impl Deref for string {
     }
 }
 
-impl core::convert::AsRef<[u8]> for string {
+impl core::convert::AsRef<[u8]> for string_wrapper {
     fn as_ref(&self) -> &[u8] {
         &*self
     }
 }
 
-impl core::fmt::Debug for string {
+impl core::fmt::Debug for string_wrapper {
     // TODO(b/351976622): Make a pretty Debug like std::string(b"\xffhello\xde") or
     // similar.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "cc_std::string({:?})", self.as_slice())
+        write!(f, "cc_std::string_wrapper({:?})", self.as_slice())
     }
 }
 
-impl core::fmt::Display for string {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        self.display().fmt(f)
-    }
-}
-
-// Allow converting a cc_std::std::string reference to a "real" C++ string pointer.
+// Allow converting a cc_std::std::string_wrapper reference to a "real" C++ string pointer.
 
 type StringSymbol = forward_declare::symbol!(
     "std :: basic_string < char , std :: char_traits < char >, std :: allocator < char >>"
 );
 
 impl<'a, Crate> forward_declare::CppCast<*const forward_declare::Incomplete<StringSymbol, Crate>>
-    for &'a string
+    for &'a string_wrapper
 {
     fn cpp_cast(self) -> *const forward_declare::Incomplete<StringSymbol, Crate> {
         self.owned_cpp_string.as_ptr() as *const _ as *const _
@@ -244,30 +243,10 @@ impl<'a, Crate> forward_declare::CppCast<*const forward_declare::Incomplete<Stri
 }
 
 impl<'a, Crate> forward_declare::CppCast<*mut forward_declare::Incomplete<StringSymbol, Crate>>
-    for &'a mut string
+    for &'a mut string_wrapper
 {
     fn cpp_cast(self) -> *mut forward_declare::Incomplete<StringSymbol, Crate> {
         self.owned_cpp_string.as_ptr() as *mut _
-    }
-}
-
-/// Helper struct for safely printing C++ string data with `format!` and `{}`.
-///
-/// A string from C++ might contain non-Unicode data. This struct implements the Display trait in a
-/// way that mitigates that. It is created by the display method on `string`. This may perform lossy
-/// conversion, depending on the underlying data.
-pub struct Display<'a>(&'a [u8]);
-
-impl<'a> core::fmt::Display for Display<'a> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        use core::fmt::Write;
-        for chunk in self.0.utf8_chunks() {
-            f.write_str(chunk.valid())?;
-            if !chunk.invalid().is_empty() {
-                f.write_char(core::char::REPLACEMENT_CHARACTER)?;
-            }
-        }
-        Ok(())
     }
 }
 
@@ -280,7 +259,7 @@ impl<'a> core::fmt::Display for Display<'a> {
 pub struct BoxedCppStringAbi;
 
 unsafe impl CrubitAbi for BoxedCppStringAbi {
-    type Value = string;
+    type Value = string_wrapper;
 
     const SIZE: usize = core::mem::size_of::<*mut c_void>();
 
@@ -304,12 +283,12 @@ unsafe impl CrubitAbi for BoxedCppStringAbi {
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn rust_string_to_cpp_string(input: *const c_void, output: *mut c_void) {
     // SAFETY:
-    // * `input` is a valid `string`.
+    // * `input` is a valid `string_wrapper`.
     // * `input.owned_cpp_string` is guaranteed to be a non-null C++ allocated
     //   pointer to std::string.
     // * `output` is a valid C++ `std::string`.
     unsafe {
-        let input = &*(input as *const string);
+        let input = &*(input as *const string_wrapper);
         conversion_function_helpers::StringCreateInPlace(output, input.owned_cpp_string.as_ptr());
     }
 }
@@ -319,8 +298,11 @@ pub unsafe extern "C" fn cpp_string_to_rust_string(input: *mut c_void, output: *
     // SAFETY: `input` is a valid `std::string` so it can be safely moved.
     let owned_cpp_string = unsafe { conversion_function_helpers::StringMoveOwnedPtr(input) };
     if let Some(ptr) = NonNull::new(owned_cpp_string) {
-        let output = &mut *(output as *mut MaybeUninit<string>);
-        output.as_mut_ptr().write(string { owned_cpp_string: ptr });
+        // SAFETY: `output` is a valid buffer for a `string_wrapper`.
+        unsafe {
+            let output = &mut *(output as *mut MaybeUninit<string_wrapper>);
+            output.as_mut_ptr().write(string_wrapper { owned_cpp_string: ptr });
+        }
     } else {
         panic!("Failed to create owned string");
     }

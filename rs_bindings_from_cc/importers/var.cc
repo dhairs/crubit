@@ -11,9 +11,13 @@
 #include "absl/log/check.h"
 #include "rs_bindings_from_cc/ast_util.h"
 #include "rs_bindings_from_cc/ir.h"
+#include "clang/AST/APValue.h"
+#include "clang/AST/Attrs.inc"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/TypeBase.h"
+#include "clang/Basic/LLVM.h"
 #include "llvm/Support/Casting.h"
 
 namespace crubit {
@@ -24,7 +28,7 @@ std::optional<IR::Item> VarDeclImporter::Import(clang::VarDecl* var_decl) {
   if (!decl_context) {
     return ictx_.ImportUnsupportedItem(
         *var_decl, std::nullopt,
-        FormattedError::Static("DeclContext was unexpectedly null"));
+        {FormattedError::Static("DeclContext was unexpectedly null")});
   }
   if (!decl_context->isTranslationUnit() && !decl_context->isExternCContext() &&
       !decl_context->isExternCXXContext() && !decl_context->isNamespace() &&
@@ -35,7 +39,13 @@ std::optional<IR::Item> VarDeclImporter::Import(clang::VarDecl* var_decl) {
   if (var_decl->isStaticDataMember()) {
     return ictx_.ImportUnsupportedItem(
         *var_decl, std::nullopt,
-        FormattedError::Static("static data members are not supported"));
+        {FormattedError::Static("static data members are not supported")});
+  }
+
+  if (var_decl->getTLSKind() != clang::VarDecl::TLS_None) {
+    return ictx_.ImportUnsupportedItem(
+        *var_decl, std::nullopt,
+        {FormattedError::Static("thread_local variables are not supported")});
   }
 
   // Note that `[const|inline] T x = /* constant initializer */;` acts like
@@ -44,25 +54,18 @@ std::optional<IR::Item> VarDeclImporter::Import(clang::VarDecl* var_decl) {
   // language.
   bool is_const_or_inline =
       var_decl->getType().isConstQualified() || var_decl->isInline();
-  bool might_not_export =
+  bool has_const_init =
       var_decl->isConstexpr() ||
       (is_const_or_inline && var_decl->hasConstantInitialization());
-  // TODO(b/208945197): We don't support compile-time constants yet.
-  if (might_not_export) {
-    return ictx_.ImportUnsupportedItem(
-        *var_decl, std::nullopt,
-        FormattedError::Static(
-            "compile-time and inline constants are not supported"));
-  }
 
-  if (!var_decl->hasExternalFormalLinkage()) {
+  if (!has_const_init && !var_decl->hasExternalFormalLinkage()) {
     return std::nullopt;
   }
 
   if (llvm::isa<clang::VarTemplateSpecializationDecl>(var_decl)) {
     return ictx_.ImportUnsupportedItem(
         *var_decl, std::nullopt,
-        FormattedError::Static("templated variables are not supported"));
+        {FormattedError::Static("templated variables are not supported")});
   }
 
   absl::StatusOr<TranslatedIdentifier> var_name =
@@ -70,22 +73,76 @@ std::optional<IR::Item> VarDeclImporter::Import(clang::VarDecl* var_decl) {
   if (!var_name.ok()) {
     return ictx_.ImportUnsupportedItem(
         *var_decl, std::nullopt,
-        FormattedError::PrefixedStrCat("variable name is not supported",
-                                       var_name.status().message()));
+        {FormattedError::PrefixedStrCat("variable name is not supported",
+                                        var_name.status().message())});
   }
 
   auto enclosing_item_id = ictx_.GetEnclosingItemId(var_decl);
   if (!enclosing_item_id.ok()) {
     return ictx_.ImportUnsupportedItem(
         *var_decl, std::nullopt,
-        FormattedError::FromStatus(std::move(enclosing_item_id.status())));
+        {FormattedError::FromStatus(std::move(enclosing_item_id.status()))});
   }
 
-  auto type = ictx_.ConvertQualType(var_decl->getType(), nullptr);
-  if (!type.ok()) {
+  std::optional<std::string> deprecated;
+  absl::StatusOr<std::optional<std::string>> unknown_attr =
+      CollectUnknownAttrs(*var_decl, [&](const clang::Attr& attr) {
+        if (auto* deprecated_attr =
+                clang::dyn_cast<clang::DeprecatedAttr>(&attr)) {
+          deprecated.emplace(deprecated_attr->getMessage());
+          return true;
+        }
+        return false;
+      });
+  if (!unknown_attr.ok()) {
     return ictx_.ImportUnsupportedItem(
         *var_decl, std::nullopt,
-        FormattedError::FromStatus(std::move(type.status())));
+        {FormattedError::FromStatus(std::move(unknown_attr.status()))});
+  }
+
+  CcType type =
+      ictx_.ConvertQualType(var_decl->getType(), nullptr, /*nullable=*/true,
+                            ictx_.AreAssumedLifetimesEnabledForTarget(
+                                ictx_.GetOwningTarget(var_decl)));
+
+  if (has_const_init) {
+    const clang::Type& var_type = *var_decl->getType().getTypePtr();
+    if (!var_type.isBooleanType() && !var_type.isIntegerType()) {
+      return ictx_.ImportUnsupportedItem(
+          *var_decl, std::nullopt,
+          {FormattedError::Static(
+              "only boolean and integer constexpr variables "
+              "are supported")});
+    }
+    const clang::APValue* value = var_decl->evaluateValue();
+    if (value == nullptr || !value->isInt()) {
+      return ictx_.ImportUnsupportedItem(
+          *var_decl, std::nullopt,
+          {FormattedError::Static("unable to evaluate constexpr value")});
+    }
+    absl::StatusOr<IntegerConstant> integer_constant =
+        IntegerConstant::FromAPValue(value->getInt());
+    if (!integer_constant.ok()) {
+      return ictx_.ImportUnsupportedItem(
+          *var_decl, std::nullopt,
+          {FormattedError::FromStatus(std::move(integer_constant.status()))});
+    }
+    ictx_.MarkAsSuccessfullyImported(var_decl);
+    return Constant{
+        .value = std::move(*integer_constant),
+        .cc_name = var_name->cc_identifier,
+        .rs_name = var_name->rs_identifier(),
+        .unique_name = ictx_.GetUniqueName(*var_decl),
+        .id = ictx_.GenerateItemId(var_decl),
+        .owning_target = ictx_.GetOwningTarget(var_decl),
+        .source_loc =
+            ictx_.ConvertSourceLocation(var_decl->getBeginLoc(), nullptr),
+        .type = std::move(type),
+        .unknown_attr = std::move(*unknown_attr),
+        .enclosing_item_id = *std::move(enclosing_item_id),
+        .deprecated = std::move(deprecated),
+        .doc_comment = ictx_.GetComment(var_decl),
+    };
   }
 
   // Global variables without extern "C" have different linkage, but in practice
@@ -100,25 +157,21 @@ std::optional<IR::Item> VarDeclImporter::Import(clang::VarDecl* var_decl) {
     mangled_name = std::nullopt;
   }
 
-  absl::StatusOr<std::optional<std::string>> unknown_attr =
-      CollectUnknownAttrs(*var_decl);
-  if (!unknown_attr.ok()) {
-    return ictx_.ImportUnsupportedItem(
-        *var_decl, std::nullopt,
-        FormattedError::FromStatus(std::move(unknown_attr.status())));
-  }
-
   ictx_.MarkAsSuccessfullyImported(var_decl);
   return GlobalVar{
       .cc_name = var_name->cc_identifier,
       .rs_name = var_name->rs_identifier(),
+      .unique_name = ictx_.GetUniqueName(*var_decl),
       .id = ictx_.GenerateItemId(var_decl),
       .owning_target = ictx_.GetOwningTarget(var_decl),
-      .source_loc = ictx_.ConvertSourceLocation(var_decl->getBeginLoc()),
+      .source_loc =
+          ictx_.ConvertSourceLocation(var_decl->getBeginLoc(), nullptr),
       .mangled_name = mangled_name,
-      .type = *std::move(type),
+      .type = std::move(type),
       .unknown_attr = std::move(*unknown_attr),
       .enclosing_item_id = *std::move(enclosing_item_id),
+      .deprecated = std::move(deprecated),
+      .doc_comment = ictx_.GetComment(var_decl),
   };
 }
 

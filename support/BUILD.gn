@@ -1,0 +1,96 @@
+# Part of the Crubit project, under the Apache License v2.0 with LLVM
+# Exceptions. See /LICENSE for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+# Automatically @generated BUILD.gn.
+
+import("../crubit.gni")
+import("//build/rust/rust_static_library.gni")
+
+source_set("annotations") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "annotations.h",
+  ]
+  deps = [
+    "$crubit_src_dir/support:annotations_internal",
+  ]
+}
+
+source_set("annotations_internal") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "annotations_internal.h",
+  ]
+  deps = [
+    "$crubit_absl_dep_target",
+  ]
+}
+
+source_set("bridge_cpp") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "bridge.h",
+  ]
+}
+
+source_set("lifetime_annotations") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "lifetime_annotations.h",
+  ]
+}
+
+rust_static_library("bridge_rust") {
+  crate_name = "bridge_rust"
+  crate_root = "bridge.rs"
+  edition = "2024"
+  sources = [
+    "bridge.rs",
+  ]
+  allow_unsafe = true
+  no_clippy = true
+}
+
+group("support_cpp") {
+  public_deps = [
+    ":annotations",
+    ":annotations_internal",
+    ":bridge_cpp",
+    ":lifetime_annotations",
+  ]
+}
+
+group("support_rust") {
+  public_deps = [
+    ":bridge_rust",
+  ]
+}

@@ -135,5 +135,53 @@ TEST(NoDiscardTest, WithMessageWorks) {
   EXPECT_EQ(5, tests::msg_add(2, 3));
 }
 
+TEST(GenericFnTest, AsMutTraitBasicTest) {
+  namespace tests = functions::generic_fn_tests::as_mut_trait_tests;
+  std::vector<int32_t> vec = {1, 2, 3};
+  tests::prefix_sums(rs_std::SliceRef<int32_t>{vec});
+  EXPECT_EQ(1, vec[0]);
+  EXPECT_EQ(1 + 2, vec[1]);
+  EXPECT_EQ(1 + 2 + 3, vec[2]);
+}
+
+TEST(GenericFnTest, AsRefTraitTests) {
+  namespace tests = functions::generic_fn_tests::as_ref_trait_tests;
+  std::vector<int32_t> vec = {1, 2, 3};
+  EXPECT_EQ(1 + 2 + 3,
+            tests::slice_ref_sum(rs_std::SliceRef<const int32_t>{vec}));
+
+  std::vector<int32_t> vec1 = {1, 2, 3};
+  std::vector<int32_t> vec2 = {10, 20, 30};
+  std::vector<int32_t> vec3 = {100, 200, 300};
+  std::vector<int32_t> result = {0, 0, 0};
+  tests::diverse_lifetimes(rs_std::SliceRef<const int32_t>{vec1},
+                           rs_std::SliceRef<const int32_t>{vec2},
+                           rs_std::SliceRef<const int32_t>{vec3},
+                           rs_std::SliceRef<int32_t>{result});
+  EXPECT_EQ(111, result[0]);
+  EXPECT_EQ(222, result[1]);
+  EXPECT_EQ(333, result[2]);
+
+  tests::MyStruct my_struct = tests::MyStruct::new_(123);
+  EXPECT_EQ(123, tests::struct_ref(my_struct));
+}
+
+TEST(GenericFnTest, IntoTraitTests) {
+  namespace tests = functions::generic_fn_tests::into_trait_tests;
+  EXPECT_EQ(123, tests::basic_test(123));
+  EXPECT_EQ(124, tests::where_clause(124));
+  EXPECT_EQ(125 + 456, tests::reused_generic_param(125, 456));
+  EXPECT_EQ(126 + 456, tests::multiple_generic_params(126, 456));
+  EXPECT_EQ(0, tests::return_type());
+  EXPECT_EQ(1 + 2 + 3,
+            tests::generic_param_nested_deeper_in_param_ty({1, 2, 3}));
+}
+
+TEST(GenericFnTest, CtorTraitTests) {
+  namespace tests = functions::generic_fn_tests::ctor_trait_tests;
+  tests::NonMovable non_movable = tests::NonMovable::new_(123);
+  EXPECT_EQ(42, tests::accept_ctor(std::move(non_movable)));
+}
+
 }  // namespace
 }  // namespace crubit

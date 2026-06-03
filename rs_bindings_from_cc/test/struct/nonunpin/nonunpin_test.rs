@@ -1,9 +1,8 @@
 // Part of the Crubit project, under the Apache License v2.0 with LLVM
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
-#![feature(negative_impls)]
 
-use ctor::{ctor, emplace, CtorNew, ReconstructUnchecked};
+use ctor::{ctor, emplace, CtorNew};
 use googletest::prelude::*;
 use nonunpin::{Nonmovable, Nonunpin, NonunpinStruct, ReturnsNonmovable};
 use std::pin::Pin;
@@ -12,14 +11,14 @@ use std::pin::Pin;
 /// address.
 #[gtest]
 fn test_onearg_ctor() {
-    let mut x = emplace!(Nonunpin::ctor_new(42));
+    let x = emplace!(Nonunpin::ctor_new(42));
     assert_eq!(x.value(), 42);
     assert_eq!(x.addr(), &*x as *const _ as usize);
 }
 
 #[gtest]
 fn test_default_ctor() {
-    let mut x = emplace!(Nonunpin::ctor_new(()));
+    let x = emplace!(Nonunpin::ctor_new(()));
     assert_eq!(x.value(), 0);
     assert_eq!(x.addr(), &*x as *const _ as usize);
 }
@@ -92,7 +91,7 @@ fn test_union_field() {
         }));
         assert_eq!(my_union.cxx_class.value(), 4);
         std::mem::ManuallyDrop::drop(&mut Pin::into_inner_unchecked(my_union.as_mut()).cxx_class);
-        my_union.as_mut().reconstruct_unchecked(ctor!(MyUnion { int: 2 }));
+        ctor::reconstruct(my_union.as_mut(), ctor!(MyUnion { int: 2 }));
         assert_eq!(my_union.int, 2);
     }
 }

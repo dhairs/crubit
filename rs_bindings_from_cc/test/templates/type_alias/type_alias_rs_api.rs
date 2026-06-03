@@ -4,31 +4,27 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/templates/type_alias:type_alias
-// Features: custom_ffi_types, experimental, non_unpin_ctor, std_unique_ptr, std_vector, supported, wrapper
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
-// Generated from: rs_bindings_from_cc/test/templates/type_alias/type_alias.h;l=10
-// Error while generating bindings for class 'MyTemplate':
-// Class templates are not supported yet
+// error: class `MyTemplate` could not be bound
+//   Class templates are not yet supported
 
-/// Generated from: rs_bindings_from_cc/test/templates/type_alias/type_alias.h;l=25
 pub type MyTypeAlias = crate::__CcTemplateInst10MyTemplateIiE;
 
-/// Generated from: rs_bindings_from_cc/test/templates/type_alias/type_alias.h;l=26
 pub type OtherTypeAliasInSameTarget = crate::__CcTemplateInst10MyTemplateIiE;
 
-/// Generated from: rs_bindings_from_cc/test/templates/type_alias/type_alias.h;l=11
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C, align(4))]
-///CRUBIT_ANNOTATE: cpp_type=MyTemplate < int >
+///CRUBIT_ANNOTATE: cpp_type=:: MyTemplate < int >
 pub struct __CcTemplateInst10MyTemplateIiE {
     __non_field_data: [::core::mem::MaybeUninit<u8>; 0],
     /// Reason for representing this field as a blob of bytes:
@@ -38,29 +34,20 @@ pub struct __CcTemplateInst10MyTemplateIiE {
 impl !Send for __CcTemplateInst10MyTemplateIiE {}
 impl !Sync for __CcTemplateInst10MyTemplateIiE {}
 forward_declare::unsafe_define!(
-    forward_declare::symbol!("MyTemplate < int >"),
+    forward_declare::symbol!(":: MyTemplate < int >"),
     crate::__CcTemplateInst10MyTemplateIiE
 );
 impl __CcTemplateInst10MyTemplateIiE {
-    /// Generated from: rs_bindings_from_cc/test/templates/type_alias/type_alias.h;l=13
     #[inline(always)]
     pub fn Create(value: ::ffi_11::c_int) -> crate::__CcTemplateInst10MyTemplateIiE {
-        unsafe {
-            let mut __return = ::core::mem::MaybeUninit::<Self>::uninit();
-            crate::detail::__rust_thunk___ZN10MyTemplateIiE6CreateEi__2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2ftemplates_2ftype_5falias_3atype_5falias(&raw mut __return as*mut::core::ffi::c_void,value);
-            __return.assume_init()
-        }
+        unsafe { self::cc_template_inst10_my_template_ii_e::Create(value) }
     }
-    /// Generated from: rs_bindings_from_cc/test/templates/type_alias/type_alias.h;l=19
     #[inline(always)]
-    pub fn value<'a>(&'a self) -> &'a ::ffi_11::c_int {
-        unsafe {
-            crate::detail::__rust_thunk___ZNK10MyTemplateIiE5valueEv__2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2ftemplates_2ftype_5falias_3atype_5falias(self)
-        }
+    pub fn value<'__this>(&'__this self) -> ::cref::CRef<'__this, ::ffi_11::c_int> {
+        unsafe { self::cc_template_inst10_my_template_ii_e::value(self) }
     }
 }
 
-/// Generated from: rs_bindings_from_cc/test/templates/type_alias/type_alias.h;l=11
 impl Default for __CcTemplateInst10MyTemplateIiE {
     #[inline(always)]
     fn default() -> Self {
@@ -68,6 +55,26 @@ impl Default for __CcTemplateInst10MyTemplateIiE {
         unsafe {
             crate::detail::__rust_thunk___ZN10MyTemplateIiEC1Ev__2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2ftemplates_2ftype_5falias_3atype_5falias(&raw mut tmp as*mut _);
             tmp.assume_init()
+        }
+    }
+}
+
+pub mod cc_template_inst10_my_template_ii_e {
+    #[inline(always)]
+    pub(crate) fn Create(value: ::ffi_11::c_int) -> crate::__CcTemplateInst10MyTemplateIiE {
+        unsafe {
+            let mut __crubit_return =
+                ::core::mem::MaybeUninit::<crate::__CcTemplateInst10MyTemplateIiE>::uninit();
+            crate::detail::__rust_thunk___ZN10MyTemplateIiE6CreateEi__2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2ftemplates_2ftype_5falias_3atype_5falias(&raw mut __crubit_return as*mut::core::ffi::c_void,value);
+            __crubit_return.assume_init()
+        }
+    }
+    #[inline(always)]
+    pub(crate) fn value<'__this>(
+        __this: &'__this crate::__CcTemplateInst10MyTemplateIiE,
+    ) -> ::cref::CRef<'__this, ::ffi_11::c_int> {
+        unsafe {
+            crate::detail::__rust_thunk___ZNK10MyTemplateIiE5valueEv__2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2ftemplates_2ftype_5falias_3atype_5falias(__this)
         }
     }
 }
@@ -84,10 +91,10 @@ mod detail {
             value: ::ffi_11::c_int,
         );
         pub(crate) unsafe fn __rust_thunk___ZNK10MyTemplateIiE5valueEv__2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2ftemplates_2ftype_5falias_3atype_5falias<
-            'a,
+            '__this,
         >(
-            __this: &'a crate::__CcTemplateInst10MyTemplateIiE,
-        ) -> &'a ::ffi_11::c_int;
+            __this: &'__this crate::__CcTemplateInst10MyTemplateIiE,
+        ) -> ::cref::CRef<'__this, ::ffi_11::c_int>;
     }
 }
 

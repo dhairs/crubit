@@ -6,11 +6,12 @@ use constructors::{
     NonTrivialStructWithConstructors, OtherSimpleStruct, StructWithDeletedConstructors,
     StructWithExplicitConversionConstructor, StructWithExplicitlyDefaultedConstructors,
     StructWithImplicitConversionConstructor, StructWithImplicitConversionFromReference,
-    StructWithInlineConstructors, StructWithPrivateConstructors,
-    StructWithUserProvidedConstructors,
+    StructWithInlineConstructors, StructWithMultipleConstructors, StructWithPrivateConstructors,
+    StructWithUnsafeConstructor, StructWithUserProvidedConstructors,
 };
 use ctor::emplace;
 use ctor::CtorNew as _;
+use ctor::UnsafeFrom as _;
 use googletest::gtest;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 
@@ -35,6 +36,19 @@ fn test_explicit_conversion_constructor() {
     assert_impl_all!(StructWithExplicitConversionConstructor: From<i32>);
     let i: StructWithExplicitConversionConstructor = 125.into();
     assert_eq!(125, i.int_field);
+}
+
+#[gtest]
+fn test_multiple_constructors() {
+    assert_impl_all!(StructWithMultipleConstructors: From<i32>);
+    assert_impl_all!(StructWithMultipleConstructors: From<(i32, i32)>);
+    assert_impl_all!(StructWithMultipleConstructors: From<(i32, i32, i32)>);
+    let i: StructWithMultipleConstructors = 125.into();
+    assert_eq!(125, i.int_field);
+    let i: StructWithMultipleConstructors = (125, 126).into();
+    assert_eq!(251, i.int_field);
+    let i: StructWithMultipleConstructors = (125, 126, 127).into();
+    assert_eq!(378, i.int_field);
 }
 
 #[gtest]
@@ -118,3 +132,23 @@ fn test_nontrivial_struct() {
     let s_clone = emplace!(ctor::copy(&*s));
     assert_eq!(s_clone.int_field, 123);
 }
+
+#[gtest]
+fn test_unsafe_constructor() {
+    let mut x = 42;
+    let p: *mut i32 = &mut x;
+    // SAFETY: We are passing a valid pointer.
+    let s = unsafe { StructWithUnsafeConstructor::unsafe_from(p) };
+    unsafe {
+        assert_eq!(*s.ptr_field, 42);
+    }
+}
+
+// Ideally, this test would work.
+//
+// // TODO(b/331685208): make this test compile and pass.
+//
+// #[gest]
+// fn test_span_constructors() {
+//     let _ = span_constructors::MyStruct::new(...);
+// }

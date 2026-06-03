@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:compatibility_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 /// This type renames the special member functions so that they can be
@@ -22,7 +23,7 @@
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=CompatibleType
 pub struct CompatibleType {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 1],
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 1],
 }
 impl !Send for CompatibleType {}
 impl !Sync for CompatibleType {}
@@ -33,25 +34,42 @@ unsafe impl ::cxx::ExternType for CompatibleType {
 impl CompatibleType {
     #[inline(always)]
     pub fn renamed_default_constructor<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        unsafe { crate::detail::__rust_thunk___ZN14CompatibleTypeC1Ev(self) }
+        unsafe { self::compatible_type::renamed_default_constructor(self) }
     }
     #[inline(always)]
     pub fn renamed_constructor<'a>(
         self: ::core::pin::Pin<&'a mut Self>,
-        __param_0: ::core::ffi::c_int,
+        __param_0: ::ffi_11::c_int,
     ) {
-        unsafe { crate::detail::__rust_thunk___ZN14CompatibleTypeC1Ei(self, __param_0) }
+        unsafe { self::compatible_type::renamed_constructor(self, __param_0) }
     }
 }
 
-// Error while generating bindings for constructor 'CompatibleType::renamed_copy_constructor':
-// Can't generate bindings for CompatibleType::renamed_copy_constructor, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:compatibility_cc needs [//features:experimental] for CompatibleType::renamed_copy_constructor (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `CompatibleType::CompatibleType` could not be bound
+//   Unsupported parameter type `const CompatibleType& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'CompatibleType::operator=':
-// Can't generate bindings for CompatibleType::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:compatibility_cc needs [//features:experimental] for CompatibleType::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:compatibility_cc needs [//features:experimental] for CompatibleType::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `CompatibleType::operator=` could not be bound
+//   Unsupported parameter type `const CompatibleType& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `CompatibleType&`:
+//     references are not yet supported
+
+pub mod compatible_type {
+    #[inline(always)]
+    pub(crate) fn renamed_default_constructor<'a>(
+        __this: ::core::pin::Pin<&'a mut crate::CompatibleType>,
+    ) {
+        unsafe { crate::detail::__rust_thunk___ZN14CompatibleTypeC1Ev(__this) }
+    }
+    #[inline(always)]
+    pub(crate) fn renamed_constructor<'a>(
+        __this: ::core::pin::Pin<&'a mut crate::CompatibleType>,
+        __param_0: ::ffi_11::c_int,
+    ) {
+        unsafe { crate::detail::__rust_thunk___ZN14CompatibleTypeC1Ei(__this, __param_0) }
+    }
+}
 
 mod detail {
     #[allow(unused_imports)]
@@ -64,7 +82,7 @@ mod detail {
         #[link_name = "_ZN14CompatibleTypeC1Ei"]
         pub(crate) unsafe fn __rust_thunk___ZN14CompatibleTypeC1Ei<'a>(
             __this: ::core::pin::Pin<&'a mut crate::CompatibleType>,
-            __param_0: ::core::ffi::c_int,
+            __param_0: ::ffi_11::c_int,
         );
     }
 }

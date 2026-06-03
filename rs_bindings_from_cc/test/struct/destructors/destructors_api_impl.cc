@@ -4,7 +4,6 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/struct/destructors:destructors
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #include "support/internal/cxx20_backports.h"
 #include "support/internal/offsetof.h"
@@ -45,11 +44,12 @@ extern "C" void __rust_thunk___ZN24DestructionOrderRecorderD1Ev(
   std::destroy_at(__this);
 }
 
-static_assert((void (*)(int))&DestructionOrderRecorder::RecordDestruction);
+static_assert((void (*)(int)) & ::DestructionOrderRecorder::RecordDestruction);
 
-static_assert((int (*)())&DestructionOrderRecorder::GetDestructionRecord);
+static_assert((int (*)()) & ::DestructionOrderRecorder::GetDestructionRecord);
 
-static_assert((void (*)())&DestructionOrderRecorder::ClearDestructionRecord);
+static_assert((void (*)()) &
+              ::DestructionOrderRecorder::ClearDestructionRecord);
 
 static_assert(CRUBIT_SIZEOF(class FieldDestructionOrderTester) == 12);
 static_assert(alignof(class FieldDestructionOrderTester) == 4);
@@ -73,18 +73,14 @@ __rust_thunk___ZN27FieldDestructionOrderTesteraSEOS_(
 }
 
 extern "C" void
-__rust_thunk___ZN27FieldDestructionOrderTester6CreateE24DestructionOrderRecorderS0_S0_(
-    class FieldDestructionOrderTester* __return,
+__rust_thunk___ZN27FieldDestructionOrderTesterC1E24DestructionOrderRecorderS0_S0_(
+    class FieldDestructionOrderTester* __this,
     class DestructionOrderRecorder* field1,
     class DestructionOrderRecorder* field2,
     class DestructionOrderRecorder* field3) {
-  new (__return) auto(FieldDestructionOrderTester::Create(
-      std::move(*field1), std::move(*field2), std::move(*field3)));
+  crubit::construct_at(__this, std::move(*field1), std::move(*field2),
+                       std::move(*field3));
 }
-
-static_assert((class FieldDestructionOrderTester (*)(
-    class DestructionOrderRecorder, class DestructionOrderRecorder,
-    class DestructionOrderRecorder))&FieldDestructionOrderTester::Create);
 
 extern "C" void
 __rust_thunk___ZN27FieldDestructionOrderTester15DestructFromCppEiii(
@@ -92,7 +88,7 @@ __rust_thunk___ZN27FieldDestructionOrderTester15DestructFromCppEiii(
   FieldDestructionOrderTester::DestructFromCpp(field1, field2, field3);
 }
 
-static_assert((void (*)(int, int,
-                        int))&FieldDestructionOrderTester::DestructFromCpp);
+static_assert((void (*)(int, int, int)) &
+              ::FieldDestructionOrderTester::DestructFromCpp);
 
 #pragma clang diagnostic pop

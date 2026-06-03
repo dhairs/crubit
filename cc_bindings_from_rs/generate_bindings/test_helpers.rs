@@ -8,13 +8,14 @@
 extern crate rustc_middle;
 
 use arc_anyhow::Result;
+use code_gen_utils::CcInclude;
 use database::code_snippet::ApiSnippets;
-use database::{BindingsGenerator as _, Database, IncludeGuard};
+use database::{BindingsGenerator, IncludeGuard};
 use error_report::{FatalErrors, IgnoreErrors};
 use generate_bindings::{generate_bindings, new_database, BindingsTokens};
 use run_compiler_test_support::{find_def_id_by_name, run_compiler_for_testing};
 use rustc_middle::ty::TyCtxt;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 
 use dyn_format::Format;
@@ -72,7 +73,29 @@ fn bindings_db_for_tests_with_features(
     tcx: TyCtxt,
     features: flagset::FlagSet<crubit_feature::CrubitFeature>,
     with_kythe_annotations: bool,
-) -> Database {
+) -> BindingsGenerator {
+    const KNOWN_CRATE_NAMES: &[&str] = &["alloc", "core", "std"];
+    let crate_name_to_include_paths = KNOWN_CRATE_NAMES
+        .iter()
+        .map(|&name| {
+            (
+                Rc::from(name),
+                vec![CcInclude::user_header(Rc::from(
+                    format!("fake_bindings_for_unittests/{name}_cc_api.h").as_str(),
+                ))],
+            )
+        })
+        .collect();
+    let crate_name_to_features = KNOWN_CRATE_NAMES
+        .iter()
+        .copied()
+        .chain(std::iter::once("self"))
+        .map(|name| (Rc::from(name), features))
+        .collect();
+    let crate_name_to_namespace = KNOWN_CRATE_NAMES
+        .iter()
+        .map(|&name| (Rc::from(name), Rc::from(format!("rs::{name}").as_str())))
+        .collect();
     new_database(
         tcx,
         /* source_crate_name= */ None,
@@ -81,22 +104,21 @@ fn bindings_db_for_tests_with_features(
             .unwrap(),
         /* crubit_debug_path_format= */ None,
         /* default_features= */ Default::default(),
-        /* enable_hir_types= */ true,
         /* kythe_annotations= */ with_kythe_annotations,
         /* enable_rmeta_interface= */ false,
-        /* crate_name_to_include_paths= */ Default::default(),
-        /* crate_name_to_features= */
-        Rc::new(HashMap::from([(Rc::from("self"), features)])),
-        /* crate_name_to_namespace= */ HashMap::default().into(),
+        Rc::new(crate_name_to_include_paths),
+        Rc::new(crate_name_to_features),
+        Rc::new(crate_name_to_namespace),
         /* crate_renames= */ HashMap::default().into(),
         /* errors = */ Rc::new(IgnoreErrors),
         /* fatal_errors= */ Rc::new(FatalErrors::new()),
-        /* no_thunk_name_mangling= */ true,
+        /* is_golden_test= */ true,
         /* include_guard */ IncludeGuard::PragmaOnce,
+        /* ignore_symbols_from_files */ HashSet::default().into(),
     )
 }
 
-pub fn bindings_db_for_tests(tcx: TyCtxt) -> Database {
+pub fn bindings_db_for_tests(tcx: TyCtxt) -> BindingsGenerator {
     bindings_db_for_tests_with_features(
         tcx,
         crubit_feature::CrubitFeature::Experimental | crubit_feature::CrubitFeature::Supported,

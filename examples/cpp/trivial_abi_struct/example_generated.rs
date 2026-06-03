@@ -4,27 +4,25 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //examples/cpp/trivial_abi_struct:example_lib
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 /// Because this class has a destructor, it will not receive Rust bindings
 /// without ABSL_ATTRIBUTE_TRIVIAL_ABI.
-///
-/// Generated from: examples/cpp/trivial_abi_struct/example.h;l=12
 #[derive(Clone)]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=Position
 pub struct Position {
-    pub x: ::core::ffi::c_int,
-    pub y: ::core::ffi::c_int,
+    pub x: ::ffi_11::c_int,
+    pub y: ::ffi_11::c_int,
 }
 impl !Send for Position {}
 impl !Sync for Position {}
@@ -33,7 +31,6 @@ unsafe impl ::cxx::ExternType for Position {
     type Kind = ::cxx::kind::Trivial;
 }
 
-/// Generated from: examples/cpp/trivial_abi_struct/example.h;l=12
 impl Default for Position {
     #[inline(always)]
     fn default() -> Self {
@@ -45,7 +42,6 @@ impl Default for Position {
     }
 }
 
-/// Generated from: examples/cpp/trivial_abi_struct/example.h;l=12
 impl ::ctor::UnpinAssign<&Self> for Position {
     #[inline(always)]
     fn unpin_assign(&mut self, __param_0: &Self) {
@@ -55,23 +51,12 @@ impl ::ctor::UnpinAssign<&Self> for Position {
     }
 }
 
-/// Generated from: examples/cpp/trivial_abi_struct/example.h;l=16
 impl Drop for Position {
     #[inline(always)]
     fn drop<'a>(&'a mut self) {
         unsafe { crate::detail::__rust_thunk___ZN8PositionD1Ev(self) }
     }
 }
-
-// Generated from: nowhere/llvm/src/libcxx/include/__type_traits/integral_constant.h;l=21
-// Error while generating bindings for struct 'std::integral_constant<bool, false>':
-// Can't generate bindings for std::integral_constant<bool, false>, because of missing required features (<internal link>):
-// //examples/cpp/trivial_abi_struct:example_lib needs [//features:wrapper] for std::integral_constant<bool, false> (crate::__CcTemplateInstNSt3__u17integral_constantIbLb0EEE is a template instantiation)
-
-// Generated from: nowhere/llvm/src/libcxx/include/__type_traits/integral_constant.h;l=21
-// Error while generating bindings for struct 'std::integral_constant<bool, true>':
-// Can't generate bindings for std::integral_constant<bool, true>, because of missing required features (<internal link>):
-// //examples/cpp/trivial_abi_struct:example_lib needs [//features:wrapper] for std::integral_constant<bool, true> (crate::__CcTemplateInstNSt3__u17integral_constantIbLb1EEE is a template instantiation)
 
 mod detail {
     #[allow(unused_imports)]
@@ -93,6 +78,6 @@ const _: () = {
     static_assertions::assert_not_impl_any!(crate::Position: Copy);
     assert!(::core::mem::offset_of!(crate::Position, x) == 0);
     assert!(::core::mem::offset_of!(crate::Position, y) == 4);
-    static_assertions::assert_impl_all!(::core::ffi::c_int: Copy);
-    static_assertions::assert_impl_all!(::core::ffi::c_int: Copy);
+    static_assertions::assert_impl_all!(::ffi_11::c_int: Copy);
+    static_assertions::assert_impl_all!(::ffi_11::c_int: Copy);
 };

@@ -30,7 +30,7 @@ impl Parse for CrateRename {
 fn derive_crate_name(input: &syn::DeriveInput) -> syn::Result<Ident> {
     let mut result = Ident::new("ctor", Span::call_site());
     for attr in &input.attrs {
-        if !attr.path.is_ident("ctor") {
+        if !attr.path().is_ident("ctor") {
             continue;
         }
         CrateRename(result) = attr.parse_args()?;
@@ -106,7 +106,7 @@ fn derive_default_impl(input: syn::DeriveInput) -> syn::Result<proc_macro2::Toke
             }
         }
 
-        impl !::core::marker::Unpin for #struct_ctor_name {}
+        impl !::#ctor::SelfCtor for #struct_ctor_name {}
 
         impl ::#ctor::CtorNew<()> for #struct_name {
             type CtorType = #struct_ctor_name;
@@ -147,15 +147,23 @@ fn derive_move_and_assign_via_copy_impl(
 ) -> syn::Result<proc_macro2::TokenStream> {
     let ctor = derive_crate_name(&input)?;
     let type_name = input.ident;
+    let (impl_generics, type_generics, where_clause) = input.generics.split_for_impl();
     Ok(quote! {
+        // Ensure `SelfCtor` is implemented for the type regardless of fields or type parameters.
+        impl #impl_generics ::#ctor::SelfCtor for  #type_name #type_generics #where_clause {}
+
         // Move construct.
-        impl From<::#ctor::RvalueReference<'_, Self>> for #type_name {
+        impl #impl_generics From<::#ctor::RvalueReference<'_, Self>> for
+            #type_name #type_generics #where_clause
+        {
             #[inline(always)]
             fn from(this: ::#ctor::RvalueReference<'_, Self>) -> Self { *this.get_ref() }
         }
 
         // Ctor move construct.
-        impl ::#ctor::CtorNew<::#ctor::RvalueReference<'_, Self>> for #type_name {
+        impl #impl_generics ::#ctor::CtorNew<::#ctor::RvalueReference<'_, Self>> for
+            #type_name #type_generics #where_clause
+        {
             type CtorType = Self;
             type Error = ::#ctor::Infallible;
             #[inline(always)]
@@ -165,7 +173,7 @@ fn derive_move_and_assign_via_copy_impl(
         }
 
         // Copy assign.
-        impl ::#ctor::UnpinAssign<&Self> for #type_name {
+        impl #impl_generics ::#ctor::UnpinAssign<&Self> for #type_name #type_generics #where_clause {
             #[inline(always)]
             fn unpin_assign(&mut self, other: &Self) {
                 *self = *other;
@@ -173,7 +181,9 @@ fn derive_move_and_assign_via_copy_impl(
         }
 
         // Move assign.
-        impl ::#ctor::UnpinAssign<::#ctor::RvalueReference<'_, Self>> for #type_name {
+        impl #impl_generics ::#ctor::UnpinAssign<::#ctor::RvalueReference<'_, Self>> for
+            #type_name #type_generics #where_clause
+        {
             #[inline(always)]
             fn unpin_assign(&mut self, other: ::#ctor::RvalueReference<'_, Self>) {
                 *self = *other.get_ref();
@@ -189,6 +199,28 @@ fn derive_move_and_assign_via_copy_impl(
 /// would have used, but is essentially useless.
 #[proc_macro]
 pub fn project_pin_type(name: TokenStream) -> TokenStream {
+    project_type_impl(name, project_pin_ident)
+}
+
+fn project_pin_ident(ident: &Ident) -> Ident {
+    Ident::new(&format!("__CrubitProjectPin{}", ident), Span::call_site())
+}
+
+/// `project_ref_type!(foo::T)` is the name of the type returned by
+/// `foo::T::project_ref()`.
+///
+/// If `foo::T` is not `#[recursively_pinned]`, then this returns the name it
+/// would have used, but is essentially useless.
+#[proc_macro]
+pub fn project_ref_type(name: TokenStream) -> TokenStream {
+    project_type_impl(name, project_ref_ident)
+}
+
+fn project_ref_ident(ident: &Ident) -> Ident {
+    Ident::new(&format!("__CrubitProjectRef{}", ident), Span::call_site())
+}
+
+fn project_type_impl(name: TokenStream, project_ident: fn(&Ident) -> Ident) -> TokenStream {
     let mut name = syn::parse_macro_input!(name as syn::Path);
     match name.segments.last_mut() {
         None => {
@@ -205,21 +237,30 @@ pub fn project_pin_type(name: TokenStream) -> TokenStream {
                 .into_compile_error()
                 .into();
             }
-            last.ident = project_pin_ident(&last.ident);
+            last.ident = project_ident(&last.ident);
         }
     }
     TokenStream::from(quote! { #name })
 }
 
-fn project_pin_ident(ident: &Ident) -> Ident {
-    Ident::new(&format!("__CrubitProjectPin{}", ident), Span::call_site())
-}
-
-/// Defines the `project_pin` function, and its return value.
+/// Defines the `project_pin`/`project_ref` function, and its return type.
 ///
 /// If the input is a union, this returns nothing, and pin-projection is not
 /// implemented.
-fn project_pin_impl(input: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenStream> {
+///
+/// Args:
+///   * input: the input type to project.
+///   * method_name: the name of the method to define (`project_pin` or
+///     `project_ref`).
+///   * mut_: Mutability qualifier: `mut` for `project_pin`, empty for `project_ref`.
+///   * project_ident: a function that takes an identifier for the type and returns the
+///     identifier to use for the projection type.
+fn project_method_impl(
+    input: &syn::DeriveInput,
+    method_name: proc_macro2::TokenStream,
+    mut_: proc_macro2::TokenStream,
+    project_ident: fn(&Ident) -> Ident,
+) -> syn::Result<proc_macro2::TokenStream> {
     let is_fieldless = match &input.data {
         syn::Data::Struct(data) => data.fields.is_empty(),
         syn::Data::Enum(e) => e.variants.iter().all(|variant| variant.fields.is_empty()),
@@ -231,7 +272,7 @@ fn project_pin_impl(input: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenS
     let mut projected = input.clone();
     // TODO(jeanpierreda): check attributes for repr(packed)
     projected.attrs.clear();
-    projected.ident = project_pin_ident(&projected.ident);
+    projected.ident = project_ident(&projected.ident);
 
     let lifetime = if is_fieldless {
         quote! {}
@@ -242,7 +283,7 @@ fn project_pin_impl(input: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenS
     let project_field = |field: &mut syn::Field| {
         field.attrs.clear();
         let field_ty = &field.ty;
-        let pin_ty = syn::parse_quote!(::core::pin::Pin<& #lifetime mut #field_ty>);
+        let pin_ty = syn::parse_quote!(::core::pin::Pin<& #lifetime #mut_ #field_ty>);
         field.ty = syn::Type::Path(pin_ty);
     };
     // returns the braced parts of a projection pattern and return value.
@@ -304,20 +345,20 @@ fn project_pin_impl(input: &syn::DeriveInput) -> syn::Result<proc_macro2::TokenS
             };
         }
         syn::Data::Union(_) => {
-            unreachable!("project_pin_impl should early return when it finds a union")
+            unreachable!("project_method_impl should early return when it finds a union")
         }
     }
 
-    let (input_impl_generics, input_ty_generics, input_where_clause) =
+    let (input_impl_generics, input_type_generics, input_where_clause) =
         input.generics.split_for_impl();
     let (_, projected_generics, _) = projected.generics.split_for_impl();
 
     Ok(quote! {
         #projected
 
-        impl #input_impl_generics #input_ident #input_ty_generics #input_where_clause {
+        impl #input_impl_generics #input_ident #input_type_generics #input_where_clause {
             #[must_use]
-            pub fn project_pin<#lifetime>(self: ::core::pin::Pin<& #lifetime mut Self>) -> #projected_ident #projected_generics {
+            pub fn #method_name<#lifetime>(self: ::core::pin::Pin<& #lifetime #mut_ Self>) -> #projected_ident #projected_generics {
                 unsafe {
                     let from = ::core::pin::Pin::into_inner_unchecked(self);
                     #project_body
@@ -343,12 +384,13 @@ fn add_lifetime(generics: &mut syn::Generics, prefix: &str) -> proc_macro2::Toke
         name = Cow::Owned(format!("{prefix}_{i}"));
     };
     let quoted_lifetime = quote! {#lifetime};
-    generics.params.push(syn::GenericParam::Lifetime(syn::LifetimeDef::new(lifetime)));
+    generics.params.push(syn::GenericParam::Lifetime(syn::LifetimeParam::new(lifetime)));
     quoted_lifetime
 }
 
 enum RecursivelyPinnedArg {
     PinnedDrop,
+    MaybeUnpin,
     RenamedCrate(Ident),
 }
 
@@ -356,21 +398,27 @@ impl Parse for RecursivelyPinnedArg {
     fn parse(input: syn::parse::ParseStream) -> syn::Result<Self> {
         if input.peek(Token![crate]) {
             let CrateRename(new_crate) = input.parse()?;
-            Ok(RecursivelyPinnedArg::RenamedCrate(new_crate))
+            return Ok(RecursivelyPinnedArg::RenamedCrate(new_crate));
+        } else if input.peek(Token![?]) {
+            let _: Token![?] = input.parse().unwrap();
+            let ident: Ident = input.parse()?;
+            if ident == "Unpin" {
+                return Ok(RecursivelyPinnedArg::MaybeUnpin);
+            }
         } else if input.parse::<Ident>()? == "PinnedDrop" {
-            Ok(RecursivelyPinnedArg::PinnedDrop)
-        } else {
-            Err(syn::Error::new(
-                input.span(),
-                format!("unexpected argument: expected PinnedDrop or crate=..., but got: {input}"),
-            ))
+            return Ok(RecursivelyPinnedArg::PinnedDrop);
         }
+        Err(syn::Error::new(
+            input.span(),
+            format!("unexpected argument: expected PinnedDrop, `?Unpin`, or crate=..., but got: {input}"),
+        ))
     }
 }
 
 #[derive(Default)]
 struct RecursivelyPinnedArgs {
     is_pinned_drop: bool,
+    is_maybe_unpin: bool,
     renamed_crate: Option<Ident>,
 }
 
@@ -386,6 +434,9 @@ impl Parse for RecursivelyPinnedArgs {
                 RecursivelyPinnedArg::PinnedDrop => {
                     result.is_pinned_drop = true;
                 }
+                RecursivelyPinnedArg::MaybeUnpin => {
+                    result.is_maybe_unpin = true;
+                }
                 RecursivelyPinnedArg::RenamedCrate(ident) => {
                     result.renamed_crate = Some(ident);
                 }
@@ -398,62 +449,72 @@ impl Parse for RecursivelyPinnedArgs {
 /// Prevents this type from being directly created outside of this crate in safe
 /// code.
 ///
-/// For enums and unit structs, this uses the `#[non_exhaustive]` attribute.
-/// This leads to unfortunate error messages, but there is no other way to
-/// prevent creation of an enum or a unit struct at this time.
+/// We use a private field with a name and type that indicates the error:
 ///
-/// For tuple structs, we also use `#[non_exhaustive]`, as it's no worse than
-/// the alternative. Both adding a private field and adding `#[non_exhaustive]`
-/// lead to indirect error messages, but `#[non_exhaustive]` is the more likely
-/// of the two to ever get custom error message support.
+/// ```
+/// __must_use_ctor_to_initialize: ::ctor::macro_internal::MustUseCtorToInitialize,
+/// ```
 ///
-/// Finally, for structs with named fields, we actually *cannot* use
-/// `#[non_exhaustive]`, because it would make the struct not FFI-safe, and
-/// structs with named fields are specifically supported for C++ interop.
-/// Instead, we use a private field with a name that indicates the error.
-/// (`__must_use_ctor_to_initialize`).
+/// This zero-sized type cannot be constructed in safe code, and so the compiler will prevent
+/// direct initialization.
 ///
 /// Unions are not yet implemented properly.
-///
-/// ---
-///
-/// Note that the use of `#[non_exhaustive]` also has other effects. At the
-/// least: tuple variants and tuple structs marked with `#[non_exhaustive]`
-/// cannot be pattern matched using the "normal" syntax. Instead, one must use
-/// curly braces. (Broken: `T(x, ..)`; woken: `T{0: x, ..}`).
-///
-/// (This does not seem very intentional, and with all luck will be fixed before
-/// too long.)
-fn forbid_initialization(s: &mut syn::DeriveInput) {
-    let non_exhaustive_attr = syn::parse_quote!(#[non_exhaustive]);
+fn forbid_initialization(s: &mut syn::DeriveInput, ctor: &Ident) {
     match &mut s.data {
         // TODO(b/232969667): prevent creation of unions from safe code.
         // (E.g. hide inside a struct.)
         syn::Data::Union(_) => return,
         syn::Data::Struct(data) => {
-            match &mut data.fields {
-                syn::Fields::Unit | syn::Fields::Unnamed(_) => {
-                    s.attrs.insert(0, non_exhaustive_attr);
-                }
-                syn::Fields::Named(fields) => {
-                    fields.named.push(syn::Field {
-                        attrs: vec![],
-                        vis: syn::Visibility::Inherited,
-                        // TODO(jeanpierreda): better hygiene: work even if a field has the same name.
-                        ident: Some(Ident::new(FIELD_FOR_MUST_USE_CTOR, Span::call_site())),
-                        colon_token: Some(<syn::Token![:]>::default()),
-                        ty: syn::parse_quote!([u8; 0]),
-                    });
-                }
-            }
+            forbid_initialization_fields(&mut data.fields, ctor);
         }
         syn::Data::Enum(e) => {
-            // Enums can't have private fields. Instead, we need to add #[non_exhaustive] to
-            // every variant -- this makes it impossible to construct the
-            // variants.
             for variant in &mut e.variants {
-                variant.attrs.insert(0, non_exhaustive_attr.clone());
+                forbid_initialization_fields(&mut variant.fields, ctor);
             }
+        }
+    }
+}
+
+fn forbid_initialization_fields(fields: &mut syn::Fields, ctor: &Ident) {
+    match fields {
+        syn::Fields::Unit => {
+            // TODO(jeanpierreda): better hygiene: work even if a field has the same name.
+            let ident = Ident::new(FIELD_FOR_MUST_USE_CTOR, Span::call_site());
+            *fields = syn::Fields::Named(syn::parse_quote!({
+                #ident: ::#ctor::macro_internal::MustUseCtorToInitialize,
+            }));
+        }
+        syn::Fields::Unnamed(fields) => {
+            // Push to the back to keep the indices lining up with the types. If we inserted to the
+            // front, the indices would shift which might cause extremely subtle bugs if someone
+            // tried to use FnCtor and used `std::mem::offset_of!(TupleStruct, N)`. For example,
+            // if N = 1, they might think they're getting the offset of the second field, but they'd
+            // actually get the offset of the first field (because N = 0 is the hidden field).
+            // The only downside to this is that users will get a horribly confusing error if they
+            // try to have their type coerce to a DST.
+            fields.unnamed.push(syn::Field {
+                attrs: vec![],
+                vis: syn::Visibility::Inherited,
+                mutability: syn::FieldMutability::None,
+                ident: None,
+                colon_token: None,
+                ty: syn::parse_quote!(::#ctor::macro_internal::MustUseCtorToInitialize),
+            });
+        }
+        syn::Fields::Named(fields) => {
+            // insert at the front in case the last field is !Sized.
+            fields.named.insert(
+                0,
+                syn::Field {
+                    attrs: vec![],
+                    vis: syn::Visibility::Inherited,
+                    mutability: syn::FieldMutability::None,
+                    // TODO(jeanpierreda): better hygiene: work even if a field has the same name.
+                    ident: Some(Ident::new(FIELD_FOR_MUST_USE_CTOR, Span::call_site())),
+                    colon_token: Some(<syn::Token![:]>::default()),
+                    ty: syn::parse_quote!(::#ctor::macro_internal::MustUseCtorToInitialize),
+                },
+            );
         }
     }
 }
@@ -479,6 +540,9 @@ fn forbid_initialization(s: &mut syn::DeriveInput) {
 ///   field: i32,
 /// }
 /// ```
+///
+/// `#[recursively_pinned]` also provides `project_pin()` and `project_ref()` methods
+/// which return a struct containing pinned references to each field, see below.
 ///
 /// ## Arguments
 ///
@@ -506,6 +570,46 @@ fn forbid_initialization(s: &mut syn::DeriveInput) {
 ///
 /// (This is analogous to `#[pin_project(PinnedDrop)]`.)
 ///
+/// ## `?Unpin`
+///
+/// `?Unpin` removes the default `!Unpin` impl, instead inheriting pinnedness from the fields
+/// of the struct.
+///
+/// `#[recursively_pinned]`, unlike `#[pin_project]`, by default marks the struct
+/// as `!Unpin`, even if all of the fields are `Unpin`. This is typically desirable,
+/// because `Unpin` is used as a discriminator trait throughout `ctor` to make certain trait
+/// impls available: in particular the `Ctor` trait itself, which is implemented as a Rust move
+/// for all `Unpin` Rust types, but also `Assign` and `CtorNew`.
+///
+/// In the context of a _generic_ struct such as `Foo<T>`, you might want the struct to be
+/// have the default struct behavior, and implement `Unpin` if and only if its fields do.
+/// However, without negative trait bounds or specialization in the Rust language, this makes it
+/// impossible to implement some of the traits within `ctor`, such as `CtorNew` and `Assign`,
+/// which are meant to be near-universal across all types. To implement that universality, they
+/// have a blanket impl for `Unpin` types, which would collide with any implementation for
+/// `Foo<T>` if `Foo<T>` is only conditionally `!Unpin`.
+///
+/// (This problem is unique to generic types: for a generic type, the blanket impl would apply for
+/// some type parameters, while you might want to hand-write an implementation for other type
+/// parameters. Rust offers no way to do this. For a concrete type, you only need one impl and
+/// can decide on it in advance.)
+///
+/// See also the Blanket impls section in the main ctor documentation.
+///
+/// If you do not need your type to work with interfaces that might blanket impl for `Unpin` types,
+/// you can disable the default `!Unpin` impl by passing `?Unpin` to `#[recursively_pinned]`:
+///
+/// ```
+/// #[recursively_pinned(?Unpin)]
+/// struct S<T> {
+///   field: T,
+/// }
+/// ```
+///
+/// `S` will implement `Unpin` if and only if all its fields do. It will never implement `!Unpin`.
+///
+/// TODO(b/477393585): Reconsider this design!
+///
 /// ### `crate=<ident>`
 ///
 /// If the `ctor` crate is renamed or wrapped, you may need to pass the new
@@ -532,17 +636,49 @@ fn forbid_initialization(s: &mut syn::DeriveInput) {
 /// Recursively pinned types cannot be created directly in safe code, as they
 /// are pinned from the very moment of their creation.
 ///
-/// This is prevented either using `#[non_exhaustive]` or using a private field,
-/// depending on the type in question. For example, enums use
-/// `#[non_exhaustive]`, and structs with named fields use a private field named
-/// `__must_use_ctor_to_initialize`. This can lead to confusing error messages,
-/// so watch out!
+/// This is prevented using a private field of type
+/// `ctor::macro_internal::MustUseCtorToInitialize`. This can lead to confusing
+/// error messages, so watch out!
+///
+/// ## Pin-projection
+///
+/// `#[recursively_pinned]` adds `project_pin` and `project_ref` methods to the
+/// type, shaped like this:
+///
+/// ```
+/// pub fn project_pin(self: Pin<&mut Self>) -> <Projected>;
+/// pub fn project_ref(self: Pin<&Self>) -> <Projected>;
+/// ```
+///
+/// `project_pin()` is a method on `Pin<&mut Self>`, and returns a type
+/// containing pinned mutable references to each field. Similarly,
+/// `project_ref()` projects to a type with pinned shared reference fields.
+///
+/// For example, given:
+///
+/// ```
+/// #[recursively_pinned]
+/// struct Point {
+///   x: i32,
+///   y: i32,
+/// }
+/// ```
+///
+/// One can mutate the `x` field of a `Pin<&mut Point>` as follows:
+///
+/// ```
+/// p.as_mut().project_pin().x.set(42);
+/// ```
 ///
 /// ## Supported types
 ///
 /// Structs, enums, and unions are all supported. However, unions do not receive
-/// a `pin_project` method, as there is no way to implement pin projection for
-/// unions. (One cannot know which field is active.)
+/// a `project_{pin,ref}` methods, as there is no way to implement pin projection for
+/// unions (one cannot know which field is active). Lastly, although DST structs are
+/// supported, DST tuple structs are not supported. This is because the unsized field must be
+/// the last field in the struct, but the insertion of a hidden `MustUseCtorToInitialize` field
+/// would break this requirement, and inserting it at the front would cause surprising behavior
+/// with respect to offset calculations.
 #[proc_macro_attribute]
 pub fn recursively_pinned(args: TokenStream, item: TokenStream) -> TokenStream {
     match recursively_pinned_impl(args.into(), item.into()) {
@@ -562,7 +698,10 @@ fn recursively_pinned_impl(
     let ctor = args.renamed_crate.unwrap_or(Ident::new("ctor", Span::call_site()));
     let mut input = syn::parse2::<syn::DeriveInput>(item)?;
 
-    let project_pin_impl = project_pin_impl(&input)?;
+    let project_pin_impl =
+        project_method_impl(&input, quote! {project_pin}, quote! {mut}, project_pin_ident)?;
+    let project_ref_impl =
+        project_method_impl(&input, quote! {project_ref}, quote! {}, project_ref_ident)?;
     let name = input.ident.clone();
 
     // Create two copies of input: one (public) has a private field that can't be
@@ -578,14 +717,14 @@ fn recursively_pinned_impl(
     // type is locally defined within a narrow scope.
     ctor_initialized_input.ident = syn::Ident::new(&format!("__CrubitCtor{name}"), name.span());
     let ctor_initialized_name = &ctor_initialized_input.ident;
-    forbid_initialization(&mut input);
+    forbid_initialization(&mut input, &ctor);
 
-    let (input_impl_generics, input_ty_generics, input_where_clause) =
+    let (input_impl_generics, input_type_generics, input_where_clause) =
         input.generics.split_for_impl();
 
     let drop_impl = if args.is_pinned_drop {
         quote! {
-            impl #input_impl_generics Drop for #name #input_ty_generics #input_where_clause {
+            impl #input_impl_generics Drop for #name #input_type_generics #input_where_clause {
                 fn drop(&mut self) {
                     unsafe {::#ctor::PinnedDrop::pinned_drop(::core::pin::Pin::new_unchecked(self))}
                 }
@@ -593,21 +732,30 @@ fn recursively_pinned_impl(
         }
     } else {
         quote! {
-            impl #input_impl_generics ::#ctor::macro_internal::DoNotImplDrop for #name #input_ty_generics #input_where_clause {}
+            impl #input_impl_generics ::#ctor::macro_internal::DoNotImplDrop for #name #input_type_generics #input_where_clause {}
             /// A no-op PinnedDrop that will cause an error if the user also defines PinnedDrop,
             /// due to forgetting to pass `PinnedDrop` to #[recursively_pinned(PinnedDrop)]`.
-            impl #input_impl_generics ::#ctor::PinnedDrop for #name #input_ty_generics #input_where_clause {
+            impl #input_impl_generics ::#ctor::PinnedDrop for #name #input_type_generics #input_where_clause {
                 unsafe fn pinned_drop(self: ::core::pin::Pin<&mut Self>) {}
             }
+        }
+    };
+
+    let unpin_impl = if args.is_maybe_unpin {
+        quote! {}
+    } else {
+        quote! {
+            impl #input_impl_generics !Unpin for #name #input_type_generics #input_where_clause {}
         }
     };
 
     Ok(quote! {
         #input
         #project_pin_impl
+        #project_ref_impl
 
         #drop_impl
-        impl #input_impl_generics !Unpin for #name #input_ty_generics #input_where_clause {}
+        #unpin_impl
 
         // Introduce a new scope to limit the blast radius of the CtorInitializedFields type.
         // This lets us use relatively readable names: while the impl is visible outside the scope,
@@ -615,8 +763,10 @@ fn recursively_pinned_impl(
         const _ : () = {
             #ctor_initialized_input
 
-            unsafe impl #input_impl_generics ::#ctor::RecursivelyPinned for #name #input_ty_generics #input_where_clause {
-                type CtorInitializedFields = #ctor_initialized_name #input_ty_generics;
+            unsafe impl #input_impl_generics ::#ctor::RecursivelyPinned for
+                #name #input_type_generics #input_where_clause
+            {
+                type CtorInitializedFields = #ctor_initialized_name #input_type_generics;
             }
         };
     })
@@ -646,8 +796,8 @@ mod test {
             quote! {
                 #[repr(C)]
                 struct S {
-                    x: i32,
-                    __must_use_ctor_to_initialize: [u8; 0]
+                    __must_use_ctor_to_initialize: ::ctor::macro_internal::MustUseCtorToInitialize,
+                    x: i32
                 }
             }
         );
@@ -698,10 +848,10 @@ mod test {
             quote! {
                 #[repr(C)]
                 enum E {
-                    #[non_exhaustive]
-                    A,
-                    #[non_exhaustive]
-                    B(i32),
+                    A {
+                        __must_use_ctor_to_initialize: ::ctor::macro_internal::MustUseCtorToInitialize,
+                    },
+                    B(i32, ::ctor::macro_internal::MustUseCtorToInitialize),
                 }
             }
         );

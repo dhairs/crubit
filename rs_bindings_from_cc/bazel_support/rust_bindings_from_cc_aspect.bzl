@@ -10,6 +10,7 @@ more context.
 load("@rules_cc//cc/common:cc_common.bzl", "cc_common")
 load("@rules_cc//cc/common:cc_info.bzl", "CcInfo")
 load("@bazel_skylib//lib:collections.bzl", "collections")
+load("@bazel_skylib//rules:common_settings.bzl", "BuildSettingInfo")
 load(
     "//features:crubit_feature_hint.bzl",
     "find_crubit_features",
@@ -31,6 +32,10 @@ load(
     "generate_and_compile_bindings",
 )
 load("@protobuf//rust:aspects.bzl", "RustProtoInfo", "rust_cc_proto_library_aspect")
+load(
+    "@protobuf//rust/bazel:encode_raw_string_as_crate_name.bzl",
+    "encode_raw_string_as_crate_name",
+)
 
 # <internal link>/127#naming-header-files-h-and-inc recommends declaring textual headers either in the
 # `textual_hdrs` attribute of the Bazel C++ rules, or using the `.inc` file extension. Therefore
@@ -116,6 +121,15 @@ def _get_additional_rust_deps(aspect_ctx):
                 _get_additional_rust_deps_from_provider(hint[AdditionalRustSrcsProviderInfo]),
             )
     return collections.uniq(additional_rust_deps)
+
+def _get_cc_support_deps(aspect_ctx):
+    cc_support_deps = []
+    for hint in aspect_ctx.rule.attr.aspect_hints:
+        if AdditionalRustSrcsProviderInfo in hint:
+            cc_support_deps.extend(
+                hint[AdditionalRustSrcsProviderInfo].cc_support_deps,
+            )
+    return collections.uniq(cc_support_deps)
 
 def _collect_hdrs(ctx, crubit_features):
     public_hdrs = _filter_hdrs(ctx.rule.files.hdrs)
@@ -232,7 +246,7 @@ def _rust_bindings_from_cc_aspect_impl(target, ctx):
     # 1. We don't need Crubit bindings for `_cc_lib` for protobuf interop, we use protoc for that.
     # 2. We know that transitive deps of `_cc_lib` will get Crubit bindings through the "3 aspects"
     #    path if they are needed.
-    if "@protobuf//bazel/private:google_cc_proto_library.bzl%cc_proto_aspect" not in ctx.aspect_ids:
+    if not _has_cc_proto_aspect(ctx):
         return []
 
     # We use a fake generator only when we are building the real one, in order to avoid
@@ -281,6 +295,9 @@ def _rust_bindings_from_cc_aspect_impl(target, ctx):
 
     extra_rs_srcs = []
     extra_deps = []
+    aliases = {}
+
+    cc_support_deps = _get_cc_support_deps(ctx)
 
     # Headers for which we will produce bindings.
     public_hdrs = []
@@ -291,18 +308,6 @@ def _rust_bindings_from_cc_aspect_impl(target, ctx):
 
     elif ctx.rule.kind == "cc_embed_data" or ctx.rule.kind == "upb_proto_library":
         public_hdrs = target[CcInfo].compilation_context.direct_public_headers
-
-    elif ctx.rule.kind == "cc_stubby_library":
-        public_hdrs = target[CcInfo].compilation_context.direct_public_headers
-        extra_rule_specific_deps = ctx.rule.attr.implicit_cc_deps
-
-        if not AdditionalRustSrcsProviderInfo in target:
-            fail("cc_stubby_library must provide AdditionalRustSrcsProviderInfo")
-
-        additional_provider = target[AdditionalRustSrcsProviderInfo]
-
-        extra_rs_srcs.extend(_get_additional_rust_srcs_from_provider(additional_provider))
-        extra_deps.extend(_get_additional_rust_deps_from_provider(additional_provider))
 
     has_public_headers = len(public_hdrs) > 0
     if not has_public_headers:
@@ -348,6 +353,10 @@ def _rust_bindings_from_cc_aspect_impl(target, ctx):
     extra_rs_srcs = collections.uniq(extra_rs_srcs + _get_additional_rust_srcs(ctx))
     extra_deps = collections.uniq(extra_deps + _get_additional_rust_deps(ctx))
 
+    extra_rs_bindings_from_cc_cli_flags = collect_rust_bindings_from_cc_cli_flags(target, ctx)
+    if ctx.attr._is_golden_test[BuildSettingInfo].value:
+        extra_rs_bindings_from_cc_cli_flags.append("--is_golden_test=True")
+
     binding_infos = [
         dep[RustBindingsFromCcInfo]
         for dep in all_deps
@@ -371,7 +380,7 @@ def _rust_bindings_from_cc_aspect_impl(target, ctx):
             d.cc_info
             for d in binding_infos
             if d.cc_info
-        ] + ctx.attr._deps_for_bindings[DepsForBindingsInfo].deps_for_cc_file,
+        ] + ctx.attr._deps_for_bindings[DepsForBindingsInfo].deps_for_cc_file + cc_support_deps,
         deps_for_rs_file = depset(
             direct = [
                 d.dep_variant_info
@@ -384,10 +393,18 @@ def _rust_bindings_from_cc_aspect_impl(target, ctx):
             ],
         ),
         extra_cc_compilation_action_inputs = extra_cc_compilation_action_inputs,
-        extra_rs_bindings_from_cc_cli_flags = collect_rust_bindings_from_cc_cli_flags(target, ctx),
+        extra_rs_bindings_from_cc_cli_flags = extra_rs_bindings_from_cc_cli_flags,
         should_generate_bindings = (
             has_public_headers or extra_rs_srcs
         ) and not _is_cc_proto_library(target),
+        aliases = aliases,
+        additional_rust_srcs = depset(
+            transitive = [
+                d.additional_rust_srcs
+                for d in binding_infos
+                if hasattr(d, "additional_rust_srcs")
+            ],
+        ),
     )
 
 rust_bindings_from_cc_aspect = aspect(
@@ -399,6 +416,7 @@ rust_bindings_from_cc_aspect = aspect(
         "_cc_lib",
         # for cc_stubby_library implicit deps
         "implicit_cc_deps",
+        "implicit_rust_deps",
     ],
     requires = [rust_cc_proto_library_aspect],
     required_aspect_providers = [CcInfo],

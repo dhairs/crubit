@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:noexcept_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
@@ -28,20 +29,32 @@ unsafe impl ::cxx::ExternType for SomeClass {
 }
 impl SomeClass {
     #[inline(always)]
-    pub fn create(i: ::core::ffi::c_int, c: ::core::ffi::c_char) {
-        unsafe { crate::detail::__rust_thunk___ZN9SomeClass6createEic(i, c) }
+    pub fn create(i: ::ffi_11::c_int, c: ::ffi_11::c_char) {
+        unsafe { self::some_class::create(i, c) }
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn no_except_member(__this: *mut Self) {
-        crate::detail::__rust_thunk___ZN9SomeClass16no_except_memberEv(__this)
+        unsafe { self::some_class::no_except_member(__this) }
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn no_except_true_member(__this: *mut Self) {
-        crate::detail::__rust_thunk___ZN9SomeClass21no_except_true_memberEv(__this)
+        unsafe { self::some_class::no_except_true_member(__this) }
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn no_except_false_member(__this: *mut Self) {
-        crate::detail::__rust_thunk___ZN9SomeClass22no_except_false_memberEv(__this)
+        unsafe { self::some_class::no_except_false_member(__this) }
     }
 }
 
@@ -53,6 +66,37 @@ impl Default for SomeClass {
             crate::detail::__rust_thunk___ZN9SomeClassC1Ev(&raw mut tmp as *mut _);
             tmp.assume_init()
         }
+    }
+}
+
+pub mod some_class {
+    #[inline(always)]
+    pub(crate) fn create(i: ::ffi_11::c_int, c: ::ffi_11::c_char) {
+        unsafe { crate::detail::__rust_thunk___ZN9SomeClass6createEic(i, c) }
+    }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn no_except_member(__this: *mut crate::SomeClass) {
+        unsafe { crate::detail::__rust_thunk___ZN9SomeClass16no_except_memberEv(__this) }
+    }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn no_except_true_member(__this: *mut crate::SomeClass) {
+        unsafe { crate::detail::__rust_thunk___ZN9SomeClass21no_except_true_memberEv(__this) }
+    }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn no_except_false_member(__this: *mut crate::SomeClass) {
+        unsafe { crate::detail::__rust_thunk___ZN9SomeClass22no_except_false_memberEv(__this) }
     }
 }
 
@@ -78,8 +122,8 @@ mod detail {
         pub(crate) unsafe fn __rust_thunk___ZN9SomeClassC1Ev(__this: *mut ::core::ffi::c_void);
         #[link_name = "_ZN9SomeClass6createEic"]
         pub(crate) unsafe fn __rust_thunk___ZN9SomeClass6createEic(
-            i: ::core::ffi::c_int,
-            c: ::core::ffi::c_char,
+            i: ::ffi_11::c_int,
+            c: ::ffi_11::c_char,
         );
         #[link_name = "_ZN9SomeClass16no_except_memberEv"]
         pub(crate) unsafe fn __rust_thunk___ZN9SomeClass16no_except_memberEv(

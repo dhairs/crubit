@@ -104,18 +104,13 @@ def generate_bindings(
         "--rustfmt_config_path",
         ctx.file._rustfmt_cfg.path,
     ] + extra_rs_bindings_from_cc_cli_flags
+
     if ctx.attr._generate_error_report[BuildSettingInfo].value:
         error_report_output = ctx.actions.declare_file(crate_name + "_rust_api_error_report.json")
         rs_bindings_from_cc_flags += [
             "--error_report_out",
             error_report_output.path,
         ]
-
-    # TODO(b/324159705): Remove this workaround and fix
-    # built_in_include_directories logic once we switch to libc++ runtimes on
-    # demand by default.
-    libcxx_include_path = ("include/c++/v1" in cc_toolchain.built_in_include_directories[0]) or \
-                          ("fake_path" in cc_toolchain.built_in_include_directories[0])
 
     toolchain = ctx.toolchains["@@//rs_bindings_from_cc/bazel_support:toolchain_type"]
     if toolchain == None:

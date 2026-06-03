@@ -1,12 +1,12 @@
 // Part of the Crubit project, under the Apache License v2.0 with LLVM
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+#![feature(allocator_api)]
 
 use googletest::prelude::*;
 use static_assertions::assert_impl_all;
 use std::cell::RefCell;
 use std::cmp::Ordering;
-use std::ffi::c_void;
 use std::hash::BuildHasher;
 use std::rc::Rc;
 
@@ -781,8 +781,8 @@ fn test_is_sync() {
 }
 
 mod layout_tests {
-    use crate::to_void_ptr;
     use googletest::prelude::*;
+    use std::ptr::from_mut;
 
     /// Tests that `vector` has the same memory layout as `std::vector` in C++.
     #[gtest]
@@ -792,7 +792,7 @@ mod layout_tests {
         v.push(2);
         v.push(3);
         unsafe {
-            expect_eq!(cc_helper_functions::crubit_test::vector_int32_sum(to_void_ptr(&v)), 6);
+            expect_eq!(cc_helper_functions::crubit_test::vector_int32_sum(from_mut(&mut v)), 6);
         }
     }
 
@@ -805,7 +805,7 @@ mod layout_tests {
         }
         unsafe {
             expect_eq!(
-                cc_helper_functions::crubit_test::vector_int32_capacity(to_void_ptr(&v)),
+                cc_helper_functions::crubit_test::vector_int32_capacity(from_mut(&mut v)),
                 v.capacity(),
             );
         }
@@ -813,10 +813,10 @@ mod layout_tests {
 }
 
 mod allocation_tests {
-    use crate::to_void_ptr;
     use googletest::prelude::*;
     use std::mem::forget;
     use std::mem::MaybeUninit;
+    use std::ptr::from_mut;
 
     // The following tests check that the memory allocated in one language is
     // correctly reallocated and dealocated in another language.
@@ -829,7 +829,7 @@ mod allocation_tests {
         }
         // Deallocate the heap memory in C++.
         unsafe {
-            cc_helper_functions::crubit_test::vector_int32_call_destructor(to_void_ptr(&v));
+            cc_helper_functions::crubit_test::vector_int32_call_destructor(from_mut(&mut v));
         }
         forget(v);
     }
@@ -838,13 +838,13 @@ mod allocation_tests {
     fn test_allocate_in_cc_delocate_in_rust() {
         unsafe {
             // Allocate heap memory in C++ (by adding many elements)
-            let maybe_uninit_v = MaybeUninit::<cc_std::std::vector<i32>>::uninit();
-            cc_helper_functions::crubit_test::vector_int32_construct(to_void_ptr(&maybe_uninit_v));
-            let v = maybe_uninit_v.assume_init();
+            let mut maybe_uninit_v = MaybeUninit::<cc_std::std::vector<i32>>::uninit();
+            cc_helper_functions::crubit_test::vector_int32_construct(maybe_uninit_v.as_mut_ptr());
+            let mut v = maybe_uninit_v.assume_init();
             expect_eq!(v.is_empty(), true);
 
             for i in 0..10000 {
-                cc_helper_functions::crubit_test::vector_int32_push_back(to_void_ptr(&v), i);
+                cc_helper_functions::crubit_test::vector_int32_push_back(from_mut(&mut v), i);
             }
 
             expect_eq!(v.len(), 10000);
@@ -856,14 +856,14 @@ mod allocation_tests {
     #[gtest]
     fn test_allocate_in_cc_interchangeble_reallocate_in_different_languages() {
         unsafe {
-            let maybe_uninit_v = MaybeUninit::<cc_std::std::vector<i32>>::uninit();
-            cc_helper_functions::crubit_test::vector_int32_construct(to_void_ptr(&maybe_uninit_v));
+            let mut maybe_uninit_v = MaybeUninit::<cc_std::std::vector<i32>>::uninit();
+            cc_helper_functions::crubit_test::vector_int32_construct(maybe_uninit_v.as_mut_ptr());
             let mut v = maybe_uninit_v.assume_init();
             expect_eq!(v.is_empty(), true);
 
             // Allocate heap memory in C++.
             for i in 0..10 {
-                cc_helper_functions::crubit_test::vector_int32_push_back(to_void_ptr(&v), i);
+                cc_helper_functions::crubit_test::vector_int32_push_back(from_mut(&mut v), i);
             }
 
             // Reallocate heap memory in Rust by adding much more elements.
@@ -873,7 +873,7 @@ mod allocation_tests {
 
             // Reallocate heap memory in C++ by adding much much more elements.
             for i in 1000..100000 {
-                cc_helper_functions::crubit_test::vector_int32_push_back(to_void_ptr(&v), i);
+                cc_helper_functions::crubit_test::vector_int32_push_back(from_mut(&mut v), i);
             }
 
             expect_eq!(v.len(), 100000);
@@ -893,7 +893,7 @@ mod allocation_tests {
         unsafe {
             // Reallocate heap memory in C++ by adding much more elements.
             for i in 10..1000 {
-                cc_helper_functions::crubit_test::vector_int32_push_back(to_void_ptr(&v), i);
+                cc_helper_functions::crubit_test::vector_int32_push_back(from_mut(&mut v), i);
             }
         }
         // Reallocate heap memory in Rust (by adding much much more elements)
@@ -1003,6 +1003,135 @@ fn test_vector_covariant() {
     }
 }
 
-fn to_void_ptr<T>(t: &T) -> *mut c_void {
-    t as *const _ as *mut c_void
+#[gtest]
+fn test_vector_int32_get_from_cpp() {
+    let v: cc_std::std::vector<i32> = cc_helper_functions::crubit_test::vector_int32_get();
+    expect_eq!(v, [1, 1, 2, 5, 14, 42]);
+}
+
+#[gtest]
+fn test_vector_int32_get_ptr_from_cpp() {
+    let v: *const cc_std::std::vector<i32> =
+        cc_helper_functions::crubit_test::vector_int32_get_ptr();
+    unsafe {
+        expect_eq!(*v, [1, 1, 2, 3, 5, 8]);
+    }
+}
+
+#[gtest]
+fn test_vector_int32_sort_in_cpp() {
+    let mut v = cc_std::std::vector::from(vec![5, 4, 3, 2, 1]);
+    unsafe {
+        cc_helper_functions::crubit_test::vector_int32_sort(&mut v);
+    }
+    expect_eq!(v, [1, 2, 3, 4, 5]);
+}
+
+#[gtest]
+fn test_vector_custom_type_get_from_cpp() {
+    let v = cc_helper_functions::crubit_test::vector_get_simple_rust_movable_type();
+    unsafe {
+        expect_eq!(cc_movable_types::crubit_test::SimpleRustMovableType::x(&v[0]), 1);
+        expect_eq!(cc_movable_types::crubit_test::SimpleRustMovableType::x(&v[1]), 2);
+        expect_eq!(cc_movable_types::crubit_test::SimpleRustMovableType::x(&v[2]), 3);
+    }
+}
+
+#[gtest]
+fn test_vector_of_custom_types_passed_by_value() {
+    let v = cc_std::std::vector::from(vec![
+        cc_movable_types::crubit_test::SimpleRustMovableType::from(1),
+        cc_movable_types::crubit_test::SimpleRustMovableType::from(2),
+        cc_movable_types::crubit_test::SimpleRustMovableType::from(3),
+    ]);
+    assert_eq!(cc_helper_functions::crubit_test::vector_size_by_value(v), 3);
+}
+
+/// Tests for the empty vector, which is a special case: an ordinary
+/// Rust array or vector uses alignof(T) as the pointer, but C++ uses 0.
+///
+/// Incorrectly written code will have UB in the C++ destructor.
+///
+/// The tests in this module create an empty vector in a variety of ways,
+/// and use it by value to run the C++ destructor.
+mod empty_vector {
+    use super::*;
+
+    #[gtest]
+    fn test_default() {
+        assert_eq!(cc_helper_functions::crubit_test::vector_size_by_value(Default::default()), 0);
+    }
+
+    #[gtest]
+    fn test_from_vec() {
+        let v = cc_std::std::vector::from(vec![]);
+        assert_eq!(cc_helper_functions::crubit_test::vector_size_by_value(v), 0);
+    }
+
+    #[gtest]
+    fn test_from_shared_allocator() {
+        let v = cc_std::std::vector::from(Vec::new_in(
+            cc_std::crubit_cc_std_internal::std_allocator::StdAllocator {},
+        ));
+        assert_eq!(cc_helper_functions::crubit_test::vector_size_by_value(v), 0);
+    }
+
+    #[gtest]
+    fn test_from_shared_allocator_with_capacity() {
+        let v = cc_std::std::vector::from(Vec::with_capacity_in(
+            1,
+            cc_std::crubit_cc_std_internal::std_allocator::StdAllocator {},
+        ));
+        assert_eq!(cc_helper_functions::crubit_test::vector_size_by_value(v), 0);
+    }
+
+    #[gtest]
+    fn test_from_iterator() {
+        let v = cc_std::std::vector::from_iter([].into_iter());
+        assert_eq!(cc_helper_functions::crubit_test::vector_size_by_value(v), 0);
+    }
+}
+
+#[gtest]
+fn test_vector_void_ptr_destroyed_in_rust() {
+    drop(cc_helper_functions::crubit_test::vector_void_ptr_get());
+}
+
+#[gtest]
+fn test_vector_short_destroyed_in_rust() {
+    drop(cc_helper_functions::crubit_test::vector_short_get());
+}
+
+#[gtest]
+fn test_vector_two_words_destroyed_in_rust() {
+    drop(cc_helper_functions::crubit_test::vector_two_words_get());
+}
+
+#[gtest]
+fn test_vector_char_destroyed_in_rust() {
+    drop(cc_helper_functions::crubit_test::vector_char_get());
+}
+
+#[gtest]
+fn test_vector_void_ptr_destroyed_in_cpp() {
+    cc_helper_functions::crubit_test::vector_void_ptr_destroy(
+        vec![<*mut ffi_11::c_void>::default()].into(),
+    );
+}
+
+#[gtest]
+fn test_vector_short_destroyed_in_cpp() {
+    cc_helper_functions::crubit_test::vector_short_destroy(vec![ffi_11::c_short::default()].into());
+}
+
+#[gtest]
+fn test_vector_two_words_destroyed_in_cpp() {
+    cc_helper_functions::crubit_test::vector_two_words_destroy(
+        vec![cc_helper_functions::crubit_test::TwoWords::default()].into(),
+    );
+}
+
+#[gtest]
+fn test_vector_char_destroyed_in_cpp() {
+    cc_helper_functions::crubit_test::vector_char_destroy(vec![ffi_11::c_char::default()].into());
 }

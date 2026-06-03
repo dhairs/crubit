@@ -6,24 +6,25 @@
 // //rs_bindings_from_cc/test/golden:template_inst_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 /// This library reproduces the issue in b/458678348.
 #[inline(always)]
 pub(crate) fn GetMyTemplate() -> crate::__CcTemplateInst10MyTemplateIiE {
     unsafe {
-        let mut __return =
+        let mut __crubit_return =
             ::core::mem::MaybeUninit::<crate::__CcTemplateInst10MyTemplateIiE>::uninit();
         crate::detail::__rust_thunk___Z13GetMyTemplatev(
-            &raw mut __return as *mut ::core::ffi::c_void,
+            &raw mut __crubit_return as *mut ::core::ffi::c_void,
         );
-        __return.assume_init()
+        __crubit_return.assume_init()
     }
 }
 
@@ -31,7 +32,7 @@ pub(crate) fn GetMyTemplate() -> crate::__CcTemplateInst10MyTemplateIiE {
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=MyTemplate < int >
 pub(crate) struct __CcTemplateInst10MyTemplateIiE {
-    pub field: ::core::ffi::c_int,
+    pub field: ::ffi_11::c_int,
 }
 impl !Send for __CcTemplateInst10MyTemplateIiE {}
 impl !Sync for __CcTemplateInst10MyTemplateIiE {}
@@ -40,25 +41,20 @@ forward_declare::unsafe_define!(
     crate::__CcTemplateInst10MyTemplateIiE
 );
 
-// Error while generating bindings for constructor 'MyTemplate<int>::MyTemplate<int>':
-// Can't generate bindings for MyTemplate<int>::MyTemplate<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:template_inst_cc needs [//features:experimental] for MyTemplate<int>::MyTemplate<int> (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: constructor `MyTemplate<int>::MyTemplate<int>` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Error while generating bindings for constructor 'MyTemplate<int>::MyTemplate<int>':
-// Can't generate bindings for MyTemplate<int>::MyTemplate<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:template_inst_cc needs [//features:experimental] for MyTemplate<int>::MyTemplate<int> (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: constructor `MyTemplate<int>::MyTemplate<int>` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Error while generating bindings for constructor 'MyTemplate<int>::MyTemplate<int>':
-// Can't generate bindings for MyTemplate<int>::MyTemplate<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:template_inst_cc needs [//features:experimental] for MyTemplate<int>::MyTemplate<int> (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: constructor `MyTemplate<int>::MyTemplate<int>` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Error while generating bindings for function 'MyTemplate<int>::operator=':
-// Can't generate bindings for MyTemplate<int>::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:template_inst_cc needs [//features:experimental] for MyTemplate<int>::operator= (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: function `MyTemplate<int>::operator=` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Error while generating bindings for function 'MyTemplate<int>::operator=':
-// Can't generate bindings for MyTemplate<int>::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:template_inst_cc needs [//features:experimental] for MyTemplate<int>::operator= (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: function `MyTemplate<int>::operator=` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
 mod detail {
     #[allow(unused_imports)]

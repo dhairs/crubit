@@ -32,10 +32,10 @@
 #include "clang/Frontend/CompilerInstance.h"
 #include "clang/Frontend/FrontendAction.h"
 #include "clang/Frontend/FrontendActions.h"
-#include "clang/Index/USRGeneration.h"
 #include "clang/Tooling/ArgumentsAdjusters.h"
 #include "clang/Tooling/Execution.h"
 #include "clang/Tooling/Tooling.h"
+#include "clang/UnifiedSymbolResolution/USRGeneration.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/ADT/StringRef.h"
@@ -73,13 +73,6 @@ llvm::cl::opt<bool> PrintMetrics{
 llvm::cl::opt<bool> IncludeTrivial{
     "trivial",
     llvm::cl::desc("Include trivial inferences (annotated, no conflicts)"),
-    llvm::cl::init(false),
-};
-// TODO: b/417692223 remove this flag once summaries are the default.
-llvm::cl::opt<bool> UseSummaries{
-    "use-summaries",
-    llvm::cl::desc("Generate the AST only once to produce a Summary and then "
-                   "use that Summary for iteration"),
     llvm::cl::init(false),
 };
 llvm::cl::opt<std::string> FileFilter{
@@ -239,7 +232,7 @@ class Action : public SyntaxOnlyAction {
         llvm::errs() << "Running inference...\n";
 
         InferenceResults Results =
-            inferTU(Ctx, Pragmas, UseSummaries, Iterations, DeclFilter());
+            inferTU(Ctx, Pragmas, Iterations, DeclFilter());
         if (PrintProtos) {
           for (const auto &[USR, InferencesBySlot] : Results) {
             llvm::outs() << "USR: " << absl::StrCat(USR) << "\n";

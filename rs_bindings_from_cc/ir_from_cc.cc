@@ -218,9 +218,11 @@ absl::StatusOr<IR> IrFromCc(IrFromCcOptions options) {
   args_as_strings.insert(args_as_strings.end(), options.clang_args.begin(),
                          options.clang_args.end());
 
-  Invocation invocation(options.current_target, augmented_public_headers,
-                        options.headers_to_targets,
-                        std::move(options.do_not_bind_allowlist));
+  Invocation invocation(
+      options.current_target, augmented_public_headers,
+      options.headers_to_targets, std::move(options.do_not_bind_allowlist),
+      std::move(options.crubit_features), options.kythe_annotations,
+      options.template_blocklist_path_regex);
   if (!clang::tooling::runToolOnCodeWithArgs(
           std::make_unique<FrontendAction>(invocation),
           virtual_input_file_content, args_as_strings,
@@ -238,7 +240,6 @@ absl::StatusOr<IR> IrFromCc(IrFromCcOptions options) {
       !status.ok()) {
     return status;
   }
-  invocation.ir_.crubit_features = std::move(options.crubit_features);
   return invocation.ir_;
 }
 

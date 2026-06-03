@@ -6,9 +6,12 @@
 #define CRUBIT_RS_BINDINGS_FROM_CC_IMPORTERS_CXX_RECORD_H_
 
 #include <optional>
+#include <string>
 #include <vector>
 
+#include "absl/functional/any_invocable.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "rs_bindings_from_cc/decl_importer.h"
 #include "rs_bindings_from_cc/ir.h"
 #include "clang/AST/Decl.h"
@@ -16,6 +19,15 @@
 #include "clang/AST/DeclTemplate.h"
 
 namespace crubit {
+
+namespace internal {
+// Determines the Rust bridge path for a given Proto2 message declaration.
+// Resolves nesting using `is_parent_proto` which checks whether a given prefix
+// corresponds to an enclosing protobuf message.
+std::string GetProto2MessageRustNameImpl(
+    absl::string_view message_name,
+    absl::AnyInvocable<bool(absl::string_view)> is_parent_proto);
+}  // namespace internal
 
 // A `DeclImporter` for `CXXRecordDecl`s.
 class CXXRecordDeclImporter : public DeclImporterBase<clang::CXXRecordDecl> {
@@ -35,6 +47,8 @@ class CXXRecordDeclImporter : public DeclImporterBase<clang::CXXRecordDecl> {
   // (e.g., `std::optional`). Otherwise, returns `std::nullopt`.
   absl::StatusOr<std::optional<BridgeType>> GetBuiltinBridgeType(
       const clang::ClassTemplateSpecializationDecl* decl);
+
+  absl::StatusOr<SafetyAnnotation> GetSafetyAnnotation(const clang::Decl& decl);
 };
 
 }  // namespace crubit

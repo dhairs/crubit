@@ -2,11 +2,13 @@
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load("@rules_rust//rust:defs.bzl", "rust_library")
+load("//build_integration:build_integration.bzl", "bazel_to_builds")
 load(
     "//cc_bindings_from_rs/bazel_support:cc_bindings_from_rust_rule.bzl",
     "cc_bindings_from_rust",
+    "cpp_api_from_rust_toolchain_bindings",
 )
-load("//common:crubit_wrapper_macros_oss.bzl", "crubit_cc_test")
+load("//common:crubit_wrapper_macros_oss.bzl", "crubit_cc_test", "crubit_rust_test")
 
 package(default_applicable_licenses = ["//:license"])
 
@@ -17,6 +19,10 @@ cc_library(
     # Enable bidirectional bindings (via crubit_internal_rust_type).
     aspect_hints = ["//features:experimental"],
     compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "alt_dep=//support/public:char",
+        "avoid_dep",
+    ],
     visibility = ["//visibility:public"],
 
     # It is important to be thoughtful when adding new dependencies for `char`
@@ -28,7 +34,7 @@ cc_library(
         ":str_ref",
         "//support:annotations",
         "@abseil-cpp//absl/base:core_headers",
-        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/log:absl_check",
         "@abseil-cpp//absl/strings:string_view",
         "@abseil-cpp//absl/types:span",
     ],
@@ -73,6 +79,10 @@ cc_library(
     # Enable bidirectional bindings (via crubit_internal_rust_type).
     aspect_hints = ["//features:experimental"],
     compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "alt_dep=//support/public:slice_ref",
+        "avoid_dep",
+    ],
     visibility = [
         "//visibility:public",
     ],
@@ -85,6 +95,7 @@ cc_library(
         "//support:annotations_internal",
         "//support/internal:bindings_support",
         "@abseil-cpp//absl/base:core_headers",
+        "@abseil-cpp//absl/strings:string_view",
         "@abseil-cpp//absl/types:span",
     ],
 )
@@ -107,6 +118,10 @@ cc_library(
     # Enable bidirectional bindings (via crubit_internal_rust_type).
     aspect_hints = ["//features:experimental"],
     compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "alt_dep=//support/public:str_ref",
+        "avoid_dep",
+    ],
     visibility = [
         "//visibility:public",
     ],
@@ -157,11 +172,16 @@ cc_library(
         "//features:wrapper",
     ],
     compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "alt_dep=//support/public:dyn_callable",
+        "avoid_dep",
+    ],
     visibility = ["//visibility:public"],
     deps = [
         "//support:bridge_cpp",
         "@abseil-cpp//absl/base:core_headers",
         "@abseil-cpp//absl/base:nullability",
+        "@abseil-cpp//absl/functional:any_invocable",
     ],
 )
 
@@ -170,7 +190,162 @@ crubit_cc_test(
     srcs = ["dyn_callable_test.cc"],
     deps = [
         ":dyn_callable",
+        "@abseil-cpp//absl/functional:any_invocable",
         "@fuzztest//:fuzztest_gtest_main",
         "@googletest//:gmock",
+    ],
+)
+
+cc_library(
+    name = "traits",
+    hdrs = ["traits.h"],
+    aspect_hints = ["//features:experimental"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "alt_dep=//support/public:traits",
+        "avoid_dep",
+    ],
+    visibility = [
+        "//visibility:public",
+    ],
+    deps = [],
+)
+
+cc_library(
+    name = "iterator_adapter",
+    hdrs = ["iterator_adapter.h"],
+    aspect_hints = ["//features:experimental"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "alt_dep=//support/public:iterator_adapter",
+        "avoid_dep",
+    ],
+    visibility = [
+        "//visibility:public",
+    ],
+    deps = [
+        ":traits",
+    ],
+)
+
+cc_library(
+    name = "option",
+    hdrs = ["option.h"],
+    aspect_hints = ["//features:experimental"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "alt_dep=//support/public:option",
+        "avoid_dep",
+    ],
+    visibility = [
+        "//visibility:public",
+    ],
+    deps = [],
+)
+
+cc_library(
+    name = "result",
+    hdrs = ["result.h"],
+    aspect_hints = ["//features:experimental"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "alt_dep=//support/public:result",
+        "avoid_dep",
+    ],
+    visibility = [
+        "//visibility:public",
+    ],
+    deps = [],
+)
+
+cc_library(
+    name = "tuple",
+    hdrs = ["tuple.h"],
+    aspect_hints = ["//features:experimental"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    visibility = [
+        "//visibility:public",
+    ],
+    deps = [],
+)
+
+rust_library(
+    name = "lossy_formatter",
+    srcs = ["lossy_formatter.rs"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    proc_macro_deps = [
+        "//support:crubit_annotate",
+    ],
+    visibility = [
+        "//:__subpackages__",
+    ],
+    deps = [
+        "//support/ffi_11",
+    ],
+)
+
+crubit_rust_test(
+    name = "lossy_formatter_test",
+    crate = ":lossy_formatter",
+    deps = [
+        "@crate_index//:googletest",
+    ],
+)
+
+cc_bindings_from_rust(
+    name = "lossy_formatter_cc",
+    compatible_with = ["//buildenv/target:non_prod"],
+    crate = ":lossy_formatter",
+)
+
+cc_library(
+    name = "lossy_formatter_for_bindings",
+    hdrs = ["lossy_formatter_for_bindings.h"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    visibility = ["//:__subpackages__"],
+    deps = [":lossy_formatter_cc"],
+)
+
+cpp_api_from_rust_toolchain_bindings(
+    name = "rs_core",
+    cpp_namespace = "rs::core",
+    crate_name = "core",
+    visibility = ["//visibility:public"],
+)
+
+cpp_api_from_rust_toolchain_bindings(
+    name = "rs_alloc",
+    cpp_namespace = "rs::alloc",
+    crate_name = "alloc",
+    visibility = ["//visibility:public"],
+    deps = [":rs_core"],
+)
+
+cpp_api_from_rust_toolchain_bindings(
+    name = "rs_std",
+    cpp_namespace = "rs::std",
+    crate_name = "std",
+    visibility = ["//visibility:public"],
+    deps = [
+        ":rs_alloc",
+        ":rs_core",
+    ],
+)
+
+bazel_to_builds(
+    name = "generate_builds",
+    cmake = "CMakeLists.txt",
+    gn = "BUILD.gn",
+    targets = [
+        ":char",
+        ":dyn_callable",
+        ":iterator_adapter",
+        ":lossy_formatter_for_bindings",
+        ":option",
+        ":result",
+        ":slice_ref",
+        ":str_ref",
+        ":traits",
+        ":tuple",
     ],
 )

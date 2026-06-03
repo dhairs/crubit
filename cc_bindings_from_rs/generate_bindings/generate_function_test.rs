@@ -83,11 +83,11 @@ fn test_generated_bindings_impl() {
                         // No point replicating test coverage of
                         // `test_format_item_static_method`.
                         ...
-                        std::int32_t public_static_method();
+                        ::std::int32_t public_static_method();
                         ...
                     };
                     ...
-                    std::int32_t SomeStruct::public_static_method() {
+                    ::std::int32_t SomeStruct::public_static_method() {
                         ...
                     }
                     ...
@@ -124,9 +124,9 @@ fn test_generated_bindings_includes() {
                 namespace ... {
                     ...
                     extern "C" void public_function(
-                        std::int32_t i,
-                        std::intptr_t d,
-                        std::uint64_t u);
+                        ::std::int32_t i,
+                        ::std::intptr_t d,
+                        ::std::uint64_t u);
                 }
             }
         );
@@ -349,7 +349,7 @@ fn test_format_item_fn_references() {
             assert_cc_matches!(
                 main_api.tokens,
                 quote! {
-                    void foo(std::int32_t const& _x, std::int32_t const& _y);
+                    void foo(::std::int32_t const& _x, ::std::int32_t const& _y);
                 }
             );
         },
@@ -379,31 +379,9 @@ fn test_format_item_fn_static_reference() {
         test_src,
         "foo",
         quote! {
-            void foo(std::int32_t const* ... _x);
+            void foo(::std::int32_t const* ... _x);
         },
     )
-}
-
-// NOTE: If we gain support for references as non-parameter types, we must
-// _still_ require :experimental.
-#[test]
-fn test_format_item_fn_nested_reference() {
-    let test_src = r#"
-            #[unsafe(no_mangle)]
-            pub fn foo(_x: &&i32) {}
-        "#;
-    test_format_item_with_features(
-        test_src,
-        "foo",
-        <flagset::FlagSet<crubit_feature::CrubitFeature>>::default(),
-        /* with_kythe_annotations= */ false,
-        |result| {
-            assert_eq!(
-                result.unwrap_err(),
-                "Error handling parameter #0 of type `&'__anon1 &'__anon2 i32`: Failed to format the referent of the reference type `&'__anon1 &'__anon2 i32`: Can't format `&'__anon2 i32`, because references are only supported in function parameter types, return types, and consts (b/286256327)"
-            )
-        },
-    );
 }
 
 #[test]
@@ -416,7 +394,7 @@ fn test_format_item_fn_returned_static_reference() {
         test_src,
         "foo",
         quote! {
-            std::int32_t const& ... foo();
+            ::std::int32_t const& ... foo();
         },
     );
 }
@@ -431,7 +409,7 @@ fn test_format_item_fn_reused_reference_lifetime() {
         test_src,
         "foo",
         quote! {
-            void foo(std::int32_t const* ... _x, std::int32_t const* ... _y);
+            void foo(::std::int32_t const* ... _x, ::std::int32_t const* ... _y);
         },
     );
 }
@@ -516,7 +494,7 @@ fn test_format_item_fn_const() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                std::int32_t foo(std::int32_t i);
+                ::std::int32_t foo(::std::int32_t i);
             }
         );
         assert!(!result.cc_details.prereqs.is_empty());
@@ -524,10 +502,10 @@ fn test_format_item_fn_const() {
             result.cc_details.tokens,
             quote! {
                 namespace __crubit_internal {
-                    extern "C" std::int32_t ...( std::int32_t);
+                    extern "C" ::std::int32_t ...( ::std::int32_t);
                 }
                 ...
-                inline std::int32_t foo(std::int32_t i) {
+                inline ::std::int32_t foo(::std::int32_t i) {
                     return __crubit_internal::...(i);
                 }
             }
@@ -585,8 +563,8 @@ fn test_format_item_fn_cc_prerequisites_if_cpp_definition_needed() {
         //
         // Note that this is a definition, and therefore `S` should be defined
         // earlier (not just forward declared).
-        assert_cc_matches!(main_api.tokens, quote! { S foo(std::int32_t _i);});
-        assert_cc_matches!(result.cc_details.tokens, quote! { S foo(std::int32_t _i) { ... }});
+        assert_cc_matches!(main_api.tokens, quote! { S foo(::std::int32_t _i);});
+        assert_cc_matches!(result.cc_details.tokens, quote! { S foo(::std::int32_t _i) { ... }});
 
         // Main checks: `CcPrerequisites::includes`.
         assert_cc_matches!(
@@ -687,13 +665,9 @@ fn test_format_item_fn_with_doc_comment_with_unmangled_name() {
         assert!(main_api.prereqs.is_empty());
         let doc_comments = [
             " Outer line doc.",
-            "",
             " Outer block doc that spans lines.",
             "         ",
-            "",
             "Doc comment via doc attribute.",
-            "",
-            "Generated from: <crubit_unittests.rs>;l=7",
         ]
         .join("\n");
         assert_cc_matches!(
@@ -719,12 +693,7 @@ fn test_format_item_fn_with_inner_doc_comment_with_unmangled_name() {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
         assert!(main_api.prereqs.is_empty());
-        let doc_comments = [
-            " Outer doc comment.",
-            " Inner doc comment.",
-            "Generated from: <crubit_unittests.rs>;l=4",
-        ]
-        .join("\n\n");
+        let doc_comments = [" Outer doc comment.", " Inner doc comment."].join("\n");
         assert_cc_matches!(
             main_api.tokens,
             quote! {
@@ -773,8 +742,7 @@ fn test_format_item_fn_with_doc_comment_with_mangled_name() {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
         assert!(main_api.prereqs.is_empty());
-        let comment = " Doc comment of a function with mangled name.\n\n\
-                       Generated from: <crubit_unittests.rs>;l=3";
+        let comment = " Doc comment of a function with mangled name.";
         assert_cc_matches!(
             main_api.tokens,
             quote! {
@@ -822,8 +790,8 @@ fn test_format_item_lifetime_generic_fn_with_inferred_lifetimes() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                std::int32_t const& [[clang::annotate_type("lifetime", "__anon1")]]
-                foo(std::int32_t const* [[clang::annotate_type("lifetime", "__anon1")]] crubit_nonnull arg CRUBIT_LIFETIME_BOUND);
+                ::std::int32_t const& $(__anon1)
+                foo(::std::int32_t const* $(__anon1) crubit_nonnull arg CRUBIT_LIFETIME_BOUND);
             }
         );
         assert_cc_matches!(
@@ -831,12 +799,12 @@ fn test_format_item_lifetime_generic_fn_with_inferred_lifetimes() {
             quote! {
                 namespace __crubit_internal {
                 extern "C"
-                std::int32_t const& [[clang::annotate_type("lifetime", "__anon1")]] ...(
-                    std::int32_t const* [[clang::annotate_type("lifetime", "__anon1")]] crubit_nonnull);
+                ::std::int32_t const& $(__anon1) ...(
+                    ::std::int32_t const* $(__anon1) crubit_nonnull);
                 }
                 inline
-                std::int32_t const& [[clang::annotate_type("lifetime", "__anon1")]]
-                foo(std::int32_t const* [[clang::annotate_type("lifetime", "__anon1")]] crubit_nonnull arg CRUBIT_LIFETIME_BOUND) {
+                ::std::int32_t const& $(__anon1)
+                foo(::std::int32_t const* $(__anon1) crubit_nonnull arg CRUBIT_LIFETIME_BOUND) {
                   return __crubit_internal::...(arg);
                 }
             }
@@ -886,14 +854,14 @@ fn test_format_item_lifetime_generic_fn_with_various_lifetimes() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-              std::int32_t const& [[clang::annotate_type("lifetime", "foo")]]
+              ::std::int32_t const& $(foo)
               foo(
-                std::int32_t const* [[clang::annotate_type("lifetime", "a")]] crubit_nonnull arg1,
-                std::int32_t const* [[clang::annotate_type("lifetime", "foo")]] crubit_nonnull arg2,
-                std::int32_t const* [[clang::annotate_type("lifetime", "foo")]] crubit_nonnull arg3,
-                std::int32_t const* [[clang::annotate_type("lifetime", "static")]] crubit_nonnull arg4,
-                std::int32_t const& arg5,
-                std::int32_t const& arg6);
+                ::std::int32_t const* $a crubit_nonnull arg1,
+                ::std::int32_t const* $(foo) crubit_nonnull arg2,
+                ::std::int32_t const* $(foo) crubit_nonnull arg3,
+                ::std::int32_t const* $static crubit_nonnull arg4,
+                ::std::int32_t const& arg5,
+                ::std::int32_t const& arg6);
             }
         );
         assert_cc_matches!(
@@ -901,24 +869,24 @@ fn test_format_item_lifetime_generic_fn_with_various_lifetimes() {
             quote! {
                 namespace __crubit_internal {
                 extern "C"
-                std::int32_t const& [[clang::annotate_type("lifetime", "foo")]]
+                ::std::int32_t const& $(foo)
                 ...(
-                    std::int32_t const* [[clang::annotate_type("lifetime", "a")]] crubit_nonnull,
-                    std::int32_t const* [[clang::annotate_type("lifetime", "foo")]] crubit_nonnull,
-                    std::int32_t const* [[clang::annotate_type("lifetime", "foo")]] crubit_nonnull,
-                    std::int32_t const* [[clang::annotate_type("lifetime", "static")]] crubit_nonnull,
-                    std::int32_t const&,
-                    std::int32_t const&);
+                    ::std::int32_t const* $a crubit_nonnull,
+                    ::std::int32_t const* $(foo) crubit_nonnull,
+                    ::std::int32_t const* $(foo) crubit_nonnull,
+                    ::std::int32_t const* $static crubit_nonnull,
+                    ::std::int32_t const&,
+                    ::std::int32_t const&);
                 }
                 inline
-                std::int32_t const& [[clang::annotate_type("lifetime", "foo")]]
+                ::std::int32_t const& $(foo)
                 foo(
-                    std::int32_t const* [[clang::annotate_type("lifetime", "a")]] crubit_nonnull arg1,
-                    std::int32_t const* [[clang::annotate_type("lifetime", "foo")]] crubit_nonnull arg2,
-                    std::int32_t const* [[clang::annotate_type("lifetime", "foo")]] crubit_nonnull arg3,
-                    std::int32_t const* [[clang::annotate_type("lifetime", "static")]] crubit_nonnull arg4,
-                    std::int32_t const& arg5,
-                    std::int32_t const& arg6) {
+                    ::std::int32_t const* $a crubit_nonnull arg1,
+                    ::std::int32_t const* $(foo) crubit_nonnull arg2,
+                    ::std::int32_t const* $(foo) crubit_nonnull arg3,
+                    ::std::int32_t const* $static crubit_nonnull arg4,
+                    ::std::int32_t const& arg5,
+                    ::std::int32_t const& arg6) {
                   return __crubit_internal::...(arg1, arg2, arg3, arg4, arg5, arg6);
                 }
             }
@@ -942,38 +910,107 @@ fn test_format_item_lifetime_generic_fn_with_various_lifetimes() {
     });
 }
 
-/// Test of lifetime-generic function with a `where` clause.
-///
-/// The `where` constraint below is a bit silly (why not just use `'static`
-/// directly), but it seems prudent to test and confirm that we disable
-/// generation of bindings for generic functions with `where` clauses
-/// (because it is unclear if such constraints can be replicated
-/// in C++).
 #[test]
-fn test_format_item_lifetime_generic_fn_with_where_clause() {
+fn test_format_item_generic_fn_into_trait_basic_replacement() {
     let test_src = r#"
-            pub fn foo<'a>(arg: &'a i32) where 'a : 'static {
-                unimplemented!("{arg}")
-            }
+            #![allow(unused)]
+            pub fn generic_function(arg: impl Into<i32>) { todo!() }
         "#;
-    test_format_item(test_src, "foo", |result| {
-        // TODO: b/396735681 - This should fail to compile. Instead, such input
-        // references should be converted to pointers.
-        result.unwrap();
+    test_format_item(test_src, "generic_function", |result| {
+        let result = result.unwrap().unwrap();
+        assert_cc_matches!(
+            result.main_api.tokens,
+            quote! {
+              void generic_function(::std::int32_t arg);
+            }
+        );
+        assert_rs_matches!(
+            result.rs_details.tokens,
+            quote! {
+                unsafe extern "C" fn __crubit_thunk_generic_ufunction(arg: i32) -> () {
+                    unsafe { ::rust_out::generic_function(arg) }
+                }
+            }
+        );
     });
 }
 
 #[test]
-fn test_format_item_unsupported_type_generic_fn() {
+fn test_format_item_generic_fn_as_ref_trait_basic_replacement() {
+    let test_src = r#"
+            #![allow(unused)]
+            pub fn generic_function(arg: impl AsRef<[u8]>) { todo!() }
+        "#;
+    test_format_item(test_src, "generic_function", |result| {
+        let result = result.unwrap().unwrap();
+        assert_cc_matches!(
+            result.main_api.tokens,
+            quote! {
+              void generic_function(rs_std::SliceRef<const ::std::uint8_t> arg);
+            }
+        );
+        assert_rs_matches!(
+            result.rs_details.tokens,
+            quote! {
+                unsafe extern "C" fn __crubit_thunk_generic_ufunction(arg: &'static [u8]) -> () {
+                    unsafe { ::rust_out::generic_function(arg) }
+                }
+            }
+        );
+    });
+}
+
+/// This test was initally added to provide coverage/verification that
+/// _all_ generic parameters need to have valid replacements.
+#[test]
+fn test_format_item_generic_fn_into_trait_and_unsupported_trait() {
+    let test_src = r#"
+            pub trait MyTrait {}
+            pub fn generic_function(_i: impl Into<i32>, _t: impl MyTrait) { todo!() }
+        "#;
+    test_format_item(test_src, "generic_function", |result| {
+        let err = result.unwrap_err();
+        assert_eq!(err, "No valid non-generic replacement for generic type param `impl MyTrait`");
+    });
+}
+
+/// This test was initally added to provide coverage/verification that
+/// _all_ clauses/constraints of `T` have to be considered in
+/// `is_valid_replacement_for_generic_type_param`.
+#[test]
+fn test_format_item_generic_fn_into_trait_when_failed_substitiution() {
+    let test_src = r#"
+            pub trait MyTrait {}
+            pub fn generic_function<T>(_t: T) where T: Into<i32>, T: MyTrait { todo!() }
+        "#;
+    test_format_item(test_src, "generic_function", |result| {
+        let err = result.unwrap_err();
+        assert_eq!(err, "No valid non-generic replacement for generic type param `T`");
+    });
+}
+
+#[test]
+fn test_format_item_generic_fn_unsupported_const_param() {
+    let test_src = r#"
+            pub fn generic_function<const N: usize>() { todo!() }
+        "#;
+    test_format_item(test_src, "generic_function", |result| {
+        let err = result.unwrap_err();
+        assert_eq!(err, "`const`-generic functions are not supported (b/259749023)");
+    });
+}
+
+#[test]
+fn test_format_item_generic_fn_unsupported_type_param() {
     let test_src = r#"
             use std::fmt::Display;
-            pub fn generic_function<T: Default + Display>() {
+            pub fn generic_function<T: Default + Display>(_: T) {
                 println!("{}", T::default());
             }
         "#;
     test_format_item(test_src, "generic_function", |result| {
         let err = result.unwrap_err();
-        assert_eq!(err, "Generic functions are not supported yet (b/259749023)");
+        assert_eq!(err, "No valid non-generic replacement for generic type param `T`");
     });
 }
 
@@ -984,12 +1021,18 @@ fn test_format_item_unsupported_fn_async() {
         "#;
     test_format_item(test_src, "async_function", |result| {
         let err = result.unwrap_err();
-        assert_eq!(
-            err,
-            "Error formatting function return type `impl std::future::Future<Output = ()>`: \
-                         The following Rust type is not supported yet: \
-                         impl std::future::Future<Output = ()>"
-        );
+        assert_eq!(err, "async functions are not yet supported, consider manually wrapping with `DynFuture` instead and writing to an output `*mut ()` parameter instead.");
+    });
+}
+
+#[test]
+fn test_format_item_unsupported_fn_async_returning_type() {
+    let test_src = r#"
+            pub async fn async_function() -> i32 { 42 }
+        "#;
+    test_format_item(test_src, "async_function", |result| {
+        let err = result.unwrap_err();
+        assert_eq!(err, "async functions are not yet supported, consider manually wrapping with `DynFuture` instead and writing to an output `*mut i32` parameter instead.");
     });
 }
 
@@ -1087,17 +1130,17 @@ fn test_format_item_fn_rust_abi_with_param_taking_struct_by_value() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                std::int32_t into_i32(::rust_out::S s);
+                ::std::int32_t into_i32(::rust_out::S s);
             }
         );
         assert_cc_matches!(
             result.cc_details.tokens,
             quote! {
                 namespace __crubit_internal {
-                    extern "C" std::int32_t ...(::rust_out::S*);
+                    extern "C" ::std::int32_t ...(::rust_out::S*);
                 }
                 ...
-                inline std::int32_t into_i32(::rust_out::S s) {
+                inline ::std::int32_t into_i32(::rust_out::S s) {
                     return __crubit_internal::...(&s);
                 }
             }
@@ -1132,21 +1175,21 @@ fn test_format_item_fn_rust_abi_returning_struct_by_value() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                ::rust_out::S create(std::int32_t i);
+                ::rust_out::S create(::std::int32_t i);
             }
         );
         assert_cc_matches!(
             result.cc_details.tokens,
             quote! {
                 namespace __crubit_internal {
-                    extern "C" void ...(std::int32_t, ::rust_out::S* __ret_ptr);
+                    extern "C" void ...(::std::int32_t, ::rust_out::S* __ret_ptr);
                 }
                 ...
-                inline ::rust_out::S create(std::int32_t i) {
+                inline ::rust_out::S create(::std::int32_t i) {
                     crubit::Slot<::rust_out::S> __return_value_ret_val_holder;
                     auto* __return_value_storage = __return_value_ret_val_holder.Get();
                     __crubit_internal::...(i, __return_value_storage);
-                    return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+                    return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
                 }
             }
         );
@@ -1343,17 +1386,17 @@ fn test_format_item_fn_with_destructuring_parameter_name() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                std::int32_t func(::rust_out::S __param_0);
+                ::std::int32_t func(::rust_out::S __param_0);
             }
         );
         assert_cc_matches!(
             result.cc_details.tokens,
             quote! {
                 namespace __crubit_internal {
-                    extern "C" std::int32_t ...(::rust_out::S*);
+                    extern "C" ::std::int32_t ...(::rust_out::S*);
                 }
                 ...
-                inline std::int32_t func(::rust_out::S __param_0) {
+                inline ::std::int32_t func(::rust_out::S __param_0) {
                     return __crubit_internal::...(&__param_0);
                 }
             }
@@ -1408,7 +1451,7 @@ fn test_must_use_attr_for_fn_no_msg() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                [[nodiscard]] std::int32_t add(std::int32_t x, std::int32_t y);
+                [[nodiscard]] ::std::int32_t add(::std::int32_t x, ::std::int32_t y);
             }
         )
     })
@@ -1429,7 +1472,7 @@ fn test_must_use_attr_for_fn_msg() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                [[nodiscard("hello!")]] std::int32_t add(std::int32_t x, std::int32_t y);
+                [[nodiscard("hello!")]] ::std::int32_t add(::std::int32_t x, ::std::int32_t y);
             }
         )
     })
@@ -1450,7 +1493,7 @@ fn test_deprecated_attr_for_fn_no_args() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                [[deprecated]] std::int32_t add(std::int32_t x, std::int32_t y);
+                [[deprecated]] ::std::int32_t add(::std::int32_t x, ::std::int32_t y);
             }
         )
     })
@@ -1471,7 +1514,7 @@ fn test_deprecated_attr_for_fn_with_message() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                [[deprecated("Use add_i32 instead")]] std::int32_t add(std::int32_t x, std::int32_t y);
+                [[deprecated("Use add_i32 instead")]] ::std::int32_t add(::std::int32_t x, ::std::int32_t y);
             }
         )
     })
@@ -1492,8 +1535,75 @@ fn test_deprecated_attr_for_fn_with_named_args() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                [[deprecated("Use add_i32 instead")]] std::int32_t add(std::int32_t x, std::int32_t y);
+                [[deprecated("Use add_i32 instead")]] ::std::int32_t add(::std::int32_t x, ::std::int32_t y);
             }
         )
     })
+}
+
+#[test]
+fn test_format_item_fn_repr_transparent_generic_struct_param() {
+    let test_src = r#"
+            #![allow(dead_code)]
+
+            pub struct Inner(i32);
+
+            #[repr(transparent)]
+            pub struct Wrapper<T>(T);
+
+            pub fn foo(_: Wrapper<Inner>) {}
+        "#;
+    test_format_item(test_src, "foo", |result| {
+        let err = result.unwrap_err();
+        assert_eq!(
+            err,
+            "Error handling parameter #0 of type `Wrapper<Inner>`: \
+            Generic types are not supported yet (b/259749095)"
+        );
+    });
+}
+
+#[test]
+fn test_imported_cpp_type_pass_by_value() {
+    let test_src = r#"
+            #[doc="CRUBIT_ANNOTATE: cpp_type=SomeCppType"]
+            pub struct ImportedCppType {
+                pub x: i32,
+            }
+
+            impl Drop for ImportedCppType {
+                fn drop(&mut self) {}
+            }
+
+            pub fn pass_by_value(_x: ImportedCppType) {}
+        "#;
+    test_format_item(test_src, "pass_by_value", |result| {
+        let err = result.unwrap_err();
+        assert_eq!(
+            err,
+            "Can't pass type `ImportedCppType` by value without a move constructor. See crubit.rs/rust/movable_types for what types are C++ movable."
+        );
+    });
+}
+
+#[test]
+fn test_unmovable_type_error_message() {
+    let test_src = r#"
+            pub struct Unmovable {
+                pub x: i32,
+            }
+
+            impl Drop for Unmovable {
+                fn drop(&mut self) {}
+            }
+
+            pub fn pass_unmovable(_x: Unmovable) {}
+        "#;
+    test_format_item(test_src, "pass_unmovable", |result| {
+        let err = result.unwrap_err();
+        assert_eq!(
+            err,
+            "Can't pass type `Unmovable` by value without a move constructor. See crubit.rs/rust/movable_types for what types are C++ movable."
+        );
+    });
 }

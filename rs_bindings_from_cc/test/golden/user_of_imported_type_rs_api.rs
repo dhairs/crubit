@@ -6,26 +6,33 @@
 // //rs_bindings_from_cc/test/golden:user_of_imported_type_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[inline(always)]
 pub fn UsesImportedType(mut t: ::trivial_type_cc::ns::Trivial) -> ::trivial_type_cc::ns::Trivial {
     unsafe {
-        let mut __return = ::core::mem::MaybeUninit::<::trivial_type_cc::ns::Trivial>::uninit();
+        let mut __crubit_return =
+            ::core::mem::MaybeUninit::<::trivial_type_cc::ns::Trivial>::uninit();
         crate::detail::__rust_thunk___Z16UsesImportedTypeN2ns7TrivialE(
-            &raw mut __return as *mut ::core::ffi::c_void,
+            &raw mut __crubit_return as *mut ::core::ffi::c_void,
             &mut t,
         );
-        __return.assume_init()
+        __crubit_return.assume_init()
     }
 }
 
+/// # Safety
+///
+/// To call a function that accepts this type, you must uphold these requirements:
+/// * Document why the following public unsafe fields of this type cannot be misused by callee:
+///   * `trivial`: raw pointer
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=UserOfImportedType
@@ -49,24 +56,6 @@ impl Default for UserOfImportedType {
         }
     }
 }
-
-// Error while generating bindings for constructor 'UserOfImportedType::UserOfImportedType':
-// Can't generate bindings for UserOfImportedType::UserOfImportedType, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_imported_type_cc needs [//features:experimental] for UserOfImportedType::UserOfImportedType (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for constructor 'UserOfImportedType::UserOfImportedType':
-// Can't generate bindings for UserOfImportedType::UserOfImportedType, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_imported_type_cc needs [//features:experimental] for UserOfImportedType::UserOfImportedType (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'UserOfImportedType::operator=':
-// Can't generate bindings for UserOfImportedType::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_imported_type_cc needs [//features:experimental] for UserOfImportedType::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:user_of_imported_type_cc needs [//features:experimental] for UserOfImportedType::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'UserOfImportedType::operator=':
-// Can't generate bindings for UserOfImportedType::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_imported_type_cc needs [//features:experimental] for UserOfImportedType::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:user_of_imported_type_cc needs [//features:experimental] for UserOfImportedType::operator= (the type of __param_0 (parameter #1): references are not supported)
 
 mod detail {
     #[allow(unused_imports)]

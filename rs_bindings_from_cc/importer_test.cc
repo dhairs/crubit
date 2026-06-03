@@ -9,7 +9,10 @@
 
 #include "gmock/gmock.h"
 #include "gtest/gtest.h"
+#include "absl/functional/overload.h"
 #include "absl/status/status.h"
+#include "absl/status/statusor.h"
+#include "absl/strings/match.h"
 #include "absl/strings/string_view.h"
 #include "common/status_test_matchers.h"
 #include "rs_bindings_from_cc/bazel_types.h"
@@ -25,11 +28,13 @@ using ::testing::Contains;
 using ::testing::Each;
 using ::testing::ElementsAre;
 using ::testing::Eq;
+using ::testing::ExplainMatchResult;
 using ::testing::Field;
 using ::testing::HasSubstr;
 using ::testing::IsEmpty;
 using ::testing::Not;
 using ::testing::Pointee;
+using ::testing::Property;
 using ::testing::SizeIs;
 using ::testing::UnorderedElementsAre;
 using ::testing::VariantWith;
@@ -98,6 +103,34 @@ MATCHER_P(DocCommentIs, doc_comment, "") {
   return false;
 }
 
+MATCHER(HasDetectedFormatter, "") {
+  if (arg.detected_formatter) {
+    *result_listener << "detected_formatter is actually true";
+  } else {
+    *result_listener << "detected_formatter is actually false";
+  }
+  return arg.detected_formatter;
+}
+
+MATCHER_P(HasProtoMessageBridgeType, expected_rust_name, "") {
+  if (!arg.bridge_type.has_value()) {
+    *result_listener << "no bridge_type";
+    return false;
+  }
+  const auto* pb =
+      std::get_if<BridgeType::ProtoMessageBridge>(&arg.bridge_type->variant);
+  if (!pb) {
+    *result_listener << "not ProtoMessageBridge";
+    return false;
+  }
+  if (pb->rust_name != expected_rust_name) {
+    *result_listener << "expected rust_name '" << expected_rust_name
+                     << "', got '" << pb->rust_name << "'";
+    return false;
+  }
+  return true;
+}
+
 // Matches a Func that has the given mangled name.
 MATCHER_P(MangledNameIs, mangled_name, "") {
   if (arg.mangled_name == mangled_name) return true;
@@ -110,6 +143,26 @@ MATCHER_P(MangledNameIs, mangled_name, "") {
 template <typename Matcher>
 auto ReturnType(const Matcher& matcher) {
   return testing::Field("return_type", &Func::return_type, matcher);
+}
+
+// Matches a Func that has lifetime parameters matching `matcher`.
+template <typename... Args>
+auto LifetimeParamsAre(const Args&... matchers) {
+  return testing::Field("lifetime_params", &Func::lifetime_params,
+                        ElementsAre(matchers...));
+}
+
+MATCHER_P(UnknownAttributesAre, val, "") {
+  if (arg.unknown_attr == val) return true;
+
+  *result_listener << "actual unknown attributes: '" << arg.unknown_attr << "'";
+  return false;
+}
+
+template <typename... Args>
+auto ExplicitLifetimesAre(const Args&... matchers) {
+  return testing::Field("explicit_lifetimes", &CcType::explicit_lifetimes,
+                        ElementsAre(matchers...));
 }
 
 // Matches a Func that has parameters matching `matchers`.
@@ -171,6 +224,18 @@ MATCHER_P(CcDeclIdIs, decl_id, "") {
 // Matches an CcType that is const .
 MATCHER(IsConst, "") { return arg.is_const; }
 
+// Matches a CcType pointer with kind `kind`.
+MATCHER_P(IsPointerWithKind, kind, "") {
+  const auto* pointer = std::get_if<CcType::PointerType>(&arg.variant);
+  if (pointer == nullptr) {
+    *result_listener << "was not a pointer";
+    return false;
+  }
+  if (pointer->kind == kind) return true;
+  *result_listener << "wrong pointer kind";
+  return false;
+}
+
 // Matches a CcType that is a pointer to a type matching `matcher`.
 template <typename Matcher>
 auto CcPointsTo(const Matcher& matcher) {
@@ -195,6 +260,31 @@ auto CcReferenceTo(const Matcher& matcher) {
 
 // Matches a CcType that is void.
 MATCHER(IsVoid, "") { return arg.IsVoid(); }
+
+// Recursively tests the provided CcType to check if any lifetimes are set.
+MATCHER(HasLifetimes, "") {
+  return std::visit(
+      absl::Overload{
+          [](const CcType::Primitive& primitive) { return false; },
+          [&](const CcType::PointerType& pointer) {
+            if (pointer.lifetime.has_value()) {
+              return true;
+            }
+            return ExplainMatchResult(HasLifetimes(), *pointer.pointee_type,
+                                      result_listener);
+          },
+          [&](const CcType::FuncPointer& func_pointer) {
+            return ExplainMatchResult(Contains(HasLifetimes()),
+                                      func_pointer.param_and_return_types,
+                                      result_listener);
+          },
+          [&](const FormattedError&) { return false; },
+          // There doesn't appear to be a way to record lifetimes as applied
+          // to records accepting lifetime arguments.
+          [&](const ItemId& id) { return false; },
+      },
+      arg.variant);
+}
 
 // Matches a CcType that is a pointer to integer.
 auto IsIntPtr() { return CcPointsTo(IsCcPrimitive("int")); }
@@ -267,7 +357,8 @@ decltype(IR::items) ItemsWithoutBuiltins(const IR& ir) {
 
   for (const auto& item : ir.items) {
     if (const auto* type_alias = std::get_if<TypeAlias>(&item)) {
-      if (type_alias->cc_name.Ident() == "__builtin_ms_va_list") {
+      // Skip builtin type aliases like __uint128_t, __builtin_ms_va_list.
+      if (absl::StartsWith(type_alias->cc_name.Ident(), "__")) {
         continue;
       }
     }
@@ -275,6 +366,37 @@ decltype(IR::items) ItemsWithoutBuiltins(const IR& ir) {
   }
 
   return items;
+}
+
+TEST(ImporterTest, ProtoMessageBridgeType) {
+  absl::string_view file = R"cc(
+    namespace proto2 {
+    struct MessageLite {};
+    struct Message : public MessageLite {};
+    }  // namespace proto2
+    class MyMessage : public google::protobuf::Message {};
+    class MyMessage_Request : public google::protobuf::Message {};
+    class MyMessage_Request_Inner : public google::protobuf::Message {};
+    class Outer : public google::protobuf::Message {};
+    class Outer_Inner_Level2 : public google::protobuf::Message {};
+  )cc";
+  ASSERT_OK_AND_ASSIGN(const IR ir, IrFromCc({file}));
+
+  EXPECT_THAT(
+      ir.get_items_if<Record>(),
+      AllOf(Contains(Pointee(AllOf(RsNameIs("MyMessage"),
+                                   HasProtoMessageBridgeType("MyMessage")))),
+            Contains(Pointee(
+                AllOf(RsNameIs("MyMessage_Request"),
+                      HasProtoMessageBridgeType("my_message::Request")))),
+            Contains(Pointee(AllOf(
+                RsNameIs("MyMessage_Request_Inner"),
+                HasProtoMessageBridgeType("my_message::request::Inner")))),
+            Contains(Pointee(
+                AllOf(RsNameIs("Outer"), HasProtoMessageBridgeType("Outer")))),
+            Contains(Pointee(
+                AllOf(RsNameIs("Outer_Inner_Level2"),
+                      HasProtoMessageBridgeType("outer::Inner_Level2"))))));
 }
 
 TEST(ImporterTest, Noop) {
@@ -906,25 +1028,35 @@ TEST(ImporterTest, FailedClassTemplateMethod) {
   )cc";
   ASSERT_OK_AND_ASSIGN(IR ir, IrFromCc({file}));
 
-  const UnsupportedItem* unsupported_method = nullptr;
+  const UnsupportedItem* unsupported_a = nullptr;
+  const TypeAlias* unsupported_b = nullptr;
   for (auto unsupported_item : ir.get_items_if<UnsupportedItem>()) {
-    if (unsupported_item->name == "A<NoMethod>::CallMethod") {
-      unsupported_method = unsupported_item;
-      break;
+    if (unsupported_item->name == "A") {
+      unsupported_a = unsupported_item;
     }
   }
-  ASSERT_TRUE(unsupported_method != nullptr);
+  for (auto type_alias : ir.get_items_if<TypeAlias>()) {
+    if (type_alias->cc_name.Ident() == "B") {
+      unsupported_b = type_alias;
+    }
+  }
+  ASSERT_TRUE(unsupported_a != nullptr);
+  ASSERT_TRUE(unsupported_b != nullptr);
+  const FormattedError* error_b =
+      std::get_if<FormattedError>(&unsupported_b->underlying_type.variant);
+  ASSERT_TRUE(error_b != nullptr);
+  EXPECT_THAT(unsupported_a->errors,
+              Contains(testing::Property(
+                  "message", &FormattedError::message,
+                  HasSubstr("Class templates are not yet supported"))));
   EXPECT_THAT(
-      unsupported_method->errors,
-      Contains(testing::Property(
+      unsupported_b->underlying_type.variant,
+      VariantWith<FormattedError>(testing::Property(
           "message", &FormattedError::message,
           HasSubstr(
-              // clang-format off
-R"(Diagnostics emitted:
-ir_from_cc_virtual_header.h:5:12: note: in instantiation of member function 'A<NoMethod>::CallMethod' requested here
-ir_from_cc_virtual_header.h:5:39: error: no member named 'method' in 'NoMethod')")
-          // clang-format on
-          )));
+              "Unsupported type 'A<NoMethod>': Failed to complete template "
+              "specialization type A<NoMethod>: template belongs to target "
+              "//test:testing_target, which does not support Crubit."))));
 }
 
 TEST(ImporterTest, CrashRepro_FunctionTypeAlias) {
@@ -965,5 +1097,358 @@ TEST(ImporterTest, CrashRepro_AutoInvolvingTemplate) {
   ASSERT_OK_AND_ASSIGN(IR ir, IrFromCc({file}));
 }
 
+TEST(ImporterTest, DetectsFormatterAsAbslStringify) {
+  ASSERT_OK_AND_ASSIGN(
+      const IR ir, IrFromCc({R"cc(
+                               struct ByRef {
+                                 template <typename Sink>
+                                 friend void AbslStringify(Sink&,
+                                                           const ByRef&) {}
+                               };
+                               struct ByValue {
+                                 template <typename Sink>
+                                 friend void AbslStringify(Sink&, ByValue) {}
+                               };
+                               struct NoFormatter {};
+                             )cc"}));
+  EXPECT_THAT(
+      ir.get_items_if<Record>(),
+      AllOf(
+          Contains(Pointee(AllOf(RsNameIs("ByRef"), HasDetectedFormatter()))),
+          Contains(Pointee(AllOf(RsNameIs("ByValue"), HasDetectedFormatter()))),
+          Contains(Pointee(
+              AllOf(RsNameIs("NoFormatter"), Not(HasDetectedFormatter()))))));
+}
+
+TEST(ImporterTest, DetectsFormatterAsOstream) {
+  ASSERT_OK_AND_ASSIGN(
+      const IR ir,
+      IrFromCc(  //
+          {R"cc(
+             namespace std {
+             template <typename T>
+             struct char_traits {};
+             template <typename T, typename Traits = char_traits<T>>
+             struct basic_ostream {};
+             using ostream = basic_ostream<char>;
+             }  // namespace std
+
+             struct ByRef {
+               friend std::ostream& operator<<(std::ostream& out, const ByRef&) {
+                 return out;
+               }
+             };
+             struct ByValue {
+               friend std::ostream& operator<<(std::ostream& out, ByValue) { return out; }
+             };
+             struct NoFormatter {};
+           )cc"}));
+  EXPECT_THAT(
+      ir.get_items_if<Record>(),
+      AllOf(
+          Contains(Pointee(AllOf(RsNameIs("ByRef"), HasDetectedFormatter()))),
+          Contains(Pointee(AllOf(RsNameIs("ByValue"), HasDetectedFormatter()))),
+          Contains(Pointee(
+              AllOf(RsNameIs("NoFormatter"), Not(HasDetectedFormatter()))))));
+}
+
+TEST(ImporterTest, DetectsFormatterAsPrinterOfBase) {
+  ASSERT_OK_AND_ASSIGN(
+      const IR ir, IrFromCc({R"cc(
+                               struct Base {
+                                 template <typename Sink>
+                                 friend void AbslStringify(Sink&, const Base&) {
+                                 }
+                               };
+                               struct Derived : Base {};
+                             )cc"}));
+  EXPECT_THAT(
+      ir.get_items_if<Record>(),
+      Contains(Pointee(AllOf(RsNameIs("Derived"), HasDetectedFormatter()))));
+}
+
+TEST(ImporterTest, DetectsFormatterAsPrinterInCrtpBase) {
+  ASSERT_OK_AND_ASSIGN(
+      const IR ir, IrFromCc({R"cc(
+                               template <typename This>
+                               struct Base {
+                                 template <typename Sink>
+                                 friend void AbslStringify(Sink&, const This&) {
+                                 }
+                               };
+                               struct Derived : private Base<Derived> {};
+                             )cc"}));
+  EXPECT_THAT(
+      ir.get_items_if<Record>(),
+      Contains(Pointee(AllOf(RsNameIs("Derived"), HasDetectedFormatter()))));
+}
+
+TEST(ImporterTest, DetectsEnumFormatter) {
+  ASSERT_OK_AND_ASSIGN(const IR ir, IrFromCc({R"cc(
+                                                enum class Foo {
+                                                  kFoo,
+                                                };
+                                                template <typename Sink>
+                                                void AbslStringify(Sink&, Foo) {
+                                                }
+                                              )cc"}));
+  EXPECT_THAT(
+      ir.get_items_if<Enum>(),
+      Contains(Pointee(AllOf(RsNameIs("Foo"), HasDetectedFormatter()))));
+}
+
+TEST(ImporterTest, DoesNotDetectAbslStringifyMemberFunctionAsFormatter) {
+  ASSERT_OK_AND_ASSIGN(
+      const IR ir, IrFromCc({R"cc(
+                               struct Foo {
+                                 template <typename Sink>
+                                 static void AbslStringify(Sink&, const Foo&) {}
+                               };
+                             )cc"}));
+  EXPECT_THAT(
+      ir.get_items_if<Record>(),
+      Contains(Pointee(AllOf(RsNameIs("Foo"), Not(HasDetectedFormatter())))));
+}
+
+TEST(ImporterTest, DoesNotDetectOperatorLeftShiftWrongTypesAsFormatter) {
+  ASSERT_OK_AND_ASSIGN(  //
+      const IR ir,       //
+      IrFromCc({R"cc(
+                  struct Foo {
+                    friend Foo& operator<<(Foo& foo, int) { return foo; }
+                  };
+                )cc"}));
+  EXPECT_THAT(
+      ir.get_items_if<Record>(),
+      Contains(Pointee(AllOf(RsNameIs("Foo"), Not(HasDetectedFormatter())))));
+}
+
+TEST(ImporterTest, OverridesDisplayForRecord) {
+  ASSERT_OK_AND_ASSIGN(
+      const IR ir,
+      IrFromCc({R"cc(
+                  template <bool>
+                  struct enable_if {};
+
+                  template <>
+                  struct enable_if<true> {
+                    using type = void;
+                  };
+
+                  template <bool b>
+                  using enable_if_t = typename enable_if<b>::type;
+
+                  template <bool b>
+                  struct [[clang::annotate("crubit_override_display", b)]]
+                  MaybeFormattable {
+                    // Use SFINAE so that `AbslStringify` isn't as easily
+                    // detectable.
+                    template <typename Sink, bool sfinae_b = b>
+                    friend enable_if_t<sfinae_b> AbslStringify(
+                        Sink& sink, const MaybeFormattable&) {}
+                  };
+                  struct NotFormattable : MaybeFormattable<false> {};
+                  struct Formattable : MaybeFormattable<true> {};
+                )cc"}));
+  EXPECT_THAT(ir.get_items_if<Record>(),
+              AllOf(Contains(Pointee(AllOf(RsNameIs("NotFormattable"),
+                                           Not(HasDetectedFormatter())))),
+                    Contains(Pointee(AllOf(RsNameIs("Formattable"),
+                                           HasDetectedFormatter())))));
+}
+
+TEST(ImporterTest, OverridesDisplayForEnum) {
+  ASSERT_OK_AND_ASSIGN(
+      const IR ir,
+      IrFromCc({R"cc(
+                  namespace std {
+                  template <typename T, typename Traits>
+                  struct basic_ostream {};
+                  }  // namespace std
+
+                  enum class [[clang::annotate("crubit_override_display",
+                                               true)]] Foo {
+                    kFoo,
+                  };
+                  // Make this generic so that `operator<<` isn't as easily
+                  // detectable.
+                  template <typename T, typename Traits>
+                  auto& operator<<(std::basic_ostream<T, Traits>& out, Foo) {
+                    return out;
+                  }
+                )cc"}));
+  EXPECT_THAT(
+      ir.get_items_if<Enum>(),
+      Contains(Pointee(AllOf(RsNameIs("Foo"), HasDetectedFormatter()))));
+}
+
+TEST(ImporterTest, OverrideDisplayInconsistent) {
+  ASSERT_OK_AND_ASSIGN(
+      const IR ir,  //
+      IrFromCc(     //
+          {R"cc(
+             struct [[clang::annotate("crubit_override_display",
+                                      true)]] Inconsistent;
+             struct [[clang::annotate("crubit_override_display", false)]] Inconsistent {};
+           )cc"}));
+  EXPECT_THAT(ir.get_items_if<UnsupportedItem>(),
+              ElementsAre(Pointee(
+                  AllOf(UnsupportedItemNameIs("Inconsistent"),
+                        Field("errors", &UnsupportedItem::errors,
+                              ElementsAre(Property(
+                                  &FormattedError::message,
+                                  HasSubstr("crubit_override_display"))))))));
+}
+
+TEST(ImporterTest, OverrideDisplayMissingArgs) {
+  ASSERT_OK_AND_ASSIGN(
+      const IR ir,
+      IrFromCc({R"cc(
+                  struct [[clang::annotate("crubit_override_display")]]
+                  MissingArgs {};
+                )cc"}));
+  EXPECT_THAT(ir.get_items_if<UnsupportedItem>(),
+              ElementsAre(Pointee(
+                  AllOf(UnsupportedItemNameIs("MissingArgs"),
+                        Field("errors", &UnsupportedItem::errors,
+                              ElementsAre(Property(&FormattedError::message,
+                                                   HasSubstr("argument"))))))));
+}
+
+TEST(ImporterTest, OverrideDisplayMultipleArgs) {
+  ASSERT_OK_AND_ASSIGN(const IR ir,
+                       IrFromCc({R"cc(
+                                   struct [[clang::annotate(
+                                       "crubit_override_display", true, false)]]
+                                   MultipleArgs {};
+                                 )cc"}));
+  EXPECT_THAT(ir.get_items_if<UnsupportedItem>(),
+              ElementsAre(Pointee(
+                  AllOf(UnsupportedItemNameIs("MultipleArgs"),
+                        Field("errors", &UnsupportedItem::errors,
+                              ElementsAre(Property(&FormattedError::message,
+                                                   HasSubstr("argument"))))))));
+}
+
+TEST(ImporterTest, OverrideDisplayWrongArgType) {
+  ASSERT_OK_AND_ASSIGN(
+      const IR ir,
+      IrFromCc({R"cc(
+                  struct [[clang::annotate("crubit_override_display", "foo")]]
+                  WrongArgType {};
+                )cc"}));
+  EXPECT_THAT(ir.get_items_if<UnsupportedItem>(),
+              ElementsAre(Pointee(
+                  AllOf(UnsupportedItemNameIs("WrongArgType"),
+                        Field("errors", &UnsupportedItem::errors,
+                              ElementsAre(Property(&FormattedError::message,
+                                                   HasSubstr("bool"))))))));
+}
+
+absl::StatusOr<IR> IrFromCcWithAssumedLifetimes(absl::string_view program) {
+  auto full_program = absl::StrCat(R"cc(
+#define $(l) [[clang::annotate_type("lifetime", #l)]]
+#define $a $(a)
+#define $b $(b)
+#define LIFETIME_PARAMS(...) [[clang::annotate("lifetime_params", __VA_ARGS__)]]
+                                   )cc",
+                                   program);
+  BazelLabel test_target{"//test:testing_target"};
+  return IrFromCc(IrFromCcOptions{
+      .extra_source_code_for_testing = full_program,
+      .crubit_features = {{test_target, {"assume_lifetimes"}}}});
+}
+
+TEST(ImporterTest, AssumedLifetimesCapturesRawFunctionParameterLifetime) {
+  absl::string_view file = R"cc(
+    void f(int& $a x);
+  )cc";
+  ASSERT_OK_AND_ASSIGN(IR ir, IrFromCcWithAssumedLifetimes(file));
+  EXPECT_THAT(ItemsWithoutBuiltins(ir),
+              UnorderedElementsAre(VariantWith<Func>(AllOf(
+                  LifetimeParamsAre(), IdentifierIs("f"), ReturnType(IsVoid()),
+                  ParamsAre(ParamType(
+                      AllOf(ExplicitLifetimesAre("a"), UnknownAttributesAre(""),
+                            Not(HasLifetimes()), IsIntRef())))))));
+}
+
+TEST(ImporterTest, AssumedLifetimesCapturesRawFunctionParameterLifetimes) {
+  absl::string_view file = R"cc(
+    void f(int& $a $b x);
+  )cc";
+  ASSERT_OK_AND_ASSIGN(IR ir, IrFromCcWithAssumedLifetimes(file));
+  EXPECT_THAT(ItemsWithoutBuiltins(ir),
+              UnorderedElementsAre(VariantWith<Func>(AllOf(
+                  LifetimeParamsAre(), IdentifierIs("f"), ReturnType(IsVoid()),
+                  ParamsAre(ParamType(AllOf(
+                      ExplicitLifetimesAre("a", "b"), UnknownAttributesAre(""),
+                      Not(HasLifetimes()), IsIntRef())))))));
+}
+
+TEST(ImporterTest,
+     AssumedLifetimesCapturesRawFunctionParameterLifetimesSingleAnnotation) {
+  absl::string_view file = R"cc(
+    void f(int& [[clang::annotate_type("lifetime", "aa", "bb", "cc")]] x);
+  )cc";
+  ASSERT_OK_AND_ASSIGN(IR ir, IrFromCcWithAssumedLifetimes(file));
+  EXPECT_THAT(
+      ItemsWithoutBuiltins(ir),
+      UnorderedElementsAre(VariantWith<Func>(AllOf(
+          LifetimeParamsAre(), IdentifierIs("f"), ReturnType(IsVoid()),
+          ParamsAre(ParamType(AllOf(ExplicitLifetimesAre("aa", "bb", "cc"),
+                                    UnknownAttributesAre(""),
+                                    Not(HasLifetimes()), IsIntRef())))))));
+}
+
+TEST(ImporterTest,
+     AssumedLifetimesCapturesRawFunctionParameterLifetimesMultipleAnnotations) {
+  absl::string_view file = R"cc(
+    void f(int& [[clang::annotate_type("lifetime", "a", "b")]]
+           [[clang::annotate_type("lifetime", "c", "d")]] x);
+  )cc";
+  ASSERT_OK_AND_ASSIGN(IR ir, IrFromCcWithAssumedLifetimes(file));
+  EXPECT_THAT(
+      ItemsWithoutBuiltins(ir),
+      UnorderedElementsAre(VariantWith<Func>(AllOf(
+          LifetimeParamsAre(), IdentifierIs("f"), ReturnType(IsVoid()),
+          ParamsAre(ParamType(AllOf(ExplicitLifetimesAre("a", "b", "c", "d"),
+                                    UnknownAttributesAre(""),
+                                    Not(HasLifetimes()), IsIntRef())))))));
+}
+
+TEST(ImporterTest, AssumedLifetimesCapturesImplicitThisLifetime) {
+  absl::string_view file = R"cc(
+    struct S {
+      int* $b f() $a;
+    };
+  )cc";
+  ASSERT_OK_AND_ASSIGN(IR ir, IrFromCcWithAssumedLifetimes(file));
+  EXPECT_THAT(ItemsWithoutBuiltins(ir),
+              Contains(VariantWith<Func>(AllOf(
+                  IdentifierIs("f"), ReturnType(ExplicitLifetimesAre("b")),
+                  ParamsAre(AllOf(
+                      IdentifierIs("__this"),
+                      ParamType(AllOf(
+                          ExplicitLifetimesAre("a"), Not(HasLifetimes()),
+                          IsPointerWithKind(PointerTypeKind::kNonNull)))))))));
+}
+
+TEST(ImporterTest, AssumedLifetimesCapturesImplicitThisLifetimeRvalueRef) {
+  absl::string_view file = R"cc(
+    struct S {
+      int* $b f() && $a;
+    };
+  )cc";
+  ASSERT_OK_AND_ASSIGN(IR ir, IrFromCcWithAssumedLifetimes(file));
+  EXPECT_THAT(
+      ItemsWithoutBuiltins(ir),
+      Contains(VariantWith<Func>(
+          AllOf(IdentifierIs("f"), ReturnType(ExplicitLifetimesAre("b")),
+                ParamsAre(AllOf(
+                    IdentifierIs("__this"),
+                    ParamType(AllOf(
+                        ExplicitLifetimesAre("a"), Not(HasLifetimes()),
+                        IsPointerWithKind(PointerTypeKind::kRValueRef)))))))));
+}
 }  // namespace
 }  // namespace crubit

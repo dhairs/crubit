@@ -27,7 +27,9 @@ crubit_rust_test(
 crubit_test_cc_library(
     name = "nonunpin_experimental",
     hdrs = ["nonunpin.h"],
-    aspect_hints = ["//features:experimental"],
+    aspect_hints = [
+        "//features:experimental",
+    ],
     deps = ["@abseil-cpp//absl/log:check"],
 )
 
@@ -39,6 +41,7 @@ crubit_rust_test(
     rustc_flags = ["-Zallow-features=negative_impls"],
     # LINT.ThenChange(//docs/overview/unstable_features.md)
     deps = [
+        "//support:cref",
         "//support:ctor",
         "@crate_index//:googletest",
     ],

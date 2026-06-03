@@ -42,10 +42,11 @@ Cmdline MakeCmdline(std::string header) {
       .clang_format_exe_path = std::string(ClangFormatExePath()),
       .rustfmt_exe_path = std::string(RustfmtExePath()),
       .rustfmt_config_path = "nowhere/rustfmt.toml",
-      .environment = Environment::Production,
+      .is_golden_test = false,
       .public_headers = {HeaderName(header)},
   };
   args.headers_to_targets[args.public_headers[0]] = args.current_target;
+  args.target_to_features[args.current_target] = {"supported"};
   absl::StatusOr<Cmdline> cmdline = Cmdline::Create(args);
   CHECK_OK(cmdline);
   return *cmdline;

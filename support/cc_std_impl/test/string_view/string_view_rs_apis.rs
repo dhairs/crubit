@@ -18,7 +18,7 @@ unsafe fn to_str(sv: raw_string_view) -> &'static str {
 /// # Safety
 /// `val` is a valid string_view for the duration of the call.
 pub unsafe fn consume_raw_string_view(val: raw_string_view) {
-    assert_eq!(to_str(val), "Hello World")
+    assert_eq!(unsafe { to_str(val) }, "Hello World")
 }
 
 pub fn return_raw_string_view() -> raw_string_view {
@@ -26,8 +26,7 @@ pub fn return_raw_string_view() -> raw_string_view {
 }
 
 pub fn consume_string_view<'a>(val: string_view<'a>) {
-    // Safety: The string_view doesn't alias.
-    unsafe { assert_eq!(val.to_str().unwrap(), "Hello World") }
+    assert_eq!(val.to_str().unwrap(), "Hello World")
 }
 
 pub fn return_string_view() -> string_view<'static> {

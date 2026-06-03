@@ -6,9 +6,11 @@ use arc_anyhow::Result;
 use code_gen_utils::make_rs_ident;
 use database::code_snippet::BindingsTokens;
 use generate_struct_and_union::generate_derives;
-use googletest::prelude::gtest;
+use googletest::{expect_that, gtest, matchers::contains_substring};
 use ir_testing::with_lifetime_macros;
-use multiplatform_ir_testing::{ir_from_cc, ir_from_cc_dependency, ir_record};
+use multiplatform_ir_testing::{
+    ir_from_assumed_lifetimes_cc, ir_from_cc, ir_from_cc_dependency, ir_record,
+};
 use proc_macro2::TokenStream;
 use quote::quote;
 use test_generators::generate_bindings_tokens_for_test;
@@ -28,7 +30,7 @@ fn test_template_in_dependency_and_alias_in_current_target() -> Result<()> {
                     T GetValue() { return field; }
                     T field;
                 }; "#;
-        let current_target_src = r#" #pragma clang lifetime_elision
+        let current_target_src = r#"
                 using MyAliasOfTemplate = MyTemplate<int>; "#;
         ir_from_cc_dependency(current_target_src, dependency_src)?
     };
@@ -40,7 +42,7 @@ fn test_template_in_dependency_and_alias_in_current_target() -> Result<()> {
             #[repr(C)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=MyTemplate < int >"]
             pub struct __CcTemplateInst10MyTemplateIiE {
-                pub field: ::core::ffi::c_int,
+                pub field: ::ffi_11::c_int,
             }
         }
     );
@@ -50,10 +52,9 @@ fn test_template_in_dependency_and_alias_in_current_target() -> Result<()> {
             impl __CcTemplateInst10MyTemplateIiE {
                 #[doc = " Generated from: test/dependency_header.h;l=5"]
                 #[inline(always)]
-                pub fn GetValue<'a>(self: ... Pin<&'a mut Self>) -> ::core::ffi::c_int { unsafe {
-                    crate::detail::__rust_thunk___ZN10MyTemplateIiE8GetValueEv__2f_2ftest_3atesting_5ftarget(
-                        self)
-                }}
+                pub fn GetValue<'a>(self: ... Pin<&'a mut Self>) -> ::ffi_11::c_int {
+                    unsafe { self::cc_template_inst10_my_template_ii_e::GetValue(self) }
+                }
             }
         }
     );
@@ -71,7 +72,7 @@ fn test_template_in_dependency_and_alias_in_current_target() -> Result<()> {
                 pub(crate) unsafe fn
                 __rust_thunk___ZN10MyTemplateIiE8GetValueEv__2f_2ftest_3atesting_5ftarget<'a>(
                     __this: ... Pin<&'a mut crate::__CcTemplateInst10MyTemplateIiE>
-                ) -> ::core::ffi::c_int;
+                ) -> ::ffi_11::c_int;
                 ...
             } }
         }
@@ -95,7 +96,7 @@ fn test_template_with_out_of_line_definition() -> Result<()> {
     // See also an end-to-end test in the `test/templates/out_of_line_definition`
     // directory.
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             template <typename T>
             class MyTemplate final {
              public:
@@ -150,7 +151,6 @@ fn test_template_with_out_of_line_definition() -> Result<()> {
 fn test_simple_struct() -> Result<()> {
     let ir = ir_from_cc(
         r#"
-        #pragma clang lifetime_elision
         struct SomeStruct final {
             ~SomeStruct() {}
             int public_int;
@@ -170,12 +170,12 @@ fn test_simple_struct() -> Result<()> {
             #[repr(C, align(4))]
             #[doc="CRUBIT_ANNOTATE: cpp_type=SomeStruct"]
             pub struct SomeStruct {
-                __non_field_data: [::core::mem::MaybeUninit<u8>; 0],
-                pub public_int: ::core::ffi::c_int,
+                __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 0],
+                pub public_int: ::ffi_11::c_int,
                 #[doc = " Reason for representing this field as a blob of bytes:\n Types of non-public C++ fields can be elided away"]
-                pub(crate) protected_int: [::core::mem::MaybeUninit<u8>; 4],
+                pub(crate) protected_int: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 4],
                 #[doc = " Reason for representing this field as a blob of bytes:\n Types of non-public C++ fields can be elided away"]
-                pub(crate) private_int: [::core::mem::MaybeUninit<u8>; 4],
+                pub(crate) private_int: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 4],
             }
         }
     );
@@ -218,7 +218,6 @@ fn test_simple_struct() -> Result<()> {
 fn test_struct_vs_class() -> Result<()> {
     let ir = ir_from_cc(
         r#"
-        #pragma clang lifetime_elision
         struct SomeStruct final {
             SomeStruct() {}
             int field;
@@ -252,7 +251,6 @@ fn test_struct_vs_class() -> Result<()> {
 fn test_struct_vs_typedefed_struct() -> Result<()> {
     let ir = ir_from_cc(
         r#"
-        #pragma clang lifetime_elision
         struct SomeStruct final {
           int x;
         } __attribute__((aligned(16)));
@@ -394,9 +392,9 @@ fn test_struct_with_unnamed_bitfield_member() -> Result<()> {
             #[repr(C, align(4))]
             #[doc="CRUBIT_ANNOTATE: cpp_type=SomeStruct"]
             pub struct SomeStruct {
-                pub first_field: ::core::ffi::c_int, ...
+                pub first_field: ::ffi_11::c_int, ...
                 __bitfields1: [::core::mem::MaybeUninit<u8>; 4],
-                pub last_field: ::core::ffi::c_int,
+                pub last_field: ::ffi_11::c_int,
             }
             ...
             const _: () = {
@@ -414,8 +412,8 @@ fn test_struct_with_unnamed_bitfield_member() -> Result<()> {
 /// even via Copy/Clone.
 #[gtest]
 fn test_trivial_nonpublic_destructor() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         struct Indestructible final {
           Indestructible() = default;
           Indestructible(int);
@@ -432,22 +430,22 @@ fn test_trivial_nonpublic_destructor() -> Result<()> {
     )?;
     let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
     // It isn't available by value:
-    assert_rs_matches!(rs_api, quote! {impl<'error> Default});
-    assert_rs_matches!(rs_api, quote! {impl<'error> From});
-    assert_rs_matches!(rs_api, quote! {impl<'error> Clone});
+    expect_that!(
+        rs_api.to_string(),
+        contains_substring("`Indestructible` can't be used by-value because it has a non-public or deleted destructor"),
+    );
     assert_rs_not_matches!(rs_api, quote! {ReturnsValue});
-    assert_rs_matches!(rs_api, quote! {TakesValue<'error>});
     // ... but it is otherwise available:
     assert_rs_matches!(rs_api, quote! {struct Indestructible});
-    assert_rs_matches!(rs_api, quote! {fn Foo<'a>(&'a self)});
-    assert_rs_matches!(rs_api, quote! {fn TakesReference<'a>(x: &'a crate::Indestructible)});
+    assert_rs_matches!(rs_api, quote! {fn Foo<'__this>(&'__this self)});
+    assert_rs_matches!(rs_api, quote! {fn TakesReference<'x>(x: &'x crate::Indestructible)});
     Ok(())
 }
 
 #[gtest]
 fn test_nontrivial_nonpublic_destructor() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         struct Indestructible final {
           Indestructible() = default;
           Indestructible(int);
@@ -466,11 +464,14 @@ fn test_nontrivial_nonpublic_destructor() -> Result<()> {
     // It isn't available by value:
     assert_rs_not_matches!(rs_api, quote! {CtorNew});
     assert_rs_not_matches!(rs_api, quote! {ReturnsValue});
-    assert_rs_matches!(rs_api, quote! {TakesValue<'error>});
+    expect_that!(
+        rs_api.to_string(),
+        contains_substring("`Indestructible` can't be used by-value because it has a non-public or deleted destructor"),
+    );
     // ... but it is otherwise available:
     assert_rs_matches!(rs_api, quote! {struct Indestructible});
-    assert_rs_matches!(rs_api, quote! {fn Foo<'a>(&'a self)});
-    assert_rs_matches!(rs_api, quote! {fn TakesReference<'a>(x: &'a crate::Indestructible)});
+    assert_rs_matches!(rs_api, quote! {fn Foo<'__this>(&'__this self)});
+    assert_rs_matches!(rs_api, quote! {fn TakesReference<'x>(x: &'x crate::Indestructible)});
     Ok(())
 }
 
@@ -481,8 +482,8 @@ fn test_nontrivial_nonpublic_destructor() -> Result<()> {
 /// restriction will likely be lifted later.
 #[gtest]
 fn test_trivial_abstract_by_value() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         struct Abstract final {
           Abstract() = default;
           Abstract(int);
@@ -501,16 +502,16 @@ fn test_trivial_abstract_by_value() -> Result<()> {
     assert_rs_not_matches!(rs_api, quote! {derive ( ... Clone ... )});
     // ... but it is otherwise available:
     assert_rs_matches!(rs_api, quote! {struct Abstract});
-    assert_rs_matches!(rs_api, quote! {fn Foo<'a>(&'a self)});
-    assert_rs_matches!(rs_api, quote! {fn Nonvirtual<'a>(&'a self)});
+    assert_rs_matches!(rs_api, quote! {fn Foo<'__this>(&'__this self)});
+    assert_rs_matches!(rs_api, quote! {fn Nonvirtual<'__this>(&'__this self)});
     assert_rs_matches!(rs_api, quote! {fn TakesAbstract<'a>(a: &'a crate::Abstract)});
     Ok(())
 }
 
 #[gtest]
 fn test_nontrivial_abstract_by_value() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         struct Abstract final {
           Abstract() {};
           Abstract(int);
@@ -525,8 +526,8 @@ fn test_nontrivial_abstract_by_value() -> Result<()> {
     assert_rs_not_matches!(rs_api, quote! {CtorNew});
     // ... but it is otherwise available:
     assert_rs_matches!(rs_api, quote! {struct Abstract});
-    assert_rs_matches!(rs_api, quote! {fn Foo<'a>(&'a self)});
-    assert_rs_matches!(rs_api, quote! {fn Nonvirtual<'a>(&'a self)});
+    assert_rs_matches!(rs_api, quote! {fn Foo<'__this>(&'__this self)});
+    assert_rs_matches!(rs_api, quote! {fn Nonvirtual<'__this>(&'__this self)});
     assert_rs_matches!(rs_api, quote! {fn TakesAbstract<'a>(a: &'a crate::Abstract)});
     Ok(())
 }
@@ -565,12 +566,12 @@ fn test_struct_with_unnamed_struct_and_union_members() -> Result<()> {
             #[repr(C, align(4))]
             #[doc="CRUBIT_ANNOTATE: cpp_type=StructWithUnnamedMembers"]
             pub struct StructWithUnnamedMembers {
-               pub first_field: ::core::ffi::c_int,
+               pub first_field: ::ffi_11::c_int,
                #[doc =" Reason for representing this field as a blob of bytes:\n Unsupported type 'StructWithUnnamedMembers::(anonymous struct at ./ir_from_cc_virtual_header.h:7:11)': No generated bindings found for ''"]
                pub(crate) __unnamed_field1: [::core::mem::MaybeUninit<u8>; 8],
                #[doc =" Reason for representing this field as a blob of bytes:\n Unsupported type 'StructWithUnnamedMembers::(anonymous union at ./ir_from_cc_virtual_header.h:11:11)': No generated bindings found for ''"]
                pub(crate) __unnamed_field2: [::core::mem::MaybeUninit<u8>; 4],
-               pub last_field: ::core::ffi::c_int,
+               pub last_field: ::ffi_11::c_int,
             }
             ...
             const _: () = {
@@ -644,28 +645,6 @@ fn test_copy_derives_dtor_nontrivial_self() {
     }
 }
 
-/// If a base class is a bridge type, it doesn't exist at all, and can't be upcasted to.
-#[gtest]
-fn test_bridged_base_class() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"
-        struct [[clang::annotate("crubit_bridge_type", "BridgedBase"),
-            clang::annotate("crubit_bridge_type_rust_to_cpp_converter",
-                         "rust_to_cpp_converter"),
-            clang::annotate("crubit_bridge_type_cpp_to_rust_converter",
-                         "cpp_to_rust_converter")]] Base {
-            int x;
-        };
-
-        struct Derived : Base {};
-    "#,
-    )?;
-    let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
-    assert_rs_not_matches!(rs_api, quote! { Base });
-    assert_rs_not_matches!(rs_api, quote! { BridgedBase });
-    Ok(())
-}
-
 #[gtest]
 fn test_base_class_subobject_layout() -> Result<()> {
     let ir = ir_from_cc(
@@ -690,7 +669,7 @@ fn test_base_class_subobject_layout() -> Result<()> {
             #[doc="CRUBIT_ANNOTATE: cpp_type=Derived"]
             pub struct Derived {
                 __non_field_data: [::core::mem::MaybeUninit<u8>; 10],
-                pub z: ::core::ffi::c_short,
+                pub z: ::ffi_11::c_short,
             }
         }
     );
@@ -716,7 +695,7 @@ fn test_base_class_multiple_inheritance_subobject_layout() -> Result<()> {
             #[doc="CRUBIT_ANNOTATE: cpp_type=Derived"]
             pub struct Derived {
                 __non_field_data: [::core::mem::MaybeUninit<u8>; 10],
-                pub z: ::core::ffi::c_short,
+                pub z: ::ffi_11::c_short,
             }
         }
     );
@@ -742,7 +721,7 @@ fn test_base_class_deep_inheritance_subobject_layout() -> Result<()> {
             #[doc="CRUBIT_ANNOTATE: cpp_type=Derived"]
             pub struct Derived {
                 __non_field_data: [::core::mem::MaybeUninit<u8>; 10],
-                pub z: ::core::ffi::c_short,
+                pub z: ::ffi_11::c_short,
             }
         }
     );
@@ -812,7 +791,7 @@ fn test_base_class_subobject_empty() -> Result<()> {
         quote! {
             #[doc="CRUBIT_ANNOTATE: cpp_type=Derived"]
             pub struct Derived {
-                pub x: ::core::ffi::c_short,
+                pub x: ::ffi_11::c_short,
             }
         }
     );
@@ -838,7 +817,7 @@ fn test_non_aggregate_struct_private_field() -> Result<()> {
         quote! {
             pub struct NonAggregate {
                 __non_field_data:  [::core::mem::MaybeUninit<u8>; 0],
-                pub x: ::core::ffi::c_short,
+                pub x: ::ffi_11::c_short,
             }
         }
     );
@@ -871,7 +850,7 @@ fn test_no_unique_address() -> Result<()> {
                 pub(crate) field1: [::core::mem::MaybeUninit<u8>; 8],
                 ...
                 pub(crate) field2: [::core::mem::MaybeUninit<u8>; 2],
-                pub z: ::core::ffi::c_short,
+                pub z: ::ffi_11::c_short,
             }
         }
     );
@@ -947,7 +926,7 @@ fn test_no_unique_address_empty() -> Result<()> {
             #[repr(C)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=Struct"]
             pub struct Struct {
-                pub x: ::core::ffi::c_int,
+                pub x: ::ffi_11::c_int,
             }
             ...
             impl Struct {
@@ -1020,7 +999,7 @@ fn test_doc_comment_record() -> Result<()> {
             #[doc="CRUBIT_ANNOTATE: cpp_type=SomeStruct"]
             pub struct SomeStruct {
                 # [doc = " Field doc"]
-                pub field: ::core::ffi::c_int,
+                pub field: ::ffi_11::c_int,
             }
         }
     );
@@ -1031,7 +1010,6 @@ fn test_doc_comment_record() -> Result<()> {
 fn test_basic_union() -> Result<()> {
     let ir = ir_from_cc(
         r#"
-        #pragma clang lifetime_elision
         union SomeUnion {
             int some_field;
             long long some_bigger_field;
@@ -1047,8 +1025,8 @@ fn test_basic_union() -> Result<()> {
             #[repr(C)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=SomeUnion"]
             pub union SomeUnion {
-                pub some_field: ::core::ffi::c_int,
-                pub some_bigger_field: ::core::ffi::c_longlong,
+                pub some_field: ::ffi_11::c_int,
+                pub some_bigger_field: ::ffi_11::c_longlong,
             }
         }
     );
@@ -1090,7 +1068,7 @@ fn test_union_with_opaque_field() -> Result<()> {
             #[doc="CRUBIT_ANNOTATE: cpp_type=MyUnion"]
             pub union MyUnion { ...
                 first_field: [::core::mem::MaybeUninit<u8>; 56],
-                pub second_field: ::core::ffi::c_int,
+                pub second_field: ::ffi_11::c_int,
             }
         }
     );
@@ -1158,7 +1136,7 @@ fn test_union_with_private_fields() -> Result<()> {
             #[repr(C, align(8))]
             #[doc="CRUBIT_ANNOTATE: cpp_type=SomeUnionWithPrivateFields"]
             pub union SomeUnionWithPrivateFields {
-                pub public_field: ::core::ffi::c_int,
+                pub public_field: ::ffi_11::c_int,
                 #[doc = " Reason for representing this field as a blob of bytes:\n Types of non-public C++ fields can be elided away"]
                 pub(crate) private_field: [::core::mem::MaybeUninit<u8>; 8],
             }
@@ -1304,7 +1282,7 @@ fn test_union_field_with_nontrivial_destructor() -> Result<()> {
             #[repr(C)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=UnionWithNontrivialField"]
             pub union UnionWithNontrivialField {
-                pub trivial_field: ::core::ffi::c_int,
+                pub trivial_field: ::ffi_11::c_int,
                 pub nontrivial_field: ::core::mem::ManuallyDrop<crate::NontrivialStruct>,
             }
         }
@@ -1328,7 +1306,6 @@ fn test_union_field_with_nontrivial_destructor() -> Result<()> {
 fn test_union_with_constructors() -> Result<()> {
     let ir = ir_from_cc(
         r#"
-        #pragma clang lifetime_elision
         union UnionWithDefaultConstructors {
             int a;
         };
@@ -1343,7 +1320,7 @@ fn test_union_with_constructors() -> Result<()> {
             #[repr(C)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=UnionWithDefaultConstructors"]
             pub union UnionWithDefaultConstructors {
-                pub a: ::core::ffi::c_int,
+                pub a: ::ffi_11::c_int,
             }
         }
     );
@@ -1386,7 +1363,7 @@ fn test_unambiguous_public_bases() -> Result<()> {
         quote! {
             unsafe impl oops::Inherits<crate::VirtualBase> for crate::Derived {
                 unsafe fn upcast_ptr(derived: *const Self) -> *const crate::VirtualBase {
-                    crate::detail::__crubit_dynamic_upcast__7Derived__to__11VirtualBase___2f_2ftest_3atesting_5ftarget(derived)
+                    unsafe { crate::detail::__crubit_dynamic_upcast__7Derived__to__11VirtualBase___2f_2ftest_3atesting_5ftarget(derived) }
                 }
             }
         }
@@ -1492,7 +1469,7 @@ fn test_aligned_attr() {
 #[gtest]
 fn test_forward_declared() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct ForwardDeclared;"#,
     )?;
     let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
@@ -1509,7 +1486,7 @@ fn test_forward_declared() -> Result<()> {
 #[gtest]
 fn test_private_struct_not_present() -> Result<()> {
     let ir = ir_from_cc(&with_lifetime_macros(
-        r#"#pragma clang lifetime_elision
+        r#"
         template <typename T> class MyTemplate {};
         class HasPrivateType {
          private:
@@ -1599,7 +1576,7 @@ fn test_implicit_template_specializations_are_sorted_by_mangled_name() -> Result
 #[gtest]
 fn test_implicit_template_specialization_namespace_qualifier() -> Result<()> {
     let rs_api = generate_bindings_tokens_for_test(ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             namespace test_namespace_bindings {
                 template <typename T>
                 struct MyTemplate final {
@@ -1622,7 +1599,7 @@ fn test_implicit_template_specialization_namespace_qualifier() -> Result<()> {
             }
             ...
             pub struct __CcTemplateInstN23test_namespace_bindings10MyTemplateIiEE {
-                pub value_: ::core::ffi::c_int,
+                pub value_: ::ffi_11::c_int,
             }
             ...
         }
@@ -1663,7 +1640,7 @@ fn test_derived_class_inherits_unambiguous_public_functions_bases() -> Result<()
                 ...
                 #[inline(always)]
                 pub unsafe fn NonColliding(__this: *mut Self) {
-                    crate::detail::__rust_thunk___ZN4test5Base112NonCollidingEv(oops::UnsafeUpcast::<_>::unsafe_upcast(__this))
+                    unsafe { self::derived::NonColliding(__this) }
                 }
             }
             ...
@@ -1699,7 +1676,7 @@ fn test_member_in_derived_class_overwrites_inherited_ones() -> Result<()> {
                 ...
                 #[inline(always)]
                 pub unsafe fn Colliding(__this: *mut Self) {
-                    crate::detail::__rust_thunk___ZN4test7Derived9CollidingEv(__this)
+                    unsafe { self::derived::Colliding(__this) }
                 }
             }
             ...
@@ -1738,6 +1715,11 @@ fn test_forward_declared_class_template_specialization_symbol() -> Result<()> {
     Ok(())
 }
 
+fn enable_supported(ir: &mut ir::IR) {
+    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
+        crubit_feature::CrubitFeature::Supported | crubit_feature::CrubitFeature::Types;
+}
+
 /// Unsupported fields on supported structs are replaced with opaque blobs.
 ///
 /// This is hard to test any other way than token comparison!
@@ -1760,8 +1742,7 @@ fn test_supported_suppressed_field_types() -> Result<()> {
     
     "#,
     )?;
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
     assert_rs_matches!(
         rs_api,
@@ -1785,8 +1766,7 @@ fn test_supported_nontrivial_field() -> Result<()> {
         struct [[clang::trivial_abi]] Outer {Inner inner_field; Inner* inner_ptr_field;};
         "#,
     )?;
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
     // Note: inner is a supported type, so it isn't being replaced by a blob because
     // it's unsupporter or anything.
@@ -1797,7 +1777,7 @@ fn test_supported_nontrivial_field() -> Result<()> {
         quote! {
         pub struct Outer {
             ...
-            pub(crate) inner_field: [::core::mem::MaybeUninit<u8>; 8],
+            pub(crate) inner_field: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 8],
             pub inner_ptr_field: *mut crate::Inner,
         }}
     );
@@ -1813,8 +1793,7 @@ fn test_supported_no_unique_address_field() -> Result<()> {
         };
     "#,
     )?;
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
     assert_rs_matches!(
         rs_api,
@@ -1840,8 +1819,7 @@ fn test_nested_type_definitions() -> Result<()> {
                 SomeStruct::Present* AlsoPresent();
             "#
         ))?;
-        *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-            crubit_feature::CrubitFeature::Supported.into();
+        enable_supported(&mut ir);
         let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
         assert_rs_matches!(rs_api, quote! { Present });
         assert_rs_matches!(rs_api, quote! { AlsoPresent });
@@ -1884,9 +1862,8 @@ fn test_struct_from_other_target() -> Result<()> {
 
 #[gtest]
 fn test_multiple_member_functions_grouped_in_impl() -> Result<()> {
-    let ir = ir_from_cc(
+    let ir = ir_from_assumed_lifetimes_cc(
         r#"
-        #pragma clang lifetime_elision
         struct SomeStruct final {
             void Method1() {}
             void Method2() {}
@@ -1902,22 +1879,122 @@ fn test_multiple_member_functions_grouped_in_impl() -> Result<()> {
             impl SomeStruct {
                 ...
                 #[inline(always)]
-                pub fn Method1<'a>(&'a mut self) {
-                    unsafe { crate::detail::__rust_thunk___ZN10SomeStruct7Method1Ev(self) }
+                pub fn Method1<'__this>(&'__this mut self) {
+                    unsafe { self::some_struct::Method1(self) }
                 }
                 ...
                 #[inline(always)]
-                pub fn Method2<'a>(&'a mut self) {
-                    unsafe { crate::detail::__rust_thunk___ZN10SomeStruct7Method2Ev(self) }
+                pub fn Method2<'__this>(&'__this mut self) {
+                    unsafe { self::some_struct::Method2(self) }
                 }
                 ...
                 #[inline(always)]
-                pub fn Method3<'a>(&'a mut self) {
-                    unsafe { crate::detail::__rust_thunk___ZN10SomeStruct7Method3Ev(self) }
+                pub fn Method3<'__this>(&'__this mut self) {
+                    unsafe { self::some_struct::Method3(self) }
                 }
             }
         }
     );
+
+    Ok(())
+}
+
+#[gtest]
+fn test_display() -> Result<()> {
+    let ir = ir_from_cc(
+        r#"
+        struct CanDisplay {
+            template <typename Sink>
+            friend void AbslStringify(Sink& sink, const CanDisplay&) {
+                sink.Append("CanDisplay");
+            }
+        };
+    "#,
+    )?;
+
+    let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
+
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            impl ::core::fmt::Display for CanDisplay {
+              ...
+            }
+        }
+    );
+    Ok(())
+}
+
+#[gtest]
+fn test_thread_safe_annotation_generates_send_sync() -> Result<()> {
+    let ir = ir_from_cc(
+        r#"
+        struct [[clang::annotate("crubit_thread_safe")]] ThreadSafeStruct final {
+            int field;
+        };
+    "#,
+    )?;
+
+    let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
+
+    // Thread-safe types should get `unsafe impl Send` and `unsafe impl Sync`.
+    assert_rs_matches!(rs_api, quote! { unsafe impl Send for ThreadSafeStruct {} });
+    assert_rs_matches!(rs_api, quote! { unsafe impl Sync for ThreadSafeStruct {} });
+
+    Ok(())
+}
+
+#[gtest]
+fn test_thread_safe_annotation_generates_unsafe_cell_body() -> Result<()> {
+    let ir = ir_from_cc(
+        r#"
+        struct [[clang::annotate("crubit_thread_safe")]] ThreadSafeStruct final {
+            int field;
+        };
+    "#,
+    )?;
+
+    let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
+
+    // Thread-safe types should have an opaque UnsafeCell body instead of individual fields.
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            pub struct ThreadSafeStruct {
+                __opaque: ::core::cell::UnsafeCell<[::core::mem::MaybeUninit<u8>; 4]>,
+            }
+        }
+    );
+
+    // Individual fields should NOT appear.
+    assert_rs_not_matches!(rs_api, quote! { pub field });
+
+    Ok(())
+}
+
+#[gtest]
+fn test_non_thread_safe_struct_has_negative_send_sync() -> Result<()> {
+    let ir = ir_from_cc(
+        r#"
+        struct RegularStruct final {
+            int field;
+        };
+    "#,
+    )?;
+
+    let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
+
+    // Non-thread-safe types should NOT have `unsafe impl Send/Sync`.
+    assert_rs_not_matches!(rs_api, quote! { unsafe impl Send for RegularStruct {} });
+    assert_rs_not_matches!(rs_api, quote! { unsafe impl Sync for RegularStruct {} });
+
+    // They should have negative impls instead.
+    assert_rs_matches!(rs_api, quote! { impl !Send for RegularStruct {} });
+    assert_rs_matches!(rs_api, quote! { impl !Sync for RegularStruct {} });
+
+    // And should have normal fields, not UnsafeCell wrapping.
+    assert_rs_matches!(rs_api, quote! { pub field: ::ffi_11::c_int });
+    assert_rs_not_matches!(rs_api, quote! { __opaque });
 
     Ok(())
 }

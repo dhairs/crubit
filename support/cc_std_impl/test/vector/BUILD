@@ -9,7 +9,21 @@ package(default_applicable_licenses = ["//:license"])
 
 cc_library(
     name = "cc_helper_functions",
+    testonly = True,
     hdrs = ["cc_helper_functions.h"],
+    aspect_hints = [
+        "//features:supported",
+    ],
+    deps = [
+        ":cc_movable_types",
+        "@abseil-cpp//absl/base:no_destructor",
+    ],
+)
+
+cc_library(
+    name = "cc_movable_types",
+    testonly = True,
+    hdrs = ["cc_movable_types.h"],
     aspect_hints = [
         "//features:supported",
     ],
@@ -20,9 +34,14 @@ crubit_rust_test(
     srcs = ["test.rs"],
     cc_deps = [
         ":cc_helper_functions",
+        ":cc_movable_types",
         "//support/public:cc_std",
     ],
+    # LINT.IfChange
+    rustc_flags = ["-Zallow-features=allocator_api"],
+    # LINT.ThenChange(//docs/overview/unstable_features.md)
     deps = [
+        "//support/ffi_11",
         "@crate_index//:googletest",
         "@crate_index//:static_assertions",  # v1
     ],

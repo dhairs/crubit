@@ -4,90 +4,74 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/struct/inheritance:inherited_methods
-// Features: custom_ffi_types, experimental, non_unpin_ctor, std_unique_ptr, std_vector, supported, wrapper
 
 #![rustfmt::skip]
-#![feature(
-    allocator_api,
-    cfg_sanitize,
-    custom_inner_attributes,
-    impl_trait_in_assoc_type,
-    negative_impls
-)]
+#![feature(custom_inner_attributes, impl_trait_in_assoc_type, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
-/// Generated from: rs_bindings_from_cc/test/struct/inheritance/inherited_methods.h;l=10
 #[::ctor::recursively_pinned]
 #[repr(C)]
-///CRUBIT_ANNOTATE: cpp_type=Nonmovable
+///CRUBIT_ANNOTATE: cpp_type=:: Nonmovable
 pub struct Nonmovable {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 1],
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 1],
 }
 impl !Send for Nonmovable {}
 impl !Sync for Nonmovable {}
 unsafe impl ::cxx::ExternType for Nonmovable {
-    type Id = ::cxx::type_id!("Nonmovable");
+    type Id = ::cxx::type_id!(":: Nonmovable");
     type Kind = ::cxx::kind::Opaque;
 }
-forward_declare::unsafe_define!(forward_declare::symbol!("Nonmovable"), crate::Nonmovable);
+forward_declare::unsafe_define!(forward_declare::symbol!(":: Nonmovable"), crate::Nonmovable);
 
-/// Generated from: rs_bindings_from_cc/test/struct/inheritance/inherited_methods.h;l=11
 impl ::ctor::CtorNew<()> for Nonmovable {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
-                crate::detail::__rust_thunk___ZN10NonmovableC1Ev(dest as *mut ::core::ffi::c_void);
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
+                crate::detail::__rust_thunk___ZN10NonmovableC1Ev(
+                    __crubit_dest as *mut ::core::ffi::c_void,
+                );
             })
         }
     }
 }
 
-/// Generated from: rs_bindings_from_cc/test/struct/inheritance/inherited_methods.h;l=16
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
-///CRUBIT_ANNOTATE: cpp_type=Base
+///CRUBIT_ANNOTATE: cpp_type=:: Base
 pub struct Base {
     __non_field_data: [::core::mem::MaybeUninit<u8>; 1],
 }
 impl !Send for Base {}
 impl !Sync for Base {}
 unsafe impl ::cxx::ExternType for Base {
-    type Id = ::cxx::type_id!("Base");
+    type Id = ::cxx::type_id!(":: Base");
     type Kind = ::cxx::kind::Trivial;
 }
-forward_declare::unsafe_define!(forward_declare::symbol!("Base"), crate::Base);
+forward_declare::unsafe_define!(forward_declare::symbol!(":: Base"), crate::Base);
 impl Base {
-    /// Generated from: rs_bindings_from_cc/test/struct/inheritance/inherited_methods.h;l=17
     #[inline(always)]
-    pub fn has_bindings<'a>(&'a self) -> bool {
-        unsafe { crate::detail::__rust_thunk___ZNK4Base12has_bindingsEv(self) }
+    pub fn has_bindings<'__this>(&'__this self) -> bool {
+        unsafe { self::base::has_bindings(self) }
     }
-    /// Generated from: rs_bindings_from_cc/test/struct/inheritance/inherited_methods.h;l=19
     #[inline(always)]
-    pub fn no_bindings<'error, 'a>(
-        &'a self,
-        __param_0: impl ::ctor::Ctor<Output = crate::Nonmovable, Error = ::ctor::Infallible>,
-    ) where
-        &'error (): BindingFailedFor_ZNK4Base11no_bindingsE10Nonmovable,
+    pub fn no_bindings<'__this>(&'__this self, __param_0: ::ctor::Ctor![crate::Nonmovable])
+    where
+        for<'error> &'error (): BindingFailedFor_ZNK4Base11no_bindingsE10Nonmovable,
     {
-        #![allow(unused_variables)]
-        unreachable!(
-            "This impl can never be instantiated. \
-                    If this message appears at runtime, please report a <internal link>."
-        )
+        unsafe { self::base::no_bindings(self, __param_0) }
     }
 }
 
-/// Generated from: rs_bindings_from_cc/test/struct/inheritance/inherited_methods.h;l=16
 impl Default for Base {
     #[inline(always)]
     fn default() -> Self {
@@ -104,45 +88,51 @@ impl Default for Base {
 )]
 pub trait BindingFailedFor_ZNK4Base11no_bindingsE10Nonmovable {}
 
-/// Generated from: rs_bindings_from_cc/test/struct/inheritance/inherited_methods.h;l=22
+pub mod base {
+    #[inline(always)]
+    pub(crate) fn has_bindings<'__this>(__this: &'__this crate::Base) -> bool {
+        unsafe { crate::detail::__rust_thunk___ZNK4Base12has_bindingsEv(__this) }
+    }
+    #[inline(always)]
+    pub(crate) fn no_bindings<'__this>(
+        __this: &'__this crate::Base,
+        __param_0: ::ctor::Ctor![crate::Nonmovable],
+    ) {
+        #![allow(unused_variables)]
+        unreachable!(
+            "This impl can never be instantiated. \
+                    If this message appears at runtime, please report a crubit.rs-bug."
+        )
+    }
+}
+
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
-///CRUBIT_ANNOTATE: cpp_type=Derived
+///CRUBIT_ANNOTATE: cpp_type=:: Derived
 pub struct Derived {
     __non_field_data: [::core::mem::MaybeUninit<u8>; 1],
 }
 impl !Send for Derived {}
 impl !Sync for Derived {}
 unsafe impl ::cxx::ExternType for Derived {
-    type Id = ::cxx::type_id!("Derived");
+    type Id = ::cxx::type_id!(":: Derived");
     type Kind = ::cxx::kind::Trivial;
 }
-forward_declare::unsafe_define!(forward_declare::symbol!("Derived"), crate::Derived);
+forward_declare::unsafe_define!(forward_declare::symbol!(":: Derived"), crate::Derived);
 impl Derived {
-    /// Generated from: rs_bindings_from_cc/test/struct/inheritance/inherited_methods.h;l=17
     #[inline(always)]
-    pub fn has_bindings<'a>(&'a self) -> bool {
-        unsafe {
-            crate::detail::__rust_thunk___ZNK4Base12has_bindingsEv(oops::Upcast::<_>::upcast(self))
-        }
+    pub fn has_bindings<'__this>(&'__this self) -> bool {
+        unsafe { self::derived::has_bindings(oops::Upcast::<_>::upcast(self)) }
     }
-    /// Generated from: rs_bindings_from_cc/test/struct/inheritance/inherited_methods.h;l=19
     #[inline(always)]
-    pub fn no_bindings<'error, 'a>(
-        &'a self,
-        __param_0: impl ::ctor::Ctor<Output = crate::Nonmovable, Error = ::ctor::Infallible>,
-    ) where
-        &'error (): BindingFailedFor_7Derived__ZNK4Base11no_bindingsE10Nonmovable,
+    pub fn no_bindings<'__this>(&'__this self, __param_0: ::ctor::Ctor![crate::Nonmovable])
+    where
+        for<'error> &'error (): BindingFailedFor_7Derived__ZNK4Base11no_bindingsE10Nonmovable,
     {
-        #![allow(unused_variables)]
-        unreachable!(
-            "This impl can never be instantiated. \
-                    If this message appears at runtime, please report a <internal link>."
-        )
+        unsafe { self::derived::no_bindings(oops::Upcast::<_>::upcast(self), __param_0) }
     }
 }
 
-/// Generated from: rs_bindings_from_cc/test/struct/inheritance/inherited_methods.h;l=22
 impl Default for Derived {
     #[inline(always)]
     fn default() -> Self {
@@ -161,7 +151,25 @@ pub trait BindingFailedFor_7Derived__ZNK4Base11no_bindingsE10Nonmovable {}
 
 unsafe impl oops::Inherits<crate::Base> for crate::Derived {
     unsafe fn upcast_ptr(derived: *const Self) -> *const crate::Base {
-        (derived as *const _ as *const u8).offset(0) as *const crate::Base
+        unsafe { (derived as *const _ as *const u8).offset(0) as *const crate::Base }
+    }
+}
+
+pub mod derived {
+    #[inline(always)]
+    pub(crate) fn has_bindings<'__this>(__this: &'__this crate::Base) -> bool {
+        unsafe { crate::detail::__rust_thunk___ZNK4Base12has_bindingsEv(__this) }
+    }
+    #[inline(always)]
+    pub(crate) fn no_bindings<'__this>(
+        __this: &'__this crate::Base,
+        __param_0: ::ctor::Ctor![crate::Nonmovable],
+    ) {
+        #![allow(unused_variables)]
+        unreachable!(
+            "This impl can never be instantiated. \
+                    If this message appears at runtime, please report a crubit.rs-bug."
+        )
     }
 }
 
@@ -171,8 +179,8 @@ mod detail {
     unsafe extern "C" {
         pub(crate) unsafe fn __rust_thunk___ZN10NonmovableC1Ev(__this: *mut ::core::ffi::c_void);
         pub(crate) unsafe fn __rust_thunk___ZN4BaseC1Ev(__this: *mut ::core::ffi::c_void);
-        pub(crate) unsafe fn __rust_thunk___ZNK4Base12has_bindingsEv<'a>(
-            __this: &'a crate::Base,
+        pub(crate) unsafe fn __rust_thunk___ZNK4Base12has_bindingsEv<'__this>(
+            __this: &'__this crate::Base,
         ) -> bool;
         pub(crate) unsafe fn __rust_thunk___ZN7DerivedC1Ev(__this: *mut ::core::ffi::c_void);
     }

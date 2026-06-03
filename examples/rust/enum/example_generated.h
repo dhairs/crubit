@@ -4,26 +4,37 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // example_crate_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_EXAMPLES_RUST_ENUM_EXAMPLE_CRATE_GOLDEN
 #define THIRD_PARTY_CRUBIT_EXAMPLES_RUST_ENUM_EXAMPLE_CRATE_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 #include "support/internal/slot.h"
 
+#include <array>
 #include <cstddef>
+#include <cstring>
 #include <type_traits>
 
 namespace example_crate {
 
-// Generated from: examples/rust/enum/example.rs;l=6
 struct CRUBIT_INTERNAL_RUST_TYPE(":: example_crate_golden :: Color") alignas(1)
     [[clang::trivial_abi]] Color final {
  public:
   // Default::default
   Color();
+
+  static constexpr Color MakeRed();
+
+  static constexpr Color MakeBlue();
+
+  static constexpr Color MakeGreen();
 
   // No custom `Drop` impl and no custom "drop glue" required
   ~Color() = default;
@@ -35,13 +46,18 @@ struct CRUBIT_INTERNAL_RUST_TYPE(":: example_crate_golden :: Color") alignas(1)
   Color(const Color&) = default;
   Color& operator=(const Color&) = default;
   Color(::crubit::UnsafeRelocateTag, Color&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
  private:
   // Field type has been replaced with a blob of bytes: No support for bindings
   // of individual non-repr(C) `enum`s
-  unsigned char __opaque_blob_of_bytes[1];
+  ::std::array<unsigned char, 1> __opaque_blob_of_bytes;
+
+ private:
+  struct PrivateBytesTag {};
+  constexpr Color(PrivateBytesTag, ::std::array<unsigned char, 1> bytes)
+      : __opaque_blob_of_bytes(bytes) {}
 
  private:
   static void __crubit_field_offset_assertions();
@@ -56,14 +72,32 @@ static_assert(
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(::example_crate::Color* __ret_ptr);
 }
-inline Color::Color() { __crubit_internal::__crubit_thunk_default(this); }
-static_assert(std::is_trivially_destructible_v<Color>);
-static_assert(std::is_trivially_move_constructible_v<Color>);
-static_assert(std::is_trivially_move_assignable_v<Color>);
-static_assert(std::is_trivially_copy_constructible_v<Color>);
-static_assert(std::is_trivially_copy_assignable_v<Color>);
+inline ::example_crate::Color::Color() {
+  __crubit_internal::__crubit_thunk_default(this);
+}
+// `static` constructor
+inline constexpr Color Color::MakeRed() {
+  return Color(PrivateBytesTag{}, {0});
+}
+
+// `static` constructor
+inline constexpr Color Color::MakeBlue() {
+  return Color(PrivateBytesTag{}, {1});
+}
+
+// `static` constructor
+inline constexpr Color Color::MakeGreen() {
+  return Color(PrivateBytesTag{}, {2});
+}
+static_assert(::std::is_trivially_destructible_v<Color>);
+static_assert(::std::is_trivially_move_constructible_v<::example_crate::Color>);
+static_assert(::std::is_trivially_move_assignable_v<::example_crate::Color>);
+static_assert(::std::is_trivially_copy_constructible_v<::example_crate::Color>);
+static_assert(::std::is_trivially_copy_assignable_v<::example_crate::Color>);
 inline void Color::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(Color, __opaque_blob_of_bytes));
 }
 }  // namespace example_crate
+
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_EXAMPLES_RUST_ENUM_EXAMPLE_CRATE_GOLDEN

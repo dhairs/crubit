@@ -60,8 +60,8 @@ fn test_properly_greet_stuff() {
 
 #[gtest]
 fn test_string_view_by_value() {
-    fn live(value: cc_std::std::raw_string_view) -> &'static [u8] {
-        unsafe { &*value.as_raw_bytes() }
+    fn live(value: cc_std::std::string_view<'static>) -> &'static [u8] {
+        &*value.as_bytes()
     }
     expect_eq!(live(StringViewByValue("Hello".into())), b"Hello");
 }
@@ -98,7 +98,7 @@ fn test_status_of_pointer_is_bridged() {
     let result = AcceptsVoidPtrAndReturnsStatusErrorIfNull(core::ptr::null_mut());
     expect_that!(
         result,
-        status_rs_matchers::status_is(status::absl::StatusErrorCode::InvalidArgument)
+        status_rs_matchers::status_is(status::absl::StatusCodeError::INVALID_ARGUMENT)
     );
 
     let mut thing = true;
@@ -113,7 +113,7 @@ fn test_status_of_slice_ref_is_bridged_as_slice_ptr() {
     let result = AcceptsSliceAndReturnsStatusErrorIfEmpty(empty_slice as *const _);
     expect_that!(
         result,
-        status_rs_matchers::status_is(status::absl::StatusErrorCode::InvalidArgument)
+        status_rs_matchers::status_is(status::absl::StatusCodeError::INVALID_ARGUMENT)
     );
 
     let non_empty_slice: &[core::ffi::c_int] = &[1, 2, 3];
@@ -125,4 +125,23 @@ fn test_status_of_slice_ref_is_bridged_as_slice_ptr() {
 fn test_optional_my_struct() {
     let x = ReturnOptionalMyStruct();
     assert_eq!(x.unwrap().x, 42);
+}
+
+#[gtest]
+fn test_composable_bridge_with_enum_inside() {
+    assert_eq!(ValidateMyEnum(MyEnum::kFoo), Some(MyEnum::kFoo));
+    assert_eq!(ValidateMyEnum(MyEnum::kBar), Some(MyEnum::kBar));
+    assert_eq!(ValidateMyEnum(MyEnum::from(42)), None);
+}
+
+#[gtest]
+fn test_composable_bridge_with_virtual_destructor() {
+    let statusor = composable_bridging_lib::MakeStatusOrWithVirtualDestructor();
+    assert!(statusor.is_ok());
+
+    let _vector = composable_bridging_lib::MakeVectorWithVirtualDestructor();
+    let _span = composable_bridging_lib::MakeSpanWithVirtualDestructor();
+
+    let optional = composable_bridging_lib::MakeOptionalWithVirtualDestructor();
+    assert!(optional.is_some());
 }

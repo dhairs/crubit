@@ -7,15 +7,34 @@
 
 #include "support/rs_std/dyn_callable.h"
 
-int apply(rs_std::DynCallable<int(int) const> callback, int arg);
+void invoke_once(rs_std::DynCallable<void() &&> f);
 
-int apply_mut(rs_std::DynCallable<int(int)> callback, int arg);
+void invoke(rs_std::DynCallable<void()> f);
 
-int apply_once(rs_std::DynCallable<int(int) &&> callback, int arg);
+void invoke_const(rs_std::DynCallable<void() const> f);
 
-class NotCABICompatible {
+int map_int(rs_std::DynCallable<int(int) const> f, int arg);
+
+struct [[clang::annotate("crubit_bridge_rust_name", "RustBridged")]]
+[[clang::annotate("crubit_bridge_abi_rust", "RustBridgedAbi")]]
+[[clang::annotate("crubit_bridge_abi_cpp", "::crubit::BridgedAbi")]] Bridged {};
+
+Bridged map_bridged(rs_std::DynCallable<Bridged(Bridged) const> f, Bridged arg);
+
+struct ABICompatible {
+  int x;
+};
+
+ABICompatible map_abi_compatible(
+    rs_std::DynCallable<ABICompatible(ABICompatible) const> f,
+    ABICompatible arg);
+
+class LayoutCompatible {
+ private:
+  explicit LayoutCompatible(int x) : private_(x) {}
+
  public:
-  explicit NotCABICompatible(int x) : private_(x) {}
+  static LayoutCompatible Create(int x) { return LayoutCompatible(x); }
 
   int get() const { return private_; }
 
@@ -23,7 +42,10 @@ class NotCABICompatible {
   int private_;
 };
 
-void rust_inspect_non_c_abi_compatible_struct(
-    rs_std::DynCallable<NotCABICompatible(NotCABICompatible)> cb);
+LayoutCompatible map_layout_compatible(
+    rs_std::DynCallable<LayoutCompatible(LayoutCompatible) const> f,
+    LayoutCompatible arg);
+
+int callable_taking_reference(rs_std::DynCallable<void(int&)> f, int arg);
 
 #endif  // THIRD_PARTY_CRUBIT_RS_BINDINGS_FROM_CC_TEST_GOLDEN_CALLABLES_H_

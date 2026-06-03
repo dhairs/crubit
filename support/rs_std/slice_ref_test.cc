@@ -44,9 +44,13 @@ static_assert(
 // Note: `rs_std::SliceRef` is not trivially constructible because its default
 // constructor ensures that the data pointer is not null.
 
-// `SliceRef` does on purpose not have `operator==`, because <internal link>
-// did not specify that `SliceRef` should be comparable.
-static_assert(!std::equality_comparable<rs_std::SliceRef<int>>);
+static_assert(std::equality_comparable<rs_std::SliceRef<int>>);
+static_assert(std::equality_comparable<rs_std::SliceRef<const int>>);
+static_assert(std::equality_comparable_with<rs_std::SliceRef<const int>,
+                                            rs_std::SliceRef<int>>);
+// Ensure that slices can be compared with types that are convertible to slices.
+static_assert(std::equality_comparable_with<rs_std::SliceRef<const int>,
+                                            const std::vector<int>&>);
 
 // Verify that the layout of `rs_std::SliceRef` is as expected and described in
 // `rust_builtin_type_abi_assumptions.md`. Sample a few wrapped types to make
@@ -180,6 +184,17 @@ TEST(ImplicitConversionTest, FromConstArray) {
   static constexpr rs_std::SliceRef<const int> kFromArray = kArray;
   EXPECT_THAT(kFromArray.to_span(), ElementsAre(1, 2));
 }
+
+// Generates a compiler error when uncommented:
+//
+// std::array<int, 3> TempArray() { return {1, 2, 3}; };
+//
+// TEST(DemoTest, SliceRef) {
+//   rs_std::SliceRef<const int> slice_ref(TempArray());
+//   // ^ error: temporary whose address is used as the value of local...
+//   ASSERT_EQ(slice_ref.size(), 3);
+//   EXPECT_EQ(slice_ref.to_span()[2], 3);  // BOOM
+// }
 
 void Fuzzer(std::vector<uint8_t> data) {
   const rs_std::SliceRef<const uint8_t> s = data;

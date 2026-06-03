@@ -5,22 +5,22 @@
 NOTE: Crubit currently expects deep integration with the build system, and is
 difficult to deploy to environments dissimilar to Google's monorepo. External
 contributions are accepted, but may in some cases be difficult to integrate
-for tooling reasons. See [CONTRIBUTING](CONTRIBUTING). Both of these are being worked on, see
-https://github.com/google/crubit/blob/main/docs/overview/status.md#usage-outside-of-google
+for tooling reasons. See [CONTRIBUTING.md](https://github.com/google/crubit/blob/main/CONTRIBUTING.md).
+Both of these are being worked on, see [Usage outside of Google](https://crubit.rs/overview/status#usage-outside-of-google).
 
 Crubit is a bidirectional bindings generator for C++ and Rust, with the goal of
 integrating the C++ and Rust ecosystems.
 
 ## Status
 
-See the [status](http://<internal link>/overview/status) page for an overview of the
+See the [status](http://crubit.rs/overview/status) page for an overview of the
 current supported features.
 
 ## Example
 
-<section class="tabs">
+{{#tabs}}
 
-### C++ {.new-tab}
+{{#tab name="C++"}}
 
 Consider the following C++ function:
 
@@ -35,11 +35,9 @@ callable from Rust as if it were defined as:
 pub fn IsGreater(lhs: ffi::c_int, rhs: ffi::c_int) -> bool {...}
 ```
 
-Note: There are some temporary restrictions on the API shape. For example,
-functions that accept a type like `std::map` can't be called from Rust
-directly via Crubit. These restrictions will be relaxed over time.
+{{#endtab}}
 
-### Rust {.new-tab}
+{{#tab name="Rust"}}
 
 Consider the following Rust function:
 
@@ -53,11 +51,9 @@ This function becomes callable from C++ as if it were defined as:
 bool is_greater(int32_t lhs, int32_t rhs);
 ```
 
-Note: There are some temporary restrictions on the API shape. For example,
-functions that accept two mutable references can't be called from C++
-directly via Crubit. These restrictions will be relaxed over time.
+{{#endtab}}
 
-</section>
+{{#endtabs}}
 
 ## Getting Started
 
@@ -65,12 +61,10 @@ We have detailed walkthroughs on how to use C++ from Rust, or Rust from C++,
 using Crubit, as well as copy-pastable example code. The example code also
 includes spanshots of what the generated bindings look like.
 
-*   Walkthrough:
-    [Rust Bindings for C++ Libraries](https://github.com/google/crubit/tree/main/docs/cpp/)
+*   Walkthrough: [Rust Bindings for C++ Libraries](http://crubit.rs/cpp)
     *   Examples:
         [`examples/cpp/`](https://github.com/google/crubit/tree/main/examples/cpp)
-*   Walkthrough:
-    [C++ Bindings for Rust Libraries](https://github.com/google/crubit/tree/main/docs/rust/)
+*   Walkthrough: [C++ Bindings for Rust Libraries](http://crubit.rs/rust)
     *   Examples:
         [`examples/rust/`](https://github.com/google/crubit/tree/main/examples/rust)
 

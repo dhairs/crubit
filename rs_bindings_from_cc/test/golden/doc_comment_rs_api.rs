@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:doc_comment_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 /// Doc comment
@@ -23,7 +24,7 @@
 pub struct DocCommentSlashes {
     __non_field_data: [::core::mem::MaybeUninit<u8>; 0],
     /// A field.
-    pub i: ::core::ffi::c_int,
+    pub i: ::ffi_11::c_int,
 }
 impl !Send for DocCommentSlashes {}
 impl !Sync for DocCommentSlashes {}
@@ -34,40 +35,40 @@ unsafe impl ::cxx::ExternType for DocCommentSlashes {
 impl DocCommentSlashes {
     /// A non-static member function (`const` flavor).
     #[inline(always)]
-    pub fn get_field_value<'a>(&'a self) -> ::core::ffi::c_int {
-        unsafe { crate::detail::__rust_thunk___ZNK17DocCommentSlashes15get_field_valueEv(self) }
+    pub fn get_field_value<'a>(&'a self) -> ::ffi_11::c_int {
+        unsafe { self::doc_comment_slashes::get_field_value(self) }
     }
     /// A non-static member function (non-`const` flavor).
     #[inline(always)]
-    pub fn set_field_value<'a>(&'a mut self, new_value: ::core::ffi::c_int) {
-        unsafe {
-            crate::detail::__rust_thunk___ZN17DocCommentSlashes15set_field_valueEi(self, new_value)
-        }
+    pub fn set_field_value<'a>(&'a mut self, new_value: ::ffi_11::c_int) {
+        unsafe { self::doc_comment_slashes::set_field_value(self, new_value) }
     }
     /// A static method.
     #[inline(always)]
-    pub fn static_method() -> ::core::ffi::c_int {
-        unsafe { crate::detail::__rust_thunk___ZN17DocCommentSlashes13static_methodEv() }
+    pub fn static_method() -> ::ffi_11::c_int {
+        unsafe { self::doc_comment_slashes::static_method() }
     }
 }
 
-// Error while generating bindings for constructor 'DocCommentSlashes::DocCommentSlashes':
-// Can't generate bindings for DocCommentSlashes::DocCommentSlashes, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentSlashes::DocCommentSlashes (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `DocCommentSlashes::DocCommentSlashes` could not be bound
+//   Unsupported parameter type `const DocCommentSlashes& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'DocCommentSlashes::DocCommentSlashes':
-// Can't generate bindings for DocCommentSlashes::DocCommentSlashes, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentSlashes::DocCommentSlashes (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `DocCommentSlashes::DocCommentSlashes` could not be bound
+//   Unsupported parameter type `DocCommentSlashes&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'DocCommentSlashes::operator=':
-// Can't generate bindings for DocCommentSlashes::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentSlashes::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentSlashes::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `DocCommentSlashes::operator=` could not be bound
+//   Unsupported parameter type `const DocCommentSlashes& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `DocCommentSlashes&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'DocCommentSlashes::operator=':
-// Can't generate bindings for DocCommentSlashes::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentSlashes::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentSlashes::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `DocCommentSlashes::operator=` could not be bound
+//   Unsupported parameter type `DocCommentSlashes&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `DocCommentSlashes&`:
+//     references are not yet supported
 
 /// The default constructor which will get translated into
 /// `impl Default for DocCommentSlashes`.
@@ -84,9 +85,10 @@ impl Default for DocCommentSlashes {
 
 /// An implicit conversion constructor which will get translated into `impl
 /// From<int> for DocCommentSlashes`.
-impl From<::core::ffi::c_int> for DocCommentSlashes {
+impl From<::ffi_11::c_int> for DocCommentSlashes {
     #[inline(always)]
-    fn from(__param_0: ::core::ffi::c_int) -> Self {
+    fn from(args: ::ffi_11::c_int) -> Self {
+        let mut __param_0 = args;
         let mut tmp = ::core::mem::MaybeUninit::<Self>::zeroed();
         unsafe {
             crate::detail::__rust_thunk___ZN17DocCommentSlashesC1Ei(
@@ -97,12 +99,37 @@ impl From<::core::ffi::c_int> for DocCommentSlashes {
         }
     }
 }
-impl ::ctor::CtorNew<::core::ffi::c_int> for DocCommentSlashes {
+impl ::ctor::CtorNew<::ffi_11::c_int> for DocCommentSlashes {
     type CtorType = Self;
     type Error = ::ctor::Infallible;
     #[inline(always)]
-    fn ctor_new(args: ::core::ffi::c_int) -> Self::CtorType {
-        <Self as From<::core::ffi::c_int>>::from(args)
+    fn ctor_new(args: ::ffi_11::c_int) -> Self::CtorType {
+        <Self as From<::ffi_11::c_int>>::from(args)
+    }
+}
+
+pub mod doc_comment_slashes {
+    /// A non-static member function (`const` flavor).
+    #[inline(always)]
+    pub(crate) fn get_field_value<'a>(__this: &'a crate::DocCommentSlashes) -> ::ffi_11::c_int {
+        unsafe { crate::detail::__rust_thunk___ZNK17DocCommentSlashes15get_field_valueEv(__this) }
+    }
+    /// A non-static member function (non-`const` flavor).
+    #[inline(always)]
+    pub(crate) fn set_field_value<'a>(
+        __this: &'a mut crate::DocCommentSlashes,
+        new_value: ::ffi_11::c_int,
+    ) {
+        unsafe {
+            crate::detail::__rust_thunk___ZN17DocCommentSlashes15set_field_valueEi(
+                __this, new_value,
+            )
+        }
+    }
+    /// A static method.
+    #[inline(always)]
+    pub(crate) fn static_method() -> ::ffi_11::c_int {
+        unsafe { crate::detail::__rust_thunk___ZN17DocCommentSlashes13static_methodEv() }
     }
 }
 
@@ -114,7 +141,7 @@ impl ::ctor::CtorNew<::core::ffi::c_int> for DocCommentSlashes {
 ///CRUBIT_ANNOTATE: cpp_type=DocCommentBang
 pub struct DocCommentBang {
     /// A field
-    pub i: ::core::ffi::c_int,
+    pub i: ::ffi_11::c_int,
 }
 impl !Send for DocCommentBang {}
 impl !Sync for DocCommentBang {}
@@ -134,23 +161,25 @@ impl Default for DocCommentBang {
     }
 }
 
-// Error while generating bindings for constructor 'DocCommentBang::DocCommentBang':
-// Can't generate bindings for DocCommentBang::DocCommentBang, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentBang::DocCommentBang (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `DocCommentBang::DocCommentBang` could not be bound
+//   Unsupported parameter type `const DocCommentBang& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'DocCommentBang::DocCommentBang':
-// Can't generate bindings for DocCommentBang::DocCommentBang, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentBang::DocCommentBang (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `DocCommentBang::DocCommentBang` could not be bound
+//   Unsupported parameter type `DocCommentBang&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'DocCommentBang::operator=':
-// Can't generate bindings for DocCommentBang::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentBang::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentBang::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `DocCommentBang::operator=` could not be bound
+//   Unsupported parameter type `const DocCommentBang& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `DocCommentBang&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'DocCommentBang::operator=':
-// Can't generate bindings for DocCommentBang::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentBang::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for DocCommentBang::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `DocCommentBang::operator=` could not be bound
+//   Unsupported parameter type `DocCommentBang&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `DocCommentBang&`:
+//     references are not yet supported
 
 /// Multiline comment
 ///
@@ -160,7 +189,7 @@ impl Default for DocCommentBang {
 ///CRUBIT_ANNOTATE: cpp_type=MultilineCommentTwoStars
 pub struct MultilineCommentTwoStars {
     /// A field
-    pub i: ::core::ffi::c_int,
+    pub i: ::ffi_11::c_int,
 }
 impl !Send for MultilineCommentTwoStars {}
 impl !Sync for MultilineCommentTwoStars {}
@@ -180,23 +209,25 @@ impl Default for MultilineCommentTwoStars {
     }
 }
 
-// Error while generating bindings for constructor 'MultilineCommentTwoStars::MultilineCommentTwoStars':
-// Can't generate bindings for MultilineCommentTwoStars::MultilineCommentTwoStars, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineCommentTwoStars::MultilineCommentTwoStars (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `MultilineCommentTwoStars::MultilineCommentTwoStars` could not be bound
+//   Unsupported parameter type `const MultilineCommentTwoStars& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'MultilineCommentTwoStars::MultilineCommentTwoStars':
-// Can't generate bindings for MultilineCommentTwoStars::MultilineCommentTwoStars, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineCommentTwoStars::MultilineCommentTwoStars (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `MultilineCommentTwoStars::MultilineCommentTwoStars` could not be bound
+//   Unsupported parameter type `MultilineCommentTwoStars&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'MultilineCommentTwoStars::operator=':
-// Can't generate bindings for MultilineCommentTwoStars::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineCommentTwoStars::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineCommentTwoStars::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `MultilineCommentTwoStars::operator=` could not be bound
+//   Unsupported parameter type `const MultilineCommentTwoStars& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `MultilineCommentTwoStars&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'MultilineCommentTwoStars::operator=':
-// Can't generate bindings for MultilineCommentTwoStars::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineCommentTwoStars::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineCommentTwoStars::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `MultilineCommentTwoStars::operator=` could not be bound
+//   Unsupported parameter type `MultilineCommentTwoStars&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `MultilineCommentTwoStars&`:
+//     references are not yet supported
 
 /// Line comment
 ///
@@ -206,7 +237,7 @@ impl Default for MultilineCommentTwoStars {
 ///CRUBIT_ANNOTATE: cpp_type=LineComment
 pub struct LineComment {
     /// A field
-    pub i: ::core::ffi::c_int,
+    pub i: ::ffi_11::c_int,
 }
 impl !Send for LineComment {}
 impl !Sync for LineComment {}
@@ -226,23 +257,25 @@ impl Default for LineComment {
     }
 }
 
-// Error while generating bindings for constructor 'LineComment::LineComment':
-// Can't generate bindings for LineComment::LineComment, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for LineComment::LineComment (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `LineComment::LineComment` could not be bound
+//   Unsupported parameter type `const LineComment& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'LineComment::LineComment':
-// Can't generate bindings for LineComment::LineComment, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for LineComment::LineComment (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `LineComment::LineComment` could not be bound
+//   Unsupported parameter type `LineComment&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'LineComment::operator=':
-// Can't generate bindings for LineComment::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for LineComment::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for LineComment::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `LineComment::operator=` could not be bound
+//   Unsupported parameter type `const LineComment& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `LineComment&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'LineComment::operator=':
-// Can't generate bindings for LineComment::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for LineComment::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for LineComment::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `LineComment::operator=` could not be bound
+//   Unsupported parameter type `LineComment&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `LineComment&`:
+//     references are not yet supported
 
 /// Multiline comment
 ///
@@ -252,7 +285,7 @@ impl Default for LineComment {
 ///CRUBIT_ANNOTATE: cpp_type=MultilineOneStar
 pub struct MultilineOneStar {
     /// A field
-    pub i: ::core::ffi::c_int,
+    pub i: ::ffi_11::c_int,
 }
 impl !Send for MultilineOneStar {}
 impl !Sync for MultilineOneStar {}
@@ -272,35 +305,37 @@ impl Default for MultilineOneStar {
     }
 }
 
-// Error while generating bindings for constructor 'MultilineOneStar::MultilineOneStar':
-// Can't generate bindings for MultilineOneStar::MultilineOneStar, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineOneStar::MultilineOneStar (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `MultilineOneStar::MultilineOneStar` could not be bound
+//   Unsupported parameter type `const MultilineOneStar& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'MultilineOneStar::MultilineOneStar':
-// Can't generate bindings for MultilineOneStar::MultilineOneStar, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineOneStar::MultilineOneStar (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `MultilineOneStar::MultilineOneStar` could not be bound
+//   Unsupported parameter type `MultilineOneStar&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'MultilineOneStar::operator=':
-// Can't generate bindings for MultilineOneStar::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineOneStar::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineOneStar::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `MultilineOneStar::operator=` could not be bound
+//   Unsupported parameter type `const MultilineOneStar& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `MultilineOneStar&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'MultilineOneStar::operator=':
-// Can't generate bindings for MultilineOneStar::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineOneStar::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:experimental] for MultilineOneStar::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `MultilineOneStar::operator=` could not be bound
+//   Unsupported parameter type `MultilineOneStar&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `MultilineOneStar&`:
+//     references are not yet supported
 
 /// A function
 #[inline(always)]
-pub fn foo() -> ::core::ffi::c_int {
+pub fn foo() -> ::ffi_11::c_int {
     unsafe { crate::detail::__rust_thunk___Z3foov() }
 }
 
 /// A type alias
 pub type MyTypeAlias = crate::DocCommentSlashes;
 
-// Error while generating bindings for class 'MyTemplate':
-// Class templates are not supported yet
+// error: class `MyTemplate` could not be bound
+//   Class templates are not yet supported
 
 // Class template specialization.
 
@@ -308,39 +343,26 @@ pub type MyTypeAlias = crate::DocCommentSlashes;
 
 // Data member in a specialization.
 
-// Error while generating bindings for type alias 'MyInstantiation':
-// Can't generate bindings for MyInstantiation, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for MyInstantiation (error: Can't generate bindings for MyTemplate<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for MyTemplate<int> (crate::__CcTemplateInst10MyTemplateIiE is a template instantiation)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for MyTemplate<int> (crate::__CcTemplateInst10MyTemplateIiE is a template instantiation))
+// error: type alias `MyInstantiation` could not be bound
+//   template instantiation is not yet supported
 
-// Error while generating bindings for type alias 'MySpecializedInstantiation':
-// Can't generate bindings for MySpecializedInstantiation, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for MySpecializedInstantiation (error: Can't generate bindings for MyTemplate<float>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for MyTemplate<float> (crate::__CcTemplateInst10MyTemplateIfE is a template instantiation)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for MyTemplate<float> (crate::__CcTemplateInst10MyTemplateIfE is a template instantiation))
+// error: type alias `MySpecializedInstantiation` could not be bound
+//   template instantiation is not yet supported
 
-// Error while generating bindings for class 'OuterTemplate':
-// Class templates are not supported yet
+// error: class `OuterTemplate` could not be bound
+//   Class templates are not yet supported
 
-// Error while generating bindings for type alias 'ConcreteNestedStruct':
-// Can't generate bindings for NestedStruct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for NestedStruct (incomplete type)
+// error: type alias `ConcreteNestedStruct` could not be bound
+//   incomplete type
 
-// Error while generating bindings for struct 'MyTemplate<int>':
-// Can't generate bindings for MyTemplate<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for MyTemplate<int> (crate::__CcTemplateInst10MyTemplateIiE is a template instantiation)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for MyTemplate<int> (crate::__CcTemplateInst10MyTemplateIiE is a template instantiation)
+// error: struct `MyTemplate<int>` could not be bound
+//   template instantiation is not yet supported
 
-// Error while generating bindings for struct 'MyTemplate<float>':
-// Can't generate bindings for MyTemplate<float>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for MyTemplate<float> (crate::__CcTemplateInst10MyTemplateIfE is a template instantiation)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for MyTemplate<float> (crate::__CcTemplateInst10MyTemplateIfE is a template instantiation)
+// error: struct `MyTemplate<float>` could not be bound
+//   template instantiation is not yet supported
 
-// Error while generating bindings for struct 'OuterTemplate<int>':
-// Can't generate bindings for OuterTemplate<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for OuterTemplate<int> (crate::__CcTemplateInst13OuterTemplateIiE is a template instantiation)
-// //rs_bindings_from_cc/test/golden:doc_comment_cc needs [//features:wrapper] for OuterTemplate<int> (crate::__CcTemplateInst13OuterTemplateIiE is a template instantiation)
+// error: struct `OuterTemplate<int>` could not be bound
+//   template instantiation is not yet supported
 
 mod detail {
     #[allow(unused_imports)]
@@ -353,20 +375,20 @@ mod detail {
         #[link_name = "_ZN17DocCommentSlashesC1Ei"]
         pub(crate) unsafe fn __rust_thunk___ZN17DocCommentSlashesC1Ei(
             __this: *mut ::core::ffi::c_void,
-            __param_0: ::core::ffi::c_int,
+            __param_0: ::ffi_11::c_int,
         );
         #[link_name = "_ZNK17DocCommentSlashes15get_field_valueEv"]
         pub(crate) unsafe fn __rust_thunk___ZNK17DocCommentSlashes15get_field_valueEv<'a>(
             __this: &'a crate::DocCommentSlashes,
-        ) -> ::core::ffi::c_int;
+        ) -> ::ffi_11::c_int;
         #[link_name = "_ZN17DocCommentSlashes15set_field_valueEi"]
         pub(crate) unsafe fn __rust_thunk___ZN17DocCommentSlashes15set_field_valueEi<'a>(
             __this: &'a mut crate::DocCommentSlashes,
-            new_value: ::core::ffi::c_int,
+            new_value: ::ffi_11::c_int,
         );
         #[link_name = "_ZN17DocCommentSlashes13static_methodEv"]
         pub(crate) unsafe fn __rust_thunk___ZN17DocCommentSlashes13static_methodEv(
-        ) -> ::core::ffi::c_int;
+        ) -> ::ffi_11::c_int;
         pub(crate) unsafe fn __rust_thunk___ZN14DocCommentBangC1Ev(
             __this: *mut ::core::ffi::c_void,
         );
@@ -377,7 +399,7 @@ mod detail {
         pub(crate) unsafe fn __rust_thunk___ZN16MultilineOneStarC1Ev(
             __this: *mut ::core::ffi::c_void,
         );
-        pub(crate) unsafe fn __rust_thunk___Z3foov() -> ::core::ffi::c_int;
+        pub(crate) unsafe fn __rust_thunk___Z3foov() -> ::ffi_11::c_int;
     }
 }
 

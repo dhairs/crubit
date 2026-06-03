@@ -4,12 +4,13 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // function_pointers_golden
-// Features: custom_ffi_types, experimental, non_unpin_ctor, std_unique_ptr, std_vector, supported, wrapper
 
 #![allow(unused_unsafe, deprecated, non_snake_case, unreachable_code)]
 #![allow(improper_ctypes_definitions)]
 #![deny(warnings)]
 
+extern crate alloc;
+extern crate core;
 const _: () = assert!(::std::mem::size_of::<::function_pointers_golden::CStruct>() == 4);
 const _: () = assert!(::std::mem::align_of::<::function_pointers_golden::CStruct>() == 4);
 #[unsafe(no_mangle)]

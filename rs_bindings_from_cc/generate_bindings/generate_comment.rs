@@ -6,15 +6,16 @@
 
 use database::code_snippet::{ApiSnippets, DocCommentAttr, GeneratedItem};
 use database::BindingsGenerator;
-use ffi_types::Environment;
 use ir::{Comment, GenericItem, UnsupportedItem, IR};
+use once_cell::sync::Lazy;
+use regex::Regex;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::rc::Rc;
 
 /// Top-level comments that help identify where the generated bindings came
 /// from.
-pub fn generate_top_level_comment(ir: &IR, environment: Environment) -> String {
+pub fn generate_top_level_comment(ir: &IR, is_golden_test: bool) -> String {
     // The "@generated" marker is an informal convention for identifying
     // automatically generated code.  This marker is recognized by `rustfmt`
     // (see the `format_generated_files` option [1]) and some other tools.
@@ -35,7 +36,7 @@ pub fn generate_top_level_comment(ir: &IR, environment: Environment) -> String {
             // {target}\n"
     );
 
-    if environment == Environment::Production {
+    if !is_golden_test {
         // Write the features.
         result.push_str(
             "\
@@ -63,18 +64,53 @@ pub fn generate_top_level_comment(ir: &IR, environment: Environment) -> String {
     result
 }
 
+static SOURCE_LOC_RE: Lazy<Regex> =
+    Lazy::new(|| Regex::new(r"([^;]+);l=\d+\[(\d+),(\d+)\]").unwrap());
+
+pub fn parse_extended_source_loc(source_loc: &str) -> Option<(&str, &str, &str)> {
+    if !source_loc.starts_with("Generated from: ") {
+        // We don't currently support macro positions.
+        return None;
+    }
+    let captures = SOURCE_LOC_RE.captures_iter(source_loc).last()?;
+    let file = captures.get(1)?.as_str();
+    let offset = captures.get(2)?.as_str();
+    let end_offset = captures.get(3)?.as_str();
+    Some((file, offset, end_offset))
+}
+
 pub fn generate_doc_comment(
     comment: Option<&str>,
+    safety: Option<&str>,
     source_loc: Option<&str>,
-    environment: Environment,
+    is_golden_test: bool,
+    kythe_annotations: bool,
 ) -> Option<DocCommentAttr> {
-    let source_loc = match environment {
-        Environment::Production => source_loc,
-        Environment::GoldenTest => None,
+    let source_loc = if !is_golden_test {
+        source_loc
+    } else {
+        if kythe_annotations {
+            source_loc
+        } else {
+            None
+        }
     };
+
+    // If a safety doc is provided, append a "# Safety" section to `comment`.
+    let comment = if let Some(safety) = safety {
+        let safety_comment = format!("# Safety\n\n{}", safety.trim());
+        if let Some(comment) = comment {
+            Some(format!("{comment}\n\n{safety_comment}"))
+        } else {
+            Some(safety_comment)
+        }
+    } else {
+        comment.map(|s| s.to_owned())
+    };
+
     let (comment, sep, source_loc) = match (comment, source_loc) {
         (None, None) => return None,
-        (None, Some(source_loc)) => ("", "", source_loc),
+        (None, Some(source_loc)) => (String::new(), "", source_loc),
         (Some(comment), Some(source_loc)) => (comment, "\n\n", source_loc),
         (Some(comment), None) => (comment, "", ""),
     };
@@ -84,14 +120,25 @@ pub fn generate_doc_comment(
 }
 
 /// Generates Rust source code for a given `UnsupportedItem`.
-pub fn generate_unsupported(db: &dyn BindingsGenerator, item: Rc<UnsupportedItem>) -> ApiSnippets {
+pub fn generate_unsupported(db: &BindingsGenerator, item: Rc<UnsupportedItem>) -> ApiSnippets {
+    db.assert_in_error_scope(item.id);
+
+    // Avoid generating unsupported item comments for standard library templates.
+    if !item.must_bind {
+        let defined_in_libcxx =
+            item.source_loc.as_ref().map(|loc| loc.contains("libcxx")).unwrap_or(false);
+        if defined_in_libcxx {
+            return ApiSnippets::default();
+        }
+    }
+
     for error in item.errors() {
         db.errors().report(error);
     }
 
     let source_loc = item.source_loc();
     let source_loc = match &source_loc {
-        Some(loc) if db.environment() == Environment::Production => loc.as_ref(),
+        Some(loc) if !db.is_golden_test() => loc.as_ref(),
         _ => "",
     };
 
@@ -99,9 +146,18 @@ pub fn generate_unsupported(db: &dyn BindingsGenerator, item: Rc<UnsupportedItem
     if !source_loc.is_empty() {
         writeln!(&mut message, "{source_loc}").unwrap();
     }
+
+    let (bold, reset, red) = if item.must_bind {
+        // If an item is set to `must_bind`, we colorize the output, as it will appear in the
+        // terminal or logs rather than in a comment.
+        ("\x1B[1m", "\x1B[0m", "\x1B[31m")
+    } else {
+        ("", "", "")
+    };
+
     writeln!(
         &mut message,
-        "Error while generating bindings for {} '{}':",
+        "{bold}{red}error:{reset}{bold} {} `{}` could not be bound{reset}",
         item.unsupported_kind(),
         item.name.as_ref()
     )
@@ -110,7 +166,8 @@ pub fn generate_unsupported(db: &dyn BindingsGenerator, item: Rc<UnsupportedItem
         if index != 0 {
             message.push_str("\n\n");
         }
-        write!(&mut message, "{error:#}").unwrap();
+        // Add indentation to child error output.
+        write!(&mut message, "{}", format!("  {error:#}").replace('\n', "\n  ")).unwrap();
     }
 
     if item.must_bind {

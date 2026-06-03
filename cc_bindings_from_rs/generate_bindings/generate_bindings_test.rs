@@ -10,7 +10,10 @@ use proc_macro2::{Ident, TokenStream, TokenTree};
 use quote::quote;
 use run_compiler_test_support::run_compiler_for_testing;
 use rustc_span::symbol::Symbol;
-use test_helpers::{bindings_db_for_tests, test_format_item, test_generated_bindings};
+use test_helpers::{
+    bindings_db_for_tests, test_format_item, test_format_item_with_features,
+    test_generated_bindings,
+};
 use token_stream_matchers::{
     assert_cc_matches, assert_cc_not_matches, assert_rs_matches, assert_rs_not_matches,
 };
@@ -284,25 +287,25 @@ fn test_generated_bindings_prereq_fwd_decls_deterministic_order() {
         assert_cc_matches!(
             bindings.cc_api,
             quote! {
-                namespace rust_out {
                     ...
                     // Verifying that we get the same order in each test
                     // run is the essence of this test.
-                    namespace a { ...
+                    namespace rust_out::a { ...
                     struct CRUBIT_INTERNAL_RUST_TYPE(...) alignas(...) [[clang::trivial_abi]] S1 final { ... } ...
                     struct CRUBIT_INTERNAL_RUST_TYPE(...) alignas(...) [[clang::trivial_abi]] S2 final { ... } ...
                     } ...
 
 
-                    namespace b { ...
+                    namespace rust_out::b { ...
                     struct CRUBIT_INTERNAL_RUST_TYPE(...) alignas(...) [[clang::trivial_abi]] S3 final { ... } ...
                     } ...
 
+                    namespace rust_out {
+                    ...
                     void f1 ...
                     void f2 ...
                     void f3 ...
-
-                }  // namespace rust_out
+                    } ...
             }
         );
     });
@@ -351,15 +354,11 @@ fn test_generated_bindings_module_basics() {
             bindings.cc_api,
             quote! {
                 ...
-                namespace rust_out {
+                namespace rust_out::some_module {
                     ...
-                    namespace some_module {
-                        ...
-                        inline void some_func() { ... }
-                        ...
-                    }  // namespace some_module
+                    inline void some_func() { ... }
                     ...
-                }  // namespace rust_out
+                }  // namespace rust_out::some_module
             }
         );
         assert_rs_matches!(
@@ -390,17 +389,13 @@ fn test_generated_bindings_module_name_is_cpp_reserved_keyword() {
             bindings.cc_api,
             quote! {
                 ...
-                namespace rust_out {
+                namespace rust_out::reinterpret_cast_ {
                     ...
-                    namespace reinterpret_cast_ {
-                        ...
-                        void working_module_f1();
-                        ...
-                        void working_module_f2();
-                        ...
-                    }  // namespace reinterpret_cast_
+                    void working_module_f1();
                     ...
-                }  // namespace rust_out
+                    void working_module_f2();
+                    ...
+                }  // namespace rust_out::reinterpret_cast_
             }
         );
     });
@@ -463,8 +458,7 @@ fn test_generated_bindings_top_level_items() {
         let bindings = bindings.unwrap();
         let expected_comment_txt =
             "Automatically @generated C++ bindings for the following Rust crate:\n\
-             rust_out\n\
-             Features: experimental, supported";
+             rust_out";
         assert_cc_matches!(
             bindings.cc_api,
             quote! {
@@ -655,307 +649,6 @@ fn test_format_bridged_type_pointer_like_errors() {
 }
 
 #[test]
-fn test_format_bridged_func_arg_pointer_like() {
-    let test_src = r#"
-            #[doc="CRUBIT_ANNOTATE: cpp_type=const CppType*"]
-            #[doc="CRUBIT_ANNOTATE: include_path=cpp_ns/cpp_type.h"]
-            #[repr(transparent)]
-            pub struct RustTypeView {
-                pub cpp_type: *const core::ffi::c_void,
-            }
-
-            #[unsafe(no_mangle)]
-            pub fn foo(_: RustTypeView) {}
-    "#;
-    test_format_item(test_src, "RustTypeView", |result| {
-        let err = result.unwrap_err();
-        assert_eq!(
-            err,
-            "Type bindings for RustTypeView suppressed \
-                due to being mapped to an existing C++ type (const CppType*)"
-        );
-    });
-
-    test_format_item(test_src, "foo", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-
-        assert_eq!(main_api.prereqs.includes.len(), 1);
-
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                void foo(const CppType* __param_0);
-            }
-        );
-
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                namespace __crubit_internal {
-                    extern "C" void __crubit_thunk_foo(const CppType*);
-                }
-
-                inline void foo(const CppType* __param_0) {
-                    return __crubit_internal::__crubit_thunk_foo(__param_0);
-                }
-            }
-        );
-
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_foo(__param_0: *const core::ffi::c_void) -> () {
-                    unsafe {
-                        let __param_0 = {
-                            let mut __crubit_temp = ::core::mem::MaybeUninit::<::rust_out::RustTypeView>::uninit();
-                            __crubit_temp.write(::core::mem::transmute(__param_0));
-                            __crubit_temp.assume_init()
-                        };
-                        ::rust_out::foo(__param_0)
-                    }
-                }
-            }
-        );
-    });
-}
-
-#[test]
-fn test_format_bridged_func_arg_by_pointer() {
-    let test_src = r#"
-            #[doc="CRUBIT_ANNOTATE: cpp_type=CppType const*"]
-            #[doc="CRUBIT_ANNOTATE: include_path=cpp_ns/cpp_type.h"]
-            #[doc="CRUBIT_ANNOTATE: cpp_to_rust_converter=cpp_pointer_to_rust_struct"]
-            #[doc="CRUBIT_ANNOTATE: rust_to_cpp_converter=rust_struct_to_cpp_pointer"]
-            #[repr(transparent)]
-            pub struct RustTypeView {
-                pub cpp_type: *const core::ffi::c_void,
-            }
-
-            #[unsafe(no_mangle)]
-            pub fn foo(_: RustTypeView) {}
-    "#;
-    test_format_item(test_src, "RustTypeView", |result| {
-        let err = result.unwrap_err();
-        assert_eq!(
-            err,
-            "Type bindings for RustTypeView suppressed \
-                due to being mapped to an existing C++ type (CppType const*)"
-        );
-    });
-
-    test_format_item(test_src, "foo", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-
-        assert_eq!(main_api.prereqs.includes.len(), 1);
-
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                void foo(CppType const* __param_0);
-            }
-        );
-
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                namespace __crubit_internal {
-                    extern "C" void __crubit_thunk_foo(CppType const*);
-                }
-
-                inline void foo(CppType const* __param_0) {
-                    return __crubit_internal::__crubit_thunk_foo(__param_0);
-                }
-            }
-        );
-
-        let extern_c_decl = result.rs_details.extern_c_decls.first().unwrap();
-        assert_eq!(extern_c_decl.symbol, Symbol::intern("cpp_pointer_to_rust_struct"));
-        assert_rs_matches!(
-            extern_c_decl.decl,
-            quote! {
-                fn cpp_pointer_to_rust_struct(cpp_in: *const core::ffi::c_void,
-                    rs_out: *mut core::ffi::c_void);
-            }
-        );
-
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_foo(__param_0: *const core::ffi::c_void) -> () {
-                    unsafe {
-                        let __param_0 = {
-                            let mut __crubit_temp = ::core::mem::MaybeUninit::<::rust_out::RustTypeView>::uninit();
-                            cpp_pointer_to_rust_struct(
-                                __param_0,
-                                __crubit_temp.as_mut_ptr() as *mut core::ffi::c_void
-                            );
-                            __crubit_temp.assume_init()
-                        };
-                        ::rust_out::foo(__param_0)
-                    }
-                }
-            }
-        );
-    });
-}
-
-#[test]
-fn test_format_bridged_func_arg_by_value() {
-    let test_src = r#"
-            #[doc="CRUBIT_ANNOTATE: cpp_type=cpp_ns::CppType"]
-            #[doc="CRUBIT_ANNOTATE: include_path=cpp_ns/cpp_type.h"]
-            #[doc="CRUBIT_ANNOTATE: cpp_to_rust_converter=convert_cpp_to_rust_type"]
-            #[doc="CRUBIT_ANNOTATE: rust_to_cpp_converter=convert_rust_to_cpp_type"]
-            pub struct RustType {
-                pub x: i32,
-            }
-
-            #[unsafe(no_mangle)]
-            pub fn foo(_a: RustType) {}
-    "#;
-    test_format_item(test_src, "RustType", |result| {
-        let err = result.unwrap_err();
-        assert_eq!(
-            err,
-            "Type bindings for RustType suppressed \
-                due to being mapped to an existing C++ type (cpp_ns::CppType)"
-        );
-    });
-    test_format_item(test_src, "foo", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-
-        assert_eq!(main_api.prereqs.includes.len(), 1);
-        assert_eq!(
-            *main_api.prereqs.includes.first().unwrap(),
-            CcInclude::user_header("cpp_ns/cpp_type.h".into())
-        );
-
-        assert_eq!(result.rs_details.extern_c_decls.len(), 1);
-
-        let extern_c_decl = result.rs_details.extern_c_decls.first().unwrap();
-        assert_eq!(extern_c_decl.symbol, Symbol::intern("convert_cpp_to_rust_type"));
-        assert_rs_matches!(
-            extern_c_decl.decl,
-            quote! {
-                fn convert_cpp_to_rust_type(cpp_in: *const core::ffi::c_void,
-                    rs_out: *mut core::ffi::c_void);
-            }
-        );
-
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_foo(_a: *const core::ffi::c_void) -> () {
-                    unsafe {
-                        let _a = {
-                            let mut __crubit_temp = ::core::mem::MaybeUninit::<::rust_out::RustType>::uninit();
-                            convert_cpp_to_rust_type(_a, __crubit_temp.as_mut_ptr() as *mut core::ffi::c_void);
-                            __crubit_temp.assume_init()
-                        };
-                        ::rust_out::foo(_a)
-                    }
-                }
-            }
-        );
-
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                void foo(cpp_ns::CppType _a);
-            }
-        );
-
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                namespace __crubit_internal {
-                    extern "C" void __crubit_thunk_foo(cpp_ns::CppType*);
-                }
-
-                inline void foo(cpp_ns::CppType _a) {
-                    return __crubit_internal::__crubit_thunk_foo(&_a);
-                }
-            }
-        );
-    });
-}
-
-#[test]
-fn test_format_bridged_return_type_pointer_like() {
-    let test_src = r#"
-            #[doc="CRUBIT_ANNOTATE: cpp_type=CppType*"]
-            #[doc="CRUBIT_ANNOTATE: include_path=cpp_ns/cpp_type.h"]
-            #[repr(transparent)]
-            pub struct RustTypeOwned {
-                pub cpp_type: *mut core::ffi::c_void,
-            }
-
-            #[unsafe(no_mangle)]
-            pub fn foo() -> RustTypeOwned { todo!() }
-    "#;
-    test_format_item(test_src, "RustTypeOwned", |result| {
-        let err = result.unwrap_err();
-        assert_eq!(
-            err,
-            "Type bindings for RustTypeOwned suppressed \
-                due to being mapped to an existing C++ type (CppType*)"
-        );
-    });
-    test_format_item(test_src, "foo", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-
-        assert_eq!(main_api.prereqs.includes.len(), 1);
-
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_foo(__ret_ptr: *mut core::ffi::c_void) -> () {
-                    unsafe {
-                        let __rs_return_value = ::rust_out::foo();
-                        (__ret_ptr as *mut ::rust_out::RustTypeOwned).write(__rs_return_value);
-                    }
-                }
-            }
-        );
-
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                CppType* foo();
-            }
-        );
-
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                namespace __crubit_internal {
-                    extern "C" void __crubit_thunk_foo(CppType** __ret_ptr);
-                }
-
-                inline CppType* foo() {
-                  union __return_value_crubit_return_union {
-                    constexpr __return_value_crubit_return_union() {}
-                    ~__return_value_crubit_return_union() { std::destroy_at(&this->val); }
-                    CppType* val;
-                  } __return_value_ret_val_holder;
-                  auto* __return_value_storage = &__return_value_ret_val_holder.val;
-                  __crubit_internal::__crubit_thunk_foo(__return_value_storage);
-                  return std::move(__return_value_ret_val_holder.val);
-                }
-            }
-        );
-    })
-}
-
-#[test]
 fn test_format_brided_type_deduplicate_extern_c_decls() {
     let test_src = r#"
             #[doc="CRUBIT_ANNOTATE: cpp_type=CppType*"]
@@ -991,179 +684,6 @@ fn test_format_brided_type_deduplicate_extern_c_decls() {
             }
         );
     });
-}
-
-#[test]
-fn test_format_bridged_return_type_by_pointer() {
-    let test_src = r#"
-            #[doc="CRUBIT_ANNOTATE: cpp_type=CppType*"]
-            #[doc="CRUBIT_ANNOTATE: include_path=cpp_ns/cpp_type.h"]
-            #[doc="CRUBIT_ANNOTATE: rust_to_cpp_converter=rust_struct_to_cpp_pointer"]
-            #[doc="CRUBIT_ANNOTATE: cpp_to_rust_converter=cpp_pointer_to_rust_struct"]
-            pub struct RustTypeOwned {
-                pub cpp_type: *const core::ffi::c_void,
-            }
-
-            #[unsafe(no_mangle)]
-            pub fn foo() -> RustTypeOwned { todo!() }
-    "#;
-    test_format_item(test_src, "RustTypeOwned", |result| {
-        let err = result.unwrap_err();
-        assert_eq!(
-            err,
-            "Type bindings for RustTypeOwned suppressed \
-                due to being mapped to an existing C++ type (CppType*)"
-        );
-    });
-    test_format_item(test_src, "foo", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-
-        assert_eq!(main_api.prereqs.includes.len(), 1);
-
-        let extern_c_decl = result.rs_details.extern_c_decls.first().unwrap();
-        assert_eq!(extern_c_decl.symbol, Symbol::intern("rust_struct_to_cpp_pointer"));
-        assert_rs_matches!(
-            extern_c_decl.decl,
-            quote! {
-                fn rust_struct_to_cpp_pointer(
-                    rs_in: *const core::ffi::c_void,
-                    cpp_out: *mut core::ffi::c_void
-                );
-            }
-        );
-
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_foo(__ret_ptr: *mut core::ffi::c_void) -> () {
-                    unsafe {
-                        let __rs_return_value = ::rust_out::foo();
-                        rust_struct_to_cpp_pointer(
-                            std::ptr::from_ref(&__rs_return_value) as *const core::ffi::c_void,
-                            __ret_ptr
-                        );
-                    }
-                }
-            }
-        );
-
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                CppType* foo();
-            }
-        );
-
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                namespace __crubit_internal {
-                    extern "C" void __crubit_thunk_foo(CppType** __ret_ptr);
-                }
-
-                inline CppType* foo() {
-                    union __return_value_crubit_return_union {
-                      constexpr __return_value_crubit_return_union() {}
-                      ~__return_value_crubit_return_union() { std::destroy_at(&this->val); }
-                      CppType* val;
-                    } __return_value_ret_val_holder;
-                    auto* __return_value_storage = &__return_value_ret_val_holder.val;
-                    __crubit_internal::__crubit_thunk_foo(__return_value_storage);
-                    return std::move(__return_value_ret_val_holder.val);
-                }
-            }
-        );
-    })
-}
-
-#[test]
-fn test_format_bridged_return_type_by_value() {
-    let test_src = r#"
-            #[doc="CRUBIT_ANNOTATE: cpp_type=cpp_ns::CppType"]
-            #[doc="CRUBIT_ANNOTATE: include_path=cpp_ns/cpp_type.h"]
-            #[doc="CRUBIT_ANNOTATE: rust_to_cpp_converter=rust_to_cpp_converter"]
-            #[doc="CRUBIT_ANNOTATE: cpp_to_rust_converter=cpp_to_rust_converter"]
-            pub struct RustType {
-                pub x: i32,
-            }
-
-            #[unsafe(no_mangle)]
-            pub fn foo() -> RustType {
-                RustType { x: 10 }
-            }
-    "#;
-    test_format_item(test_src, "RustType", |result| {
-        let err = result.unwrap_err();
-        assert_eq!(
-            err,
-            "Type bindings for RustType suppressed \
-                due to being mapped to an existing C++ type (cpp_ns::CppType)"
-        );
-    });
-    test_format_item(test_src, "foo", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-
-        assert_eq!(main_api.prereqs.includes.len(), 1);
-        assert_eq!(
-            *main_api.prereqs.includes.first().unwrap(),
-            CcInclude::user_header("cpp_ns/cpp_type.h".into())
-        );
-
-        let extern_c_decl = result.rs_details.extern_c_decls.first().unwrap();
-        assert_eq!(extern_c_decl.symbol, Symbol::intern("rust_to_cpp_converter"));
-        assert_rs_matches!(
-            extern_c_decl.decl,
-            quote! {
-                fn rust_to_cpp_converter(rs_in: *const core::ffi::c_void,
-                    cpp_out: *mut core::ffi::c_void);
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_foo(__ret_ptr: *mut core::ffi::c_void) -> () {
-                    unsafe {
-                        let __rs_return_value = ::rust_out::foo();
-                        rust_to_cpp_converter(
-                            std::ptr::from_ref(&__rs_return_value) as *const core::ffi::c_void,
-                            __ret_ptr
-                        );
-                    }
-                }
-            }
-        );
-
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                cpp_ns::CppType foo();
-            }
-        );
-
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                namespace __crubit_internal {
-                    extern "C" void __crubit_thunk_foo(cpp_ns::CppType* __ret_ptr);
-                }
-
-                inline cpp_ns::CppType foo() {
-                    union __return_value_crubit_return_union {
-                      constexpr __return_value_crubit_return_union() {}
-                      ~__return_value_crubit_return_union() { std::destroy_at(&this->val); }
-                      cpp_ns::CppType val;
-                    } __return_value_ret_val_holder;
-                    auto* __return_value_storage = &__return_value_ret_val_holder.val;
-                    __crubit_internal::__crubit_thunk_foo(__return_value_storage);
-                    return std::move(__return_value_ret_val_holder.val);
-                }
-            }
-        );
-    })
 }
 
 #[test]
@@ -1248,9 +768,9 @@ fn test_format_item_slice() {
             quote! {
               void
               foo(
-                rs_std::SliceRef<const std::uint32_t> _a,
-                rs_std::SliceRef<const std::uint8_t> _b,
-                rs_std::SliceRef<std::int16_t> _c,
+                rs_std::SliceRef<const ::std::uint32_t> _a,
+                rs_std::SliceRef<const ::std::uint8_t> _b,
+                rs_std::SliceRef<::std::int16_t> _c,
                 rs_std::SliceRef<bool> _d
               );
             }
@@ -1333,9 +853,10 @@ fn test_format_item_static_method_with_generic_type_parameters() {
     test_format_item(test_src, "SomeStruct", |result| {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
-        let unsupported_msg = "Error generating bindings for `SomeStruct::generic_method` \
+        let unsupported_msg =
+            "Error generating bindings for associated function `SomeStruct::generic_method` \
                                defined at <crubit_unittests.rs>;l=12: \
-                               Generic functions are not supported yet (b/259749023)";
+                               No valid non-generic replacement for generic type param `T`";
         assert_cc_matches!(
             main_api.tokens,
             quote! {
@@ -1375,8 +896,8 @@ fn test_format_item_static_method_with_generic_lifetime_parameters_at_fn_level()
                 ...
                 struct ... SomeStruct final {
                     ...
-                    static std::int32_t fn_taking_reference(
-                        std::int32_t const* [[clang::annotate_type("lifetime", "a")]] crubit_nonnull x);
+                    static ::std::int32_t fn_taking_reference(
+                        ::std::int32_t const* $a crubit_nonnull x);
                     ...
                 };
                 ...
@@ -1386,11 +907,11 @@ fn test_format_item_static_method_with_generic_lifetime_parameters_at_fn_level()
             result.cc_details.tokens,
             quote! {
                 namespace __crubit_internal {
-                extern "C" std::int32_t ...(
-                    std::int32_t const* [[clang::annotate_type("lifetime", "a")]] crubit_nonnull);
+                extern "C" ::std::int32_t ...(
+                    ::std::int32_t const* $a crubit_nonnull);
                 }
-                inline std::int32_t SomeStruct::fn_taking_reference(
-                    std::int32_t const* [[clang::annotate_type("lifetime", "a")]] crubit_nonnull x) {
+                inline ::std::int32_t SomeStruct::fn_taking_reference(
+                    ::std::int32_t const* $a crubit_nonnull x) {
                   return __crubit_internal::...(x);
                 }
             },
@@ -1429,8 +950,8 @@ fn test_format_item_static_method_with_generic_lifetime_parameters_at_impl_level
                 ...
                 struct ... SomeStruct final {
                     ...
-                    static std::int32_t fn_taking_reference(
-                        std::int32_t const* [[clang::annotate_type("lifetime", "a")]] crubit_nonnull x);
+                    static ::std::int32_t fn_taking_reference(
+                        ::std::int32_t const* $a crubit_nonnull x);
                     ...
                 };
                 ...
@@ -1675,7 +1196,8 @@ fn test_format_item_method_taking_self_by_arc() {
     test_format_item(test_src, "SomeStruct", |result| {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
-        let unsupported_msg = "Error generating bindings for `SomeStruct::get_f32` \
+        let unsupported_msg =
+            "Error generating bindings for associated function `SomeStruct::get_f32` \
                                defined at <crubit_unittests.rs>;l=7: \
                                Unsupported `self` type `std::sync::Arc<SomeStruct>`";
         assert_cc_matches!(
@@ -1711,7 +1233,8 @@ fn test_format_item_method_taking_self_by_pinned_mut_ref() {
     test_format_item(test_src, "SomeStruct", |result| {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
-        let unsupported_msg = "Error generating bindings for `SomeStruct::set_f32` \
+        let unsupported_msg =
+            "Error generating bindings for associated function `SomeStruct::set_f32` \
                                defined at <crubit_unittests.rs>;l=7: \
                                Unsupported `self` type `std::pin::Pin<&'__anon1 mut SomeStruct>`";
         assert_cc_matches!(
@@ -1729,434 +1252,6 @@ fn test_format_item_method_taking_self_by_pinned_mut_ref() {
         assert_cc_not_matches!(result.cc_details.tokens, quote! { SomeStruct::set_f32 },);
         assert_rs_not_matches!(result.rs_details.tokens, quote! { set_f32 },);
     });
-}
-
-#[test]
-fn test_format_item_struct_with_default_constructor() {
-    let test_src = r#"
-            #![allow(dead_code)]
-
-            #[derive(Default)]
-            pub struct Point(i32, i32);
-        "#;
-    test_format_item(test_src, "Point", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct ... Point final {
-                    ...
-                    public:
-                      __COMMENT__ "Default::default"
-                      Point();
-                    ...
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                namespace __crubit_internal {
-                    extern "C" void ...(::rust_out::Point* __ret_ptr);
-                }
-                inline Point::Point() {
-                    ...(this);
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_default(
-                    __ret_ptr: *mut core::ffi::c_void
-                ) -> () {
-                    unsafe {
-                        let __rs_return_value =
-                            <::rust_out::Point as ::core::default::Default>::default();
-                        (__ret_ptr as *mut ::rust_out::Point).write(__rs_return_value);
-                    }
-                }
-            }
-        );
-    });
-}
-
-#[test]
-fn test_format_item_struct_with_copy_trait() {
-    let test_src = r#"
-            #![allow(dead_code)]
-
-            #[derive(Clone, Copy)]
-            pub struct Point(i32, i32);
-        "#;
-    let msg = "Rust types that are `Copy` get trivial, `default` C++ copy constructor \
-               and assignment operator.";
-    test_format_item(test_src, "Point", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct ... Point final {
-                    ...
-                    public:
-                      ...
-                      __COMMENT__ #msg
-                      Point(const Point&) = default;
-                      Point& operator=(const Point&) = default;
-                      ...
-                };
-            }
-        );
-
-        // Trivial copy doesn't require any C++ details except `static_assert`s.
-        assert_cc_not_matches!(result.cc_details.tokens, quote! { Point::Point(const Point&) },);
-        assert_cc_not_matches!(result.cc_details.tokens, quote! { Point::operator=(const Point&) },);
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(std::is_trivially_copy_constructible_v<Point>);
-                static_assert(std::is_trivially_copy_assignable_v<Point>);
-            },
-        );
-
-        // Trivial copy doesn't require any Rust details.
-        assert_rs_not_matches!(result.rs_details.tokens, quote! { Copy });
-        assert_rs_not_matches!(result.rs_details.tokens, quote! { copy });
-    });
-}
-
-/// Test of `generate_copy_ctor_and_assignment_operator` when the ADT
-/// implements a `Clone` trait.
-///
-/// Notes:
-/// * `Copy` trait is covered in `test_format_item_struct_with_copy_trait`.
-/// * The test below implements `clone` and uses the default `clone_from`.
-#[test]
-fn test_format_item_struct_with_clone_trait() {
-    let test_src = r#"
-            #![allow(dead_code)]
-
-            pub struct Point(i32, i32);
-            impl Clone for Point {
-                fn clone(&self) -> Self {
-                    unimplemented!()
-                }
-            }
-        "#;
-    test_format_item(test_src, "Point", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct ... Point final {
-                    ...
-                    public:
-                      ...
-                      __COMMENT__ "Clone::clone"
-                      Point(const Point&);
-
-                      __COMMENT__ "Clone::clone_from"
-                      Point& operator=(const Point&);
-                    ...
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                namespace __crubit_internal {
-                extern "C" void ...(::rust_out::Point const&, ::rust_out::Point* __ret_ptr);
-                }
-                namespace __crubit_internal {
-                extern "C" void ...(::rust_out::Point&, ::rust_out::Point const&);
-                }
-                inline Point::Point(const Point& other) {
-                  __crubit_internal::...(other, this);
-                }
-                inline Point& Point::operator=(const Point& other) {
-                  if (this != &other) {
-                    __crubit_internal::...(*this, other);
-                  }
-                  return *this;
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_clone(
-                    __self: &'static ::rust_out::Point,
-                    __ret_ptr: *mut core::ffi::c_void
-                ) -> () {
-                    unsafe {
-                        let __rs_return_value =
-                            <::rust_out::Point as ::core::clone::Clone>::clone(__self);
-                        (__ret_ptr as *mut ::rust_out::Point).write(__rs_return_value);
-                    }
-                }
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_clone_ufrom(
-                    __self: &'static mut ::rust_out::Point,
-                    source: &'static ::rust_out::Point
-                ) -> () {
-                    unsafe { <::rust_out::Point as ::core::clone::Clone>::clone_from(__self, source) }
-                }
-            }
-        );
-    });
-}
-
-fn test_format_item_struct_with_custom_drop_and_no_default_nor_clone_impl(
-    test_src: &str,
-    pass_by_value_line_number: i32,
-) {
-    test_format_item(test_src, "TypeUnderTest", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        let move_deleted_msg = "C++ move operations are unavailable for this type. See \
-                                http://<internal link>/rust/movable_types for an explanation of Rust \
-                                types that are C++ movable.";
-        let pass_by_value_msg = format!(
-            "Error generating bindings for `TypeUnderTest::pass_by_value` \
-                    defined at <crubit_unittests.rs>;l={pass_by_value_line_number}: \
-             Can't pass a type by value without a move constructor: {move_deleted_msg}"
-        );
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct ... TypeUnderTest final {
-                    ...
-                    public:
-                      ...
-                      __COMMENT__ "Drop::drop"
-                      ~TypeUnderTest();
-
-                      __COMMENT__ #move_deleted_msg
-                      TypeUnderTest(TypeUnderTest&&) = delete;
-                      TypeUnderTest& operator=(TypeUnderTest&&) = delete;
-                      ...
-                      __COMMENT__ #pass_by_value_msg
-                      ...
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                namespace __crubit_internal {
-                // `drop` thunk decl
-                extern "C" void ...(::rust_out::TypeUnderTest&);
-                }
-                inline TypeUnderTest::~TypeUnderTest() {
-                  __crubit_internal::...(*this);
-                }
-            }
-        );
-        assert_cc_not_matches!(result.cc_details.tokens, quote! { pass_by_value });
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                ...
-                #[unsafe(no_mangle)]
-                extern "C" fn ...(
-                    __self: &'static mut ::core::mem::MaybeUninit<::rust_out::TypeUnderTest>
-                ) {
-                    unsafe { __self.assume_init_drop() };
-                }
-                ...
-            }
-        );
-        assert_rs_not_matches!(result.rs_details.tokens, quote! { pass_by_value });
-    });
-}
-
-#[test]
-fn test_format_item_struct_with_custom_drop_impl_and_no_default_nor_clone_impl() {
-    let test_src = r#"
-            pub struct TypeUnderTest {
-                pub x: i32,
-                pub y: i32,
-            }
-
-            impl Drop for TypeUnderTest {
-                fn drop(&mut self) {}
-            }
-
-            impl TypeUnderTest {
-                pub fn return_by_value() -> Self { unimplemented!() }
-                pub fn pass_by_value(_: Self) { unimplemented!() }
-            }
-        "#;
-    let pass_by_value_line_number = 13;
-    test_format_item_struct_with_custom_drop_and_no_default_nor_clone_impl(
-        test_src,
-        pass_by_value_line_number,
-    );
-}
-
-#[test]
-fn test_format_item_struct_with_custom_drop_glue_and_no_default_nor_clone_impl() {
-    let test_src = r#"
-            #![allow(dead_code)]
-
-            // `i32` is present to avoid hitting the ZST checks related to (b/258259459)
-            struct StructWithCustomDropImpl(i32);
-
-            impl Drop for StructWithCustomDropImpl {
-                fn drop(&mut self) {
-                    println!("dropping!");
-                }
-            }
-
-            pub struct TypeUnderTest {
-                field: StructWithCustomDropImpl,
-            }
-
-            impl TypeUnderTest {
-                pub fn return_by_value() -> Self { unimplemented!() }
-                pub fn pass_by_value(_: Self) { unimplemented!() }
-            }
-        "#;
-    let pass_by_value_line_number = 19;
-    test_format_item_struct_with_custom_drop_and_no_default_nor_clone_impl(
-        test_src,
-        pass_by_value_line_number,
-    );
-}
-
-fn test_format_item_struct_with_custom_drop_and_with_default_impl(test_src: &str) {
-    test_format_item(test_src, "TypeUnderTest", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct ... TypeUnderTest final {
-                    ...
-                    public:
-                      ...
-                      __COMMENT__ "Drop::drop"
-                      ~TypeUnderTest();
-                      TypeUnderTest(TypeUnderTest&&);
-                      TypeUnderTest& operator=(
-                          TypeUnderTest&&);
-                      ...
-                      static ::rust_out::TypeUnderTest pass_by_value();
-                      ...
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                namespace __crubit_internal {
-                // `drop` thunk decl
-                extern "C" void ...(::rust_out::TypeUnderTest&);
-                }
-                inline TypeUnderTest::~TypeUnderTest() {
-                  __crubit_internal::...(*this);
-                }
-                inline TypeUnderTest::TypeUnderTest(
-                    TypeUnderTest&& other)
-                    : TypeUnderTest() {
-                  *this = std::move(other);
-                }
-                inline TypeUnderTest& TypeUnderTest::operator=(
-                    TypeUnderTest&& other) {
-                  crubit::MemSwap(*this, other);
-                  return *this;
-                }
-                namespace __crubit_internal {  // `pass_by_value` thunk decl
-                extern "C" void ...(::rust_out::TypeUnderTest* __ret_ptr);
-                }
-                inline ::rust_out::TypeUnderTest TypeUnderTest::pass_by_value() {
-                  crubit::Slot<::rust_out::TypeUnderTest> __return_value_ret_val_holder;
-                  auto* __return_value_storage = __return_value_ret_val_holder.Get();
-                  __crubit_internal::...(__return_value_storage);
-                  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                ...
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn ...(
-                    __self: &'static mut ::core::mem::MaybeUninit<::rust_out::TypeUnderTest>
-                ) {
-                    unsafe { __self.assume_init_drop() };
-                }
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn ...(
-                    __ret_ptr: *mut core::ffi::c_void
-                ) -> () {
-                    unsafe {
-                        let __rs_return_value = ::rust_out::TypeUnderTest::pass_by_value();
-                        (__ret_ptr as *mut ::rust_out::TypeUnderTest).write(__rs_return_value);
-                    }
-                }
-                ...
-            }
-        );
-    });
-}
-
-#[test]
-fn test_format_item_struct_with_custom_drop_impl_and_with_default_impl() {
-    let test_src = r#"
-            #[derive(Default)]
-            pub struct TypeUnderTest {
-                pub x: i32,
-                pub y: i32,
-            }
-
-            impl Drop for TypeUnderTest {
-                fn drop(&mut self) {}
-            }
-
-            impl TypeUnderTest {
-                pub fn pass_by_value() -> Self { unimplemented!() }
-            }
-        "#;
-    test_format_item_struct_with_custom_drop_and_with_default_impl(test_src);
-}
-
-#[test]
-fn test_format_item_struct_with_custom_drop_glue_and_with_default_impl() {
-    let test_src = r#"
-            #![allow(dead_code)]
-
-            // `i32` is present to avoid hitting the ZST checks related to (b/258259459)
-            #[derive(Default)]
-            struct StructWithCustomDropImpl(i32);
-
-            impl Drop for StructWithCustomDropImpl {
-                fn drop(&mut self) {
-                    println!("dropping!");
-                }
-            }
-
-            #[derive(Default)]
-            pub struct TypeUnderTest {
-                field: StructWithCustomDropImpl,
-            }
-
-            impl TypeUnderTest {
-                pub fn pass_by_value() -> Self { unimplemented!() }
-            }
-        "#;
-    test_format_item_struct_with_custom_drop_and_with_default_impl(test_src);
 }
 
 fn test_format_item_struct_with_custom_drop_and_no_default_and_clone(test_src: &str) {
@@ -2203,7 +1298,7 @@ fn test_format_item_struct_with_custom_drop_and_no_default_and_clone(test_src: &
                     crubit::Slot<::rust_out::TypeUnderTest> __return_value_ret_val_holder;
                     auto* __return_value_storage = __return_value_ret_val_holder.Get();
                     __crubit_internal::__crubit_thunk_pass_uby_uvalue(__return_value_storage);
-                    return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+                    return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
                 }
                 ...
             }
@@ -2280,111 +1375,6 @@ fn test_format_item_struct_with_custom_drop_glue_and_no_default_and_clone() {
 }
 
 #[test]
-fn test_format_item_unsupported_struct_with_custom_drop_and_default_and_nonunpin() {
-    let test_src = r#"
-            #![feature(negative_impls)]
-
-            #[derive(Default)]
-            pub struct SomeStruct {
-                pub x: i32,
-                pub y: i32,
-            }
-
-            impl !Unpin for SomeStruct {}
-
-            impl Drop for SomeStruct {
-                fn drop(&mut self) {}
-            }
-
-            impl SomeStruct {
-                pub fn return_by_value() -> Self { unimplemented!() }
-                pub fn pass_by_value(_: Self) { unimplemented!() }
-            }
-        "#;
-    test_format_item(test_src, "SomeStruct", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        let move_deleted_msg = "C++ move operations are unavailable for this type. See \
-                                http://<internal link>/rust/movable_types for an explanation of Rust \
-                                types that are C++ movable.";
-        let pass_by_value_msg = format!(
-            "Error generating bindings for `SomeStruct::pass_by_value` \
-                    defined at <crubit_unittests.rs>;l=18: \
-             Can't pass a type by value without a move constructor: {move_deleted_msg}"
-        );
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct ... SomeStruct final {
-                    ...
-                    public:
-                      ...
-                      __COMMENT__ "Default::default"
-                      SomeStruct();
-
-                      __COMMENT__ "Drop::drop"
-                      ~SomeStruct();
-
-                      __COMMENT__ #move_deleted_msg
-                      SomeStruct(SomeStruct&&) = delete;
-                      SomeStruct& operator=(SomeStruct&&) = delete;
-                      ...
-                      static ::rust_out::SomeStruct return_by_value();
-                      __COMMENT__ #pass_by_value_msg
-                      ...
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                ...
-                namespace __crubit_internal {
-                 // `default` thunk decl
-                extern "C" void ...(::rust_out::SomeStruct* __ret_ptr);
-                }
-                inline SomeStruct::SomeStruct() {
-                  __crubit_internal::...(this);
-                }
-                namespace __crubit_internal {
-                // `drop` thunk decl
-                extern "C" void ...(::rust_out::SomeStruct&);
-                }
-                inline SomeStruct::~SomeStruct() {
-                  __crubit_internal::...(*this);
-                }
-                ...
-            }
-        );
-        assert_cc_not_matches!(result.cc_details.tokens, quote! { pass_by_value });
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                ...
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_default(
-                    __ret_ptr: *mut core::ffi::c_void
-                ) -> () {
-                    unsafe {
-                        let __rs_return_value = <::rust_out::SomeStruct as ::core::default::Default>::default();
-                        (__ret_ptr as *mut ::rust_out::SomeStruct).write(__rs_return_value);
-                    }
-                }
-                #[unsafe(no_mangle)]
-                extern "C" fn ...(
-                    __self: &'static mut ::core::mem::MaybeUninit<::rust_out::SomeStruct>
-                ) {
-                    unsafe { __self.assume_init_drop() };
-                }
-                ...
-            }
-        );
-        assert_rs_not_matches!(result.rs_details.tokens, quote! { pass_by_value });
-    });
-}
-
-#[test]
 fn test_format_item_source_loc_macro_rules() {
     let test_src = r#"
         #![allow(dead_code)]
@@ -2401,8 +1391,7 @@ fn test_format_item_source_loc_macro_rules() {
     test_format_item(test_src, "SomeTupleStructMacroForTesingSourceLoc", |result| {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
-        let source_loc_comment = " Some doc on SomeTupleStructMacroForTesingSourceLoc.\n\n\
-                                  Generated from: <crubit_unittests.rs>;l=7";
+        let source_loc_comment = " Some doc on SomeTupleStructMacroForTesingSourceLoc.";
         assert_cc_matches!(
             main_api.tokens,
             quote! {
@@ -2426,11 +1415,9 @@ fn test_format_item_source_loc_with_no_doc_comment() {
     test_format_item(test_src, "SomeTupleStructWithNoDocComment", |result| {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
-        let comment = "Generated from: <crubit_unittests.rs>;l=4";
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                __COMMENT__ #comment
                 struct ... SomeTupleStructWithNoDocComment final {
                     ...
                 }
@@ -2473,6 +1460,8 @@ fn test_generate_bindings_use_list_items() {
             bindings.cc_api,
             quote! {
                 ...
+                namespace rust_out {
+                ...
                 struct CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: X") alignas(4)
                     [[clang::trivial_abi]] X final {
                     ...
@@ -2483,25 +1472,24 @@ fn test_generate_bindings_use_list_items() {
                     [[clang::trivial_abi]] Y final {
                     ...
                 };
-
-
                 ...
-
-                namespace test_mod {
+                }
+                ...
+                namespace rust_out::test_mod {
 
                 using X CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: X") =
                     ::rust_out::X;
 
-                }  // namespace test_mod
+                }  // namespace rust_out::test_mod
 
                 ...
 
-                namespace test_mod {
+                namespace rust_out::test_mod {
 
                 using Y CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: Y") =
                     ::rust_out::Y;
 
-                }  // namespace test_mod
+                }  // namespace rust_out::test_mod
 
                 ...
             }
@@ -2530,6 +1518,8 @@ fn test_generate_bindings_use_glob() {
             bindings.cc_api,
             quote! {
                 ...
+                namespace rust_out {
+                ...
                 struct CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: X") alignas(4)
                     [[clang::trivial_abi]] X final {
                     ...
@@ -2540,21 +1530,23 @@ fn test_generate_bindings_use_glob() {
                     [[clang::trivial_abi]] Y final {
                     ...
                 };
+                ...
+                }
 
                 ...
 
-                namespace test_mod {
-
+                namespace rust_out::test_mod {
+                ...
                 using X CRUBIT_INTERNAL_RUST_TYPE (":: rust_out :: X") = ::rust_out::X;
-
-                }  // namespace test_mod
+                ...
+                }  // namespace rust_out::test_mod
                 ...
 
-                namespace test_mod {
-
+                namespace rust_out::test_mod {
+                ...
                 using Y CRUBIT_INTERNAL_RUST_TYPE (":: rust_out :: Y") = ::rust_out::Y;
-
-                }  // namespace test_mod
+                ...
+                }  // namespace rust_out::test_mod
                 ...
             }
         );
@@ -2573,10 +1565,37 @@ fn test_format_item_type_alias() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                using TypeAlias CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: TypeAlias") = std::int32_t;
+                using TypeAlias CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: TypeAlias") = ::std::int32_t;
             }
         );
     });
+}
+
+#[test]
+fn test_format_item_type_alias_with_kythe_annotations() {
+    let test_src = r#"
+            pub type TypeAlias = i32;
+        "#;
+    test_format_item_with_features(
+        test_src,
+        "TypeAlias",
+        crubit_feature::CrubitFeature::Experimental | crubit_feature::CrubitFeature::Supported,
+        /* with_kythe_annotations= */ true,
+        |result| {
+            let result = result.unwrap().unwrap();
+            let main_api = &result.main_api;
+            assert!(!main_api.prereqs.is_empty());
+            assert_cc_matches!(
+                main_api.tokens,
+                quote! {
+                    __CAPTURE_TAG__ "<crubit_unittests.rs>" "22" "31"
+                    __COMMENT__ "Generated from: <crubit_unittests.rs>;l=2"
+                    using __CAPTURE_BEGIN__ TypeAlias __CAPTURE_END__
+                    CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: TypeAlias") = ::std::int32_t;
+                }
+            );
+        },
+    );
 }
 
 #[test]
@@ -2592,7 +1611,7 @@ fn test_format_item_type_alias_should_give_underlying_type() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                using TypeAlias2 CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: TypeAlias2") = std::int32_t;
+                using TypeAlias2 CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: TypeAlias2") = ::std::int32_t;
             }
         );
     });
@@ -2635,7 +1654,20 @@ fn test_format_item_unsupported_generic_type_alias() {
 
 #[test]
 fn test_format_item_unsupported_type_without_direct_existence() {
-    let test_src = r#"
+    #[rustversion::before(2026-05-10)]
+    fn f(test_src: &str) {
+        test_format_item(test_src, "EvilAlias", |result| {
+            let err = result.unwrap_err();
+            assert_eq!(err, "Not a public or a supported reexported type (b/262052635).");
+        });
+    }
+    #[rustversion::since(2026-05-10)]
+    fn f(test_src: &str) {
+        test_format_item(test_src, "EvilAlias", |result| {
+            assert!(matches!(result, Ok(None)));
+        });
+    }
+    f(r#"
         pub trait Evil {
             type Type;
         }
@@ -2647,11 +1679,7 @@ fn test_format_item_unsupported_type_without_direct_existence() {
             }
         };
         pub type EvilAlias = <i64 as Evil>::Type;
-        "#;
-    test_format_item(test_src, "EvilAlias", |result| {
-        let err = result.unwrap_err();
-        assert_eq!(err, "The following Rust type is not supported yet: <i64 as Evil>::Type");
-    });
+        "#);
 }
 
 #[test]
@@ -2670,7 +1698,7 @@ fn test_format_item_type_alias_deprecated() {
                 using TypeAlias
                     CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: TypeAlias")
                     [[deprecated("Use `OtherTypeAlias` instead")]]
-                    = std::int32_t;
+                    = ::std::int32_t;
             }
         );
     });
@@ -2698,7 +1726,7 @@ fn test_format_item_generate_bindings_for_top_level_type_alias() {
         assert_cc_not_matches!(
             main_api.tokens,
             quote! {
-                std::int64_t
+                ::std::int64_t
             }
         );
     });
@@ -2708,9 +1736,9 @@ fn test_format_item_generate_bindings_for_top_level_type_alias() {
 fn test_format_namespace_bound_cc_tokens() {
     run_compiler_for_testing("", |tcx| {
         let db = bindings_db_for_tests(tcx);
-        let top_level = NamespaceQualifier::new::<&str>([]);
-        let m1 = NamespaceQualifier::new(["m1"]);
-        let m2 = NamespaceQualifier::new(["m2"]);
+        let top_level = NamespaceQualifier::new::<&str>([], true);
+        let m1 = NamespaceQualifier::new(["m1"], true);
+        let m2 = NamespaceQualifier::new(["m2"], true);
         let input = [
             (None, top_level.clone(), quote! { void f0a(); }),
             (None, m1.clone(), quote! { void f1a(); }),
@@ -2763,7 +1791,7 @@ fn test_multiple_attributes() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                [[nodiscard("Must use")]] [[deprecated("Deprecated")]] std::int32_t add(std::int32_t x, std::int32_t y);
+                [[nodiscard("Must use")]] [[deprecated("Deprecated")]] ::std::int32_t add(::std::int32_t x, ::std::int32_t y);
                     ...
             }
         )
@@ -2771,226 +1799,86 @@ fn test_multiple_attributes() {
 }
 
 #[test]
-fn test_repr_c_union_fields_impl_clone() {
+fn test_trait_impl_for_std_iter_iterator_trait() {
     let test_src = r#"
-    #[repr(C)]
-    pub union SomeUnion {
-        pub x: u32,
-    }
+            #![allow(unused)]
 
-    impl Clone for SomeUnion {
-        fn clone(&self) -> SomeUnion {
-            return SomeUnion {x: 1}
-        }
-    }
+            pub struct MyStruct(i32);
 
-    const _: () = assert!(std::mem::size_of::<SomeUnion>() == 4);
-    const _: () = assert!(std::mem::align_of::<SomeUnion>() == 4);
-    "#;
-
-    test_format_item(test_src, "SomeUnion", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                union CRUBIT_INTERNAL_RUST_TYPE(...) alignas(4) [[clang::trivial_abi]] SomeUnion final {
-                    public:
-                        ...
-                        __COMMENT__ "Clone::clone"
-                        SomeUnion(const SomeUnion&);
-
-                        __COMMENT__ "Clone::clone_from"
-                        SomeUnion& operator=(const SomeUnion&);
-                    ...
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                ...
-                static_assert(std::is_trivially_destructible_v<SomeUnion>);
-                static_assert(std::is_trivially_move_constructible_v<SomeUnion>);
-                static_assert(std::is_trivially_move_assignable_v<SomeUnion>);
-                ...
-                inline SomeUnion::SomeUnion(const SomeUnion& other) {...}
-                inline SomeUnion& SomeUnion::operator=(const SomeUnion& other) {...}
-                ...
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_clone(
-                    __self: &'static ::rust_out::SomeUnion,
-                    __ret_ptr: *mut core::ffi::c_void
-                ) -> () {
-                    unsafe {
-                        let __rs_return_value = <::rust_out::SomeUnion as ::core::clone::Clone>::clone(__self);
-                        (__ret_ptr as *mut ::rust_out::SomeUnion).write(__rs_return_value);
-                    }
-                }
-                #[unsafe(no_mangle)]
-                unsafe extern "C" fn __crubit_thunk_clone_ufrom(
-                    __self: &'static mut ::rust_out::SomeUnion,
-                    source: &'static ::rust_out::SomeUnion
-                ) -> () {
-                    unsafe { <::rust_out::SomeUnion as ::core::clone::Clone>::clone_from(__self, source) }
+            impl std::iter::Iterator for MyStruct {
+                type Item = i32;
+                fn next(&mut self) -> Option<Self::Item> {
+                    todo!()
                 }
             }
-        );
-    })
-}
+        "#;
+    test_generated_bindings(test_src, |bindings| {
+        let bindings = bindings.unwrap();
 
-#[test]
-fn test_repr_c_union_fields_impl_drop() {
-    let test_src = r#"
-    #[repr(C)]
-    pub union SomeUnion {
-        pub x: u32,
-    }
-
-    impl Drop for SomeUnion {
-        fn drop(&mut self) {
-            println!(":)")
-        }
-    }
-
-    const _: () = assert!(std::mem::size_of::<SomeUnion>() == 4);
-    const _: () = assert!(std::mem::align_of::<SomeUnion>() == 4);
-    "#;
-
-    test_format_item(test_src, "SomeUnion", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
         assert_cc_matches!(
-            main_api.tokens,
+            bindings.cc_api,
             quote! {
-                ...
-                union CRUBIT_INTERNAL_RUST_TYPE(...) alignas(4) [[clang::trivial_abi]] SomeUnion final {
-                    public:
-                        ...
-                        __COMMENT__ "Drop::drop"
-                        ~SomeUnion();
-
-                        ...
-                        SomeUnion(SomeUnion&&) = delete;
-                        SomeUnion& operator=(SomeUnion&&) = delete;
-                        ...
+                template <>
+                struct rs_std::impl<::rust_out::MyStruct, ::rs::core::iter::Iterator> {
+                    static constexpr bool kIsImplemented = true;
+                    ...
+                    using Item CRUBIT_INTERNAL_RUST_TYPE(
+                        "<MyStruct as :: core :: iter :: Iterator>::Item") = ::std::int32_t;
                     ...
                 };
             }
         );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                ...
-                inline SomeUnion::~SomeUnion() {...}
-                ...
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                ...
-                extern "C" fn ... (__self: &'static mut ::core::mem::MaybeUninit<::rust_out::SomeUnion>...) { unsafe { __self.assume_init_drop() }; }
-                ...
-            }
-        );
-    })
+
+        // `next` bindings work now!
+        assert_cc_matches!(bindings.cc_api, quote! { next ( ... ) },);
+    });
 }
 
 #[test]
-fn test_repr_c_enum_drop() {
+fn test_trait_impl_for_std_future_future_trait() {
     let test_src = r#"
-    #[repr(C, i32)]
-    pub enum SomeEnum {
-        A(i32),
-        B{x: u32},
-        C,
-        D{foo: i32, bar: i32} = 3,
-    }
+            #![allow(unused)]
 
-    impl Drop for SomeEnum {
-        fn drop(&mut self) {
-            println!(":)")
-        }
-    }
+            pub struct MyStruct(i32);
 
-    const _: () = assert!(std::mem::size_of::<SomeEnum>() == 12);
-    const _: () = assert!(std::mem::align_of::<SomeEnum>() == 4);
-    "#;
+            impl std::future::Future for MyStruct {
+                type Output = i32;
+                fn poll(
+                    self: std::pin::Pin<&mut Self>,
+                    cx: &mut std::task::Context<'_>,
+                ) -> std::task::Poll<Self::Output> {
+                    todo!()
+                }
+            }
+        "#;
+    test_generated_bindings(test_src, |bindings| {
+        let bindings = bindings.unwrap();
 
-    test_format_item(test_src, "SomeEnum", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
         assert_cc_matches!(
-            main_api.tokens,
+            bindings.cc_api,
             quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) ... [[clang::trivial_abi]] SomeEnum final {
-                    public:
-                        ...
-                        __COMMENT__ "Drop::drop"
-                        ~SomeEnum();
-
-                        ...
-                        SomeEnum(SomeEnum&&) = delete;
-                        SomeEnum& operator=(SomeEnum&&) = delete;
-                        ...
+                template <>
+                struct rs_std::impl<::rust_out::MyStruct, ::rs::core::future::Future> {
+                    static constexpr bool kIsImplemented = true;
+                    ...
+                    using Output CRUBIT_INTERNAL_RUST_TYPE(
+                        "<MyStruct as :: core :: future :: Future>::Output") = ::std::int32_t;
                     ...
                 };
             }
         );
-    })
+    });
 }
-
 #[test]
-fn test_repr_c_enum_clone() {
+fn test_const_generic_array() {
     let test_src = r#"
-    #[repr(C, i32)]
-    pub enum SomeEnum {
-        A(i32),
-        B{x: u32},
-        C,
-        D{foo: i32, bar: i32} = 3,
-    }
-
-    impl Clone for SomeEnum {
-        fn clone(&self) -> SomeEnum {
-            return SomeEnum::A(1)
-        }
-    }
-
-    const _: () = assert!(std::mem::size_of::<SomeEnum>() == 12);
-    const _: () = assert!(std::mem::align_of::<SomeEnum>() == 4);
-    "#;
-
-    test_format_item(test_src, "SomeEnum", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) ... [[clang::trivial_abi]] SomeEnum final {
-                    public:
-                        ...
-                        __COMMENT__ "Clone::clone"
-                        SomeEnum(const SomeEnum&);
-
-                        __COMMENT__ "Clone::clone_from"
-                        SomeEnum& operator=(const SomeEnum&);
-                    ...
-                };
-            }
-        );
-    })
+            pub type Arr<const N: usize> = [u8; N];
+        "#;
+    test_generated_bindings(test_src, |_| {
+        // The test passes if there was no panic/crash.  Before cl/918701788, this input would have
+        // panicked in `fn evaluate_const_as_u64` when generating `PartialEq` bindings:
+        //
+        // cc_bindings_from_rs/generate_bindings/format_type.rs:1341
+        // Unable to get size from normalized type constant (N => N).
+    });
 }

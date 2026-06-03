@@ -56,6 +56,10 @@ pub enum CrubitAbiType {
         /// Is this a Rust slice (*mut [T] / rs_std::SliceRef<T>),
         /// or just a pointer (*mut T / T*).
         is_rust_slice: bool,
+        /// Is this a CRef/CMut?
+        is_cref: bool,
+        /// Was this originally a C++ reference?
+        is_cpp_ref: bool,
         rust_type: TokenStream,
         cpp_type: TokenStream,
     },
@@ -65,7 +69,7 @@ pub enum CrubitAbiType {
         in_cc_std: bool,
     },
     Transmute {
-        rust_type: FullyQualifiedPath,
+        rust_type: TokenStream,
         cpp_type: TokenStream,
     },
     /// A proto message type. This is a special case of CrubitAbiType::Type, where the Rust type is
@@ -85,10 +89,22 @@ pub enum CrubitAbiType {
         /// cpp foo::Message
         cpp_proto_path: FullyQualifiedPath,
     },
+    Callable {
+        rust_type_tokens: TokenStream,
+        rust_expr_tokens: TokenStream,
+        cpp_type_tokens: TokenStream,
+        cpp_expr_tokens: TokenStream,
+    },
     Type {
         rust_abi_path: FullyQualifiedPath,
         cpp_abi_path: FullyQualifiedPath,
         type_args: Rc<[CrubitAbiType]>,
+    },
+    C9Co {
+        rust_type_tokens: TokenStream,
+        rust_expr_tokens: TokenStream,
+        cpp_type_tokens: TokenStream,
+        cpp_expr_tokens: TokenStream,
     },
 }
 
@@ -111,7 +127,9 @@ impl CrubitAbiType {
 
     pub fn transmute(rust_type: &str, cpp_type: &str) -> Self {
         CrubitAbiType::Transmute {
-            rust_type: FullyQualifiedPath::new(rust_type),
+            rust_type: rust_type.parse().unwrap_or_else(|e| {
+                panic!("Failed to parse Rust type `{rust_type}` as a TokenStream: {e}")
+            }),
             cpp_type: cpp_type.parse().unwrap_or_else(|e| {
                 panic!("Failed to parse C++ type `{cpp_type}` as a TokenStream: {e}")
             }),
@@ -159,16 +177,18 @@ impl ToTokens for CrubitAbiTypeToRustTokens<'_> {
             CrubitAbiType::UnsignedLongLong => {
                 quote! { ::bridge_rust::TransmuteAbi<::core::ffi::c_ulonglong> }.to_tokens(tokens)
             }
-            CrubitAbiType::Ptr { is_const, is_rust_slice, rust_type, .. } => {
+            CrubitAbiType::Ptr { is_const, is_rust_slice, rust_type, is_cref, .. } => {
                 let mut ty = rust_type.clone();
                 if *is_rust_slice {
                     ty = quote! { [#ty] };
                 }
-                if *is_const {
-                    ty = quote! { *const #ty };
-                } else {
-                    ty = quote! { *mut #ty };
-                }
+                ty = match (is_const, is_cref) {
+                    // This is intentionally 'static everywhere.
+                    (true, true) => quote! { ::cref::CRef<'static, #ty> },
+                    (false, true) => quote! { ::cref::CMut<'static, #ty> },
+                    (true, false) => quote! { *const #ty },
+                    (false, false) => quote! { *mut #ty },
+                };
                 quote! { ::bridge_rust::TransmuteAbi<#ty> }.to_tokens(tokens);
             }
             CrubitAbiType::Pair(first, second) => {
@@ -190,12 +210,18 @@ impl ToTokens for CrubitAbiTypeToRustTokens<'_> {
             CrubitAbiType::ProtoMessage { proto_message_rust_bridge, rust_proto_path, .. } => {
                 quote! { #proto_message_rust_bridge<#rust_proto_path> }.to_tokens(tokens);
             }
+            CrubitAbiType::Callable { rust_type_tokens, .. } => {
+                rust_type_tokens.to_tokens(tokens);
+            }
             CrubitAbiType::Type { rust_abi_path, type_args, .. } => {
                 rust_abi_path.to_tokens(tokens);
                 if !type_args.is_empty() {
                     let type_args_tokens = type_args.iter().map(Self);
                     quote! { < #(#type_args_tokens),* > }.to_tokens(tokens);
                 }
+            }
+            CrubitAbiType::C9Co { rust_type_tokens, .. } => {
+                rust_type_tokens.to_tokens(tokens);
             }
         }
     }
@@ -227,16 +253,18 @@ impl ToTokens for CrubitAbiTypeToRustExprTokens<'_> {
                 quote! { ::bridge_rust::transmute_abi::<::core::ffi::c_ulonglong>() }
                     .to_tokens(tokens)
             }
-            CrubitAbiType::Ptr { is_const, is_rust_slice, rust_type, .. } => {
+            CrubitAbiType::Ptr { is_const, is_rust_slice, rust_type, is_cref, .. } => {
                 let mut ty = rust_type.clone();
                 if *is_rust_slice {
                     ty = quote! { [#ty] };
                 }
-                if *is_const {
-                    ty = quote! { *const #ty };
-                } else {
-                    ty = quote! { *mut #ty };
-                }
+                ty = match (is_const, is_cref) {
+                    // This is intentionally 'static everywhere.
+                    (true, true) => quote! { ::cref::CRef<'static, #ty> },
+                    (false, true) => quote! { ::cref::CMut<'static, #ty> },
+                    (true, false) => quote! { *const #ty },
+                    (false, false) => quote! { *mut #ty },
+                };
                 quote! { ::bridge_rust::transmute_abi::<#ty>() }.to_tokens(tokens);
             }
             CrubitAbiType::Pair(first, second) => {
@@ -259,6 +287,9 @@ impl ToTokens for CrubitAbiTypeToRustExprTokens<'_> {
                 quote! { #proto_message_rust_bridge(::core::marker::PhantomData) }
                     .to_tokens(tokens);
             }
+            CrubitAbiType::Callable { rust_expr_tokens, .. } => {
+                rust_expr_tokens.to_tokens(tokens);
+            }
             CrubitAbiType::Type { rust_abi_path, type_args, .. } => {
                 rust_abi_path.to_tokens(tokens);
                 if !type_args.is_empty() {
@@ -266,6 +297,9 @@ impl ToTokens for CrubitAbiTypeToRustExprTokens<'_> {
                     // We expect that the user's type is a tuple struct with public fields.
                     quote! { ( #(#type_args_tokens),* ) }.to_tokens(tokens);
                 }
+            }
+            CrubitAbiType::C9Co { rust_expr_tokens, .. } => {
+                rust_expr_tokens.to_tokens(tokens);
             }
         }
     }
@@ -295,13 +329,15 @@ impl ToTokens for CrubitAbiTypeToCppTokens<'_> {
             CrubitAbiType::UnsignedLongLong => {
                 quote! { ::crubit::TransmuteAbi<unsigned long long> }.to_tokens(tokens)
             }
-            CrubitAbiType::Ptr { is_const, is_rust_slice, cpp_type, .. } => {
+            CrubitAbiType::Ptr { is_const, is_rust_slice, cpp_type, is_cpp_ref, .. } => {
                 let mut ty = cpp_type.clone();
                 if *is_const {
                     ty = quote! { const #ty };
                 }
                 if *is_rust_slice {
                     ty = quote! { ::rs_std::SliceRef<#ty> };
+                } else if *is_cpp_ref {
+                    ty = quote! { #ty & };
                 } else {
                     ty = quote! { #ty * };
                 }
@@ -324,12 +360,18 @@ impl ToTokens for CrubitAbiTypeToCppTokens<'_> {
             CrubitAbiType::ProtoMessage { cpp_proto_path, .. } => {
                 quote! { ::crubit::BoxedAbi<#cpp_proto_path> }.to_tokens(tokens);
             }
+            CrubitAbiType::Callable { cpp_type_tokens, .. } => {
+                cpp_type_tokens.to_tokens(tokens);
+            }
             CrubitAbiType::Type { cpp_abi_path, type_args, .. } => {
                 cpp_abi_path.to_tokens(tokens);
                 if !type_args.is_empty() {
                     let type_args_tokens = type_args.iter().map(Self);
                     quote! { < #(#type_args_tokens),* > }.to_tokens(tokens);
                 }
+            }
+            CrubitAbiType::C9Co { cpp_type_tokens, .. } => {
+                cpp_type_tokens.to_tokens(tokens);
             }
         }
     }
@@ -393,6 +435,9 @@ impl ToTokens for CrubitAbiTypeToCppExprTokens<'_> {
             CrubitAbiType::ProtoMessage { cpp_proto_path, .. } => {
                 quote! { ::crubit::BoxedAbi<#cpp_proto_path>() }.to_tokens(tokens);
             }
+            CrubitAbiType::Callable { cpp_expr_tokens, .. } => {
+                cpp_expr_tokens.to_tokens(tokens);
+            }
             CrubitAbiType::Type { cpp_abi_path, type_args, .. } => {
                 if type_args.is_empty() {
                     // Special empty case since `Foo<>()` is invalid syntax.
@@ -407,6 +452,9 @@ impl ToTokens for CrubitAbiTypeToCppExprTokens<'_> {
                     }
                     .to_tokens(tokens);
                 }
+            }
+            CrubitAbiType::C9Co { cpp_expr_tokens, .. } => {
+                cpp_expr_tokens.to_tokens(tokens);
             }
         }
     }

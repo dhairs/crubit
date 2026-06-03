@@ -23,7 +23,7 @@ use core::slice::SliceIndex;
 
 use crate::crubit_cc_std_internal::std_allocator as cpp_std_allocator;
 
-extern "C" {
+unsafe extern "C" {
     // https://github.com/llvm/llvm-project/blob/9d0616ce52fc2a75c8e4808adec41d5189f4240c/compiler-rt/lib/sanitizer_common/sanitizer_interface_internal.h#L70
     #[cfg(sanitize = "address")]
     fn __sanitizer_annotate_contiguous_container(
@@ -138,15 +138,15 @@ impl<T> vector<T> {
 
     /// Sets the begin, len and capacity of the vector.
     ///
-    /// This function overrides the pointer `self.begin` w/o deleting the
+    /// This function overrides the pointer `self.begin` without deleting the
     /// pointed memory. That is the responsibility of the caller to ensure that
     /// no leaks occur.
     ///
+    /// If `capacity` is 0, `begin` is assumed to be a non-allocated pointer, such
+    /// as null or `NonNull::dangling()`. If it was allocated, it will be leaked.
+    ///
     /// # Safety
     ///
-    /// - `begin` must be a null and (len == capacity == 0) or  `begin` must be
-    ///   a valid pointer and the memory pointed by `begin` must be allocated
-    ///   with `StdAllocator`.
     /// - `len` must be less than or equal to `capacity`.
     /// - The first `len` values must be properly initialized values of type
     ///   `T`.
@@ -162,7 +162,11 @@ impl<T> vector<T> {
     /// allocated via Vec<T, StdAllocator> and the corresponding Vec is
     /// forgotten after the call of this function. It follows by the properties
     /// of the `Vec`.
-    unsafe fn set_begin_len_capacity(&mut self, begin: *mut T, len: usize, capacity: usize) {
+    unsafe fn set_begin_len_capacity(&mut self, mut begin: *mut T, len: usize, capacity: usize) {
+        if capacity == 0 {
+            // The capacity ptr is a useless value like NonNull::dangling(), but C++ requires null.
+            begin = core::ptr::null_mut();
+        }
         #[cfg(feature = "len_capacity_encoding")]
         {
             self.begin = begin as *const _;
@@ -654,7 +658,7 @@ unsafe fn create_vec_from_raw_parts<T>(
     if begin.is_null() {
         Vec::new_in(cpp_std_allocator::StdAllocator {})
     } else {
-        Vec::from_raw_parts_in(begin, len, capacity, cpp_std_allocator::StdAllocator {})
+        unsafe { Vec::from_raw_parts_in(begin, len, capacity, cpp_std_allocator::StdAllocator {}) }
     }
 }
 

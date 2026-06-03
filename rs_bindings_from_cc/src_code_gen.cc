@@ -5,73 +5,63 @@
 #include "rs_bindings_from_cc/src_code_gen.h"
 
 #include <string>
+#include <utility>
 
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/string_view.h"
-#include "common/ffi_types.h"
-#include "common/status_macros.h"
+#include "rs_bindings_from_cc/generate_bindings/generate_bindings.pb.h"
 #include "rs_bindings_from_cc/ir.h"
+#include "rs_bindings_from_cc/ir.pb.h"
+#include "rs_bindings_from_cc/src_code_gen_ffi.h"
 #include "llvm/Support/FormatVariadic.h"
 
 namespace crubit {
 
-// FFI equivalent of `Bindings`.
-struct FfiBindings {
-  FfiU8SliceBox rs_api;
-  FfiU8SliceBox rs_api_impl;
-  FfiU8SliceBox error_report;
-  FfiU8SliceBox fatal_errors;
-};
-
-// This function is implemented in Rust.
-extern "C" FfiBindings GenerateBindingsImpl(
-    FfiU8Slice json, FfiU8Slice crubit_support_path_format,
-    FfiU8Slice clang_format_exe_path, FfiU8Slice rustfmt_exe_path,
-    FfiU8Slice rustfmt_config_path, bool generate_error_report,
-    Environment environment);
-
-// Creates `Bindings` instance from copied data from `ffi_bindings`.
-static absl::StatusOr<Bindings> MakeBindingsFromFfiBindings(
-    const FfiBindings& ffi_bindings) {
-  Bindings bindings;
-
-  const FfiU8SliceBox& fatal_errors = ffi_bindings.fatal_errors;
-  std::string fatal_errors_string(fatal_errors.ptr, fatal_errors.size);
-  if (!fatal_errors_string.empty()) {
-    return absl::InvalidArgumentError(fatal_errors_string);
-  }
-
-  const FfiU8SliceBox& rs_api = ffi_bindings.rs_api;
-  const FfiU8SliceBox& rs_api_impl = ffi_bindings.rs_api_impl;
-  const FfiU8SliceBox& error_report = ffi_bindings.error_report;
-
-  bindings.rs_api = std::string(rs_api.ptr, rs_api.size);
-  bindings.rs_api_impl = std::string(rs_api_impl.ptr, rs_api_impl.size);
-  bindings.error_report = std::string(error_report.ptr, error_report.size);
-  return bindings;
-}
-
-// Deallocates given `ffi_bindings` instance that was created in Rust.
-static void FreeFfiBindings(FfiBindings ffi_bindings) {
-  FreeFfiU8SliceBox(ffi_bindings.rs_api);
-  FreeFfiU8SliceBox(ffi_bindings.rs_api_impl);
-  FreeFfiU8SliceBox(ffi_bindings.error_report);
-}
+using rs_bindings_from_cc::generate_bindings::GenerateBindingsRequest;
+using rs_bindings_from_cc::generate_bindings::GenerateBindingsResponse;
+using rs_bindings_from_cc::ir_proto::flat::IRProto;
 
 absl::StatusOr<Bindings> GenerateBindings(
     const IR& ir, absl::string_view crubit_support_path_format,
     absl::string_view clang_format_exe_path, absl::string_view rustfmt_exe_path,
     absl::string_view rustfmt_config_path, bool generate_error_report,
-    Environment environment) {
-  std::string json = llvm::formatv("{0}", ir.ToJson());
-  FfiBindings ffi_bindings = GenerateBindingsImpl(
-      MakeFfiU8Slice(json), MakeFfiU8Slice(crubit_support_path_format),
-      MakeFfiU8Slice(clang_format_exe_path), MakeFfiU8Slice(rustfmt_exe_path),
-      MakeFfiU8Slice(rustfmt_config_path), generate_error_report, environment);
-  CRUBIT_ASSIGN_OR_RETURN(Bindings bindings,
-                          MakeBindingsFromFfiBindings(ffi_bindings));
-  FreeFfiBindings(ffi_bindings);
+    bool is_golden_test, bool kythe_annotations,
+    absl::string_view kythe_default_corpus) {
+  GenerateBindingsRequest request;
+
+  bool use_protobuf_ir = false;
+  if (auto it = ir.crubit_features.find(ir.current_target);
+      it != ir.crubit_features.end()) {
+    use_protobuf_ir = it->second.contains("use_protobuf_ir");
+  }
+
+  if (use_protobuf_ir) {
+    // TODO(rrijadi): Populate with `ir.ToProto()` once implemented.
+    rs_bindings_from_cc::ir_proto::flat::IRProto ir_proto;
+    *request.mutable_ir_proto() = ir_proto;
+  } else {
+    request.set_json(llvm::formatv("{0}", ir.ToJson()));
+  }
+  request.set_crubit_support_path_format(crubit_support_path_format);
+  request.set_clang_format_exe_path(clang_format_exe_path);
+  request.set_rustfmt_exe_path(rustfmt_exe_path);
+  request.set_rustfmt_config_path(rustfmt_config_path);
+  request.set_generate_error_report(generate_error_report);
+  request.set_is_golden_test(is_golden_test);
+  request.set_kythe_annotations(kythe_annotations);
+  request.set_kythe_default_corpus(kythe_default_corpus);
+
+  GenerateBindingsResponse response = GenerateBindingsProtoCall(request);
+
+  if (!response.fatal_errors().empty()) {
+    return absl::InvalidArgumentError(response.fatal_errors());
+  }
+
+  Bindings bindings;
+  bindings.rs_api = response.rs_api();
+  bindings.rs_api_impl = response.rs_api_impl();
+  bindings.error_report = response.error_report();
   return bindings;
 }
 

@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:typedefs_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
@@ -38,33 +39,12 @@ impl Default for SomeStruct {
     }
 }
 
-// Error while generating bindings for constructor 'SomeStruct::SomeStruct':
-// Can't generate bindings for SomeStruct::SomeStruct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeStruct::SomeStruct (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for constructor 'SomeStruct::SomeStruct':
-// Can't generate bindings for SomeStruct::SomeStruct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeStruct::SomeStruct (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SomeStruct::operator=':
-// Can't generate bindings for SomeStruct::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeStruct::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeStruct::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SomeStruct::operator=':
-// Can't generate bindings for SomeStruct::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeStruct::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeStruct::operator= (the type of __param_0 (parameter #1): references are not supported)
-
 pub mod some_struct {
-    #[allow(unused_imports)]
-    use super::*;
-
-    pub type nested_type = ::core::ffi::c_int;
+    pub type nested_type = ::ffi_11::c_int;
 }
 
-// Error while generating bindings for type alias 'SomeStruct':
-// Typedef only used to introduce a name in C. Not importing.
+// error: type alias `SomeStruct` could not be bound
+//   Typedef only used to introduce a name in C. Not importing.
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -90,24 +70,10 @@ impl Default for SomeOtherStruct {
     }
 }
 
-// Error while generating bindings for constructor 'SomeOtherStruct::SomeOtherStruct':
-// Can't generate bindings for SomeOtherStruct::SomeOtherStruct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherStruct::SomeOtherStruct (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for constructor 'SomeOtherStruct::SomeOtherStruct':
-// Can't generate bindings for SomeOtherStruct::SomeOtherStruct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherStruct::SomeOtherStruct (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SomeOtherStruct::operator=':
-// Can't generate bindings for SomeOtherStruct::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherStruct::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherStruct::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SomeOtherStruct::operator=':
-// Can't generate bindings for SomeOtherStruct::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherStruct::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherStruct::operator= (the type of __param_0 (parameter #1): references are not supported)
-
+/// # Safety
+///
+/// To call a function that accepts this type, you must uphold these requirements:
+/// * The callee does not read an incorrect field out of the union.
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=SomeUnion
@@ -132,27 +98,13 @@ impl Default for SomeUnion {
     }
 }
 
-// Error while generating bindings for constructor 'SomeUnion::SomeUnion':
-// Can't generate bindings for SomeUnion::SomeUnion, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeUnion::SomeUnion (the type of __param_0 (parameter #1): references are not supported)
+// error: type alias `SomeUnion` could not be bound
+//   Typedef only used to introduce a name in C. Not importing.
 
-// Error while generating bindings for constructor 'SomeUnion::SomeUnion':
-// Can't generate bindings for SomeUnion::SomeUnion, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeUnion::SomeUnion (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SomeUnion::operator=':
-// Can't generate bindings for SomeUnion::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeUnion::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeUnion::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SomeUnion::operator=':
-// Can't generate bindings for SomeUnion::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeUnion::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeUnion::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for type alias 'SomeUnion':
-// Typedef only used to introduce a name in C. Not importing.
-
+/// # Safety
+///
+/// To call a function that accepts this type, you must uphold these requirements:
+/// * The callee does not read an incorrect field out of the union.
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=SomeOtherUnion
@@ -176,24 +128,6 @@ impl Default for SomeOtherUnion {
         }
     }
 }
-
-// Error while generating bindings for constructor 'SomeOtherUnion::SomeOtherUnion':
-// Can't generate bindings for SomeOtherUnion::SomeOtherUnion, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherUnion::SomeOtherUnion (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for constructor 'SomeOtherUnion::SomeOtherUnion':
-// Can't generate bindings for SomeOtherUnion::SomeOtherUnion, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherUnion::SomeOtherUnion (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SomeOtherUnion::operator=':
-// Can't generate bindings for SomeOtherUnion::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherUnion::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherUnion::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SomeOtherUnion::operator=':
-// Can't generate bindings for SomeOtherUnion::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherUnion::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:typedefs_cc needs [//features:experimental] for SomeOtherUnion::operator= (the type of __param_0 (parameter #1): references are not supported)
 
 #[inline(always)]
 pub fn FunctionUsingNestedType() -> crate::some_struct::nested_type {

@@ -5,6 +5,7 @@
 #include "rs_bindings_from_cc/importers/function.h"
 
 #include <algorithm>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -12,11 +13,16 @@
 #include <variant>
 #include <vector>
 
+#include "clang/Sema/Initialization.h"
+#include "clang/Sema/Template.h"
+#include "absl/algorithm/container.h"
 #include "absl/container/btree_set.h"
+#include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
 #include "absl/strings/str_cat.h"
+#include "absl/strings/str_join.h"
 #include "common/annotation_reader.h"
 #include "lifetime_annotations/lifetime.h"
 #include "lifetime_annotations/lifetime_annotations.h"
@@ -32,6 +38,10 @@
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclCXX.h"
+#include "clang/AST/DeclarationName.h"
+#include "clang/AST/Expr.h"
+#include "clang/AST/ExprCXX.h"
+#include "clang/AST/RecursiveASTVisitor.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/Diagnostic.h"
 #include "clang/Basic/DiagnosticIDs.h"
@@ -66,7 +76,7 @@ SafetyAnnotation GetCrubitSafetyAnnotation(const clang::Decl& decl,
   absl::StatusOr<std::optional<AnnotateArgs>> maybe_args =
       GetAnnotateAttrArgs(decl, "crubit_override_unsafe");
   if (!maybe_args.ok()) {
-    errors.AddStatus(maybe_args.status());
+    errors.AddStatus(std::move(maybe_args).status());
     return SafetyAnnotation::kUnannotated;
   }
   if (!maybe_args->has_value()) {
@@ -81,29 +91,41 @@ SafetyAnnotation GetCrubitSafetyAnnotation(const clang::Decl& decl,
   absl::StatusOr<bool> is_unsafe =
       GetExprAsBool(*args[0], decl.getASTContext());
   if (!is_unsafe.ok()) {
-    errors.AddStatus(is_unsafe.status());
+    errors.AddStatus(std::move(is_unsafe).status());
     return SafetyAnnotation::kUnannotated;
-  }
-  if (*is_unsafe) {
+  } else if (*is_unsafe) {
     return SafetyAnnotation::kUnsafe;
   } else {
     return SafetyAnnotation::kDisableUnsafe;
   }
 }
 
-SafetyAnnotation GetSafetyAnnotation(const clang::Decl& decl, Errors& errors) {
-  SafetyAnnotation crubit = GetCrubitSafetyAnnotation(decl, errors);
-  if (!decl.specific_attrs<clang::UnsafeBufferUsageAttr>().empty()) {
-    if (crubit == SafetyAnnotation::kUnannotated ||
-        crubit == SafetyAnnotation::kUnsafe) {
-      return SafetyAnnotation::kUnsafe;
-    } else {
-      errors.Add(FormattedError::Static(
-          "Function is annotated with both `[[clang::unsafe_buffer_usage]]` "
-          "and `CRUBIT_UNSAFE`"));
-    }
+template <typename Attr>
+void CollectUnsafeAttr(const clang::Decl& decl, Errors& errors, bool is_safe,
+                       SafetyAnnotation& safety) {
+  auto attrs = decl.specific_attrs<Attr>();
+  if (attrs.empty()) {
+    return;
   }
-  return crubit;
+  if (is_safe) {
+    errors.Add(
+        FormattedError::Substitute("Function is annotated with both `$0` and "
+                                   "`CRUBIT_OVERRIDE_UNSAFE(false)`",
+                                   attrs.begin()->getSpelling()));
+    return;
+  }
+  safety = SafetyAnnotation::kUnsafe;
+}
+
+SafetyAnnotation GetSafetyAnnotation(const clang::Decl& decl, Errors& errors) {
+  SafetyAnnotation safety = GetCrubitSafetyAnnotation(decl, errors);
+  bool is_safe = safety == SafetyAnnotation::kDisableUnsafe;
+  CollectUnsafeAttr<clang::UnsafeBufferUsageAttr>(decl, errors, is_safe,
+                                                  safety);
+
+  CollectUnsafeAttr<clang::RequiresCapabilityAttr>(decl, errors, is_safe,
+                                                   safety);
+  return safety;
 }
 
 // Applies the ref qualifier to the `this` pointer.
@@ -112,15 +134,16 @@ SafetyAnnotation GetSafetyAnnotation(const clang::Decl& decl, Errors& errors) {
 // type of `f` will result in a pointer type, even though the method is rvalue
 // ref qualified and has a lifetime. This function will update the `this`
 // parameter type to be an rvalue reference instead.
-void ApplyRefQualifierToThisPointer(
-    CcType& this_param_type, clang::RefQualifierKind ref_qualifier_kind) {
+void ApplyRefQualifierToThisPointer(CcType& this_param_type,
+                                    clang::RefQualifierKind ref_qualifier_kind,
+                                    bool assumed_lifetimes_enabled) {
   auto* pointer = std::get_if<CcType::PointerType>(&this_param_type.variant);
   // The CcType of `this` should always be a pointer.
   CHECK(pointer != nullptr);
 
   // Now we go back and fix the `this` parameter type to be a reference
   // if it was a rvalue ref qualified and had a lifetime.
-  if (pointer->lifetime.has_value() &&
+  if ((assumed_lifetimes_enabled || pointer->lifetime.has_value()) &&
       ref_qualifier_kind == clang::RefQualifierKind::RQ_RValue) {
     // It was just a non null pointer, but because of the rvalue ref
     // qualification, it should be an rvalue reference.
@@ -160,17 +183,214 @@ Identifier FunctionDeclImporter::GetTranslatedParamName(
   return Identifier(std::string((*name).rs_identifier().Ident()));
 }
 
+namespace {
+
+bool FunctionNameIsIdentifier(clang::FunctionDecl& function_decl) {
+  return function_decl.getDeclName().getNameKind() ==
+         clang::DeclarationName::Identifier;
+}
+
+// Attempts to define the implicit/default function `function_decl`. Has no
+// effect if `function_decl` is not an interesting special member or is not
+// implicit. Returns `false` if there were errors defining the function
+// (e.g., an implicit copy constructor could rely on a deleted copy constructor
+// for a member variable).
+bool ForceDefineImplicitFunction(ImportContext& ictx,
+                                 clang::FunctionDecl* function_decl) {
+  if (auto defaulted_kind = ictx.sema_.getDefaultedFunctionKind(function_decl);
+      defaulted_kind.isSpecialMember()) {
+    auto special_member_kind = defaulted_kind.asSpecialMember();
+    if (!function_decl->isDeleted() && function_decl->isImplicit() &&
+        !function_decl->doesThisDeclarationHaveABody()) {
+      crubit::RecordingDiagnosticConsumer diagnostic_recorder =
+          crubit::RecordDiagnostics(ictx.sema_.getDiagnostics(), [&] {
+            FakeTUScope fake_tu_scope(ictx);
+            clang::Sema::SynthesizedFunctionScope synthesized_function_scope(
+                ictx.sema_, function_decl);
+            // This is slightly different from DefineDefaultedFunction in that
+            // we only consider certain special member kinds and we clear
+            // the WillHaveBody flag. (We also run it in our diagnostic
+            // sandbox.)
+            switch (special_member_kind) {
+              case clang::CXXSpecialMemberKind::CopyAssignment:
+                function_decl->setWillHaveBody(false);
+                ictx.sema_.DefineImplicitCopyAssignment(
+                    function_decl->getLocation(),
+                    cast<clang::CXXMethodDecl>(function_decl));
+                break;
+              case clang::CXXSpecialMemberKind::MoveAssignment:
+                function_decl->setWillHaveBody(false);
+                ictx.sema_.DefineImplicitMoveAssignment(
+                    function_decl->getLocation(),
+                    cast<clang::CXXMethodDecl>(function_decl));
+                break;
+              case clang::CXXSpecialMemberKind::MoveConstructor:
+                function_decl->setWillHaveBody(false);
+                ictx.sema_.DefineImplicitMoveConstructor(
+                    function_decl->getLocation(),
+                    cast<clang::CXXConstructorDecl>(function_decl));
+                break;
+              case clang::CXXSpecialMemberKind::CopyConstructor:
+                function_decl->setWillHaveBody(false);
+                ictx.sema_.DefineImplicitCopyConstructor(
+                    function_decl->getLocation(),
+                    cast<clang::CXXConstructorDecl>(function_decl));
+                break;
+              default:
+                break;
+            }
+          });
+      if (diagnostic_recorder.getNumErrors() != 0) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
+// Checks to see if `function_decl` can reach an invalid template instantiation
+// or an invalid default/implicit member (including if `function_decl` itself
+// is invalid). Returns the fully-qualified name of the first invalid decl
+// reached (suitable for including in a diagnostic message). Returns the empty
+// string if no such decl was found.
+//
+// Clang won't diagnose invalid template declarations multiple times, but we
+// can crawl over the syntax tree to determine if a template instantiation will
+// be invalid because it transitively reaches an invalid declaration.
+//
+// Note that we only need to recurse on template instantiations. Concrete
+// declaration instances can't hide like templates can.
+//
+// TODO(zarko): Should we ForceDefineImplicitFunction each function we
+// encounter?
+std::string GetInvalidCallTarget(ImportContext& ictx,
+                                 clang::FunctionDecl* function_decl) {
+  std::string invalid_decl_name;
+  absl::flat_hash_set<clang::FunctionDecl*> visited_decls;
+  struct BodyVisitor : public clang::RecursiveASTVisitor<BodyVisitor> {
+    std::string& invalid_decl_name;
+    absl::flat_hash_set<clang::FunctionDecl*>& visited_decls;
+    ImportContext& ictx;
+    clang::NamedDecl* blame_decl;
+    BodyVisitor(std::string& invalid_decl_name,
+                absl::flat_hash_set<clang::FunctionDecl*>& visited_decls,
+                ImportContext& ictx, clang::NamedDecl* blame_decl)
+        : invalid_decl_name(invalid_decl_name),
+          visited_decls(visited_decls),
+          ictx(ictx),
+          blame_decl(blame_decl) {}
+    bool VisitCXXConstructExpr(clang::CXXConstructExpr* expr) {
+      if (auto* mfn = clang::dyn_cast<clang::CXXConstructorDecl>(
+              expr->getConstructor())) {
+        if (mfn->isTemplateInstantiation()) {
+          if (mfn->isInvalidDecl() || mfn->isDeleted()) {
+            invalid_decl_name = mfn->getQualifiedNameAsString();
+            return false;
+          }
+          if (mfn->getBody() != nullptr) {
+            if (visited_decls.contains(mfn)) {
+              return true;
+            }
+            visited_decls.insert(mfn);
+            BodyVisitor really_recurse(invalid_decl_name, visited_decls, ictx,
+                                       blame_decl);
+            really_recurse.TraverseDecl(mfn);
+          }
+        }
+      }
+      return true;
+    }
+    bool VisitMemberExpr(clang::MemberExpr* expr) {
+      if (auto* mfn =
+              clang::dyn_cast<clang::CXXMethodDecl>(expr->getMemberDecl())) {
+        if (mfn->isTemplateInstantiation()) {
+          if (mfn->isInvalidDecl()) {
+            invalid_decl_name = mfn->getQualifiedNameAsString();
+            return false;
+          }
+          if (mfn->getBody() != nullptr) {
+            if (visited_decls.contains(mfn)) {
+              return true;
+            }
+            visited_decls.insert(mfn);
+            BodyVisitor really_recurse(invalid_decl_name, visited_decls, ictx,
+                                       blame_decl);
+            really_recurse.TraverseStmt(mfn->getBody());
+          }
+        }
+      }
+      return true;
+    }
+    bool VisitStaticAssertDecl(clang::StaticAssertDecl* decl) {
+      if (decl->isFailed()) {
+        invalid_decl_name = blame_decl->getQualifiedNameAsString();
+        return false;
+      }
+      return true;
+    }
+    bool VisitRecoveryExpr(clang::RecoveryExpr* expr) {
+      // Clang appears to insert a RecoveryExpr in template bodies that fail
+      // to instantiate properly.
+      if (expr->containsErrors()) {
+        invalid_decl_name = blame_decl->getQualifiedNameAsString();
+        return false;
+      }
+      return true;
+    }
+    bool VisitDeclRefExpr(clang::DeclRefExpr* expr) {
+      if (auto* fn = clang::dyn_cast<clang::FunctionDecl>(expr->getDecl())) {
+        if (fn->isTemplateInstantiation()) {
+          if (fn->isInvalidDecl()) {
+            invalid_decl_name = fn->getQualifiedNameAsString();
+            return false;
+          }
+          if (fn->getBody() != nullptr) {
+            if (visited_decls.contains(fn)) {
+              return true;
+            }
+            visited_decls.insert(fn);
+            BodyVisitor really_recurse(invalid_decl_name, visited_decls, ictx,
+                                       blame_decl);
+            really_recurse.TraverseStmt(fn->getBody());
+          }
+        }
+      }
+      return true;
+    }
+  } visitor(invalid_decl_name, visited_decls, ictx, function_decl);
+  auto qnas = function_decl->getQualifiedNameAsString();
+  if (!ForceDefineImplicitFunction(ictx, function_decl)) {
+    return qnas;
+  }
+  if (function_decl->isInvalidDecl()) {
+    return qnas;
+  }
+  if (function_decl->getBody() != nullptr) {
+    visitor.TraverseStmt(function_decl->getBody());
+  }
+  return invalid_decl_name;
+}
+}  // namespace
+
 std::optional<IR::Item> FunctionDeclImporter::Import(
     clang::FunctionDecl* function_decl) {
   if (!ictx_.IsFromCurrentTarget(function_decl)) return std::nullopt;
   if (function_decl->isDeleted()) return std::nullopt;
+  const bool only_import_types =
+      ictx_.IsFeatureEnabledForCurrentTarget("types") &&
+      !ictx_.IsFeatureEnabledForCurrentTarget("supported");
+  if (!must_bind_ && only_import_types &&
+      FunctionNameIsIdentifier(*function_decl)) {
+    return std::nullopt;
+  }
   if (IsInStdNamespace(function_decl)) {
     if (clang::IdentifierInfo* id = function_decl->getIdentifier();
         id != nullptr && id->getName().find("__") != llvm::StringRef::npos) {
       return ictx_.ImportUnsupportedItem(
           *function_decl, std::nullopt,
-          FormattedError::Static("Internal functions from the standard "
-                                 "library are not supported"));
+          {FormattedError::Static("Internal functions from the standard "
+                                  "library are not supported")},
+          must_bind_);
     }
   }
   // Method is private, we don't need to import it.
@@ -183,7 +403,7 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
       case clang::AS_private:
       case clang::AS_none:
         // No need for IR to include Func representing private methods.
-        // TODO(lukasza): Revisit this for protected methods.
+        // TODO(b/475810473): Revisit this for protected methods.
         return std::nullopt;
     }
   }
@@ -193,15 +413,17 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
   if (!translated_name.ok()) {
     return ictx_.ImportUnsupportedItem(
         *function_decl, std::nullopt,
-        FormattedError::PrefixedStrCat("Function name is not supported",
-                                       translated_name.status().message()));
+        {FormattedError::PrefixedStrCat("Function name is not supported",
+                                        translated_name.status().message())},
+        must_bind_);
   }
 
   auto enclosing_item_id = ictx_.GetEnclosingItemId(function_decl);
   if (!enclosing_item_id.ok()) {
     return ictx_.ImportUnsupportedItem(
         *function_decl, std::nullopt,
-        FormattedError::FromStatus(std::move(enclosing_item_id.status())));
+        {FormattedError::FromStatus(std::move(enclosing_item_id).status())},
+        must_bind_);
   }
 
   // Reports an unsupported function with the given error.
@@ -213,9 +435,9 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
                       function_decl](FormattedError error) {
     return ictx_.ImportUnsupportedItem(
         *function_decl,
-        UnsupportedItem::Path{.ident = (*translated_name).cc_identifier,
+        UnsupportedItem::Path{.ident = translated_name->cc_identifier,
                               .enclosing_item_id = *enclosing_item_id},
-        error);
+        {std::move(error)}, must_bind_);
   };
 
   // We should only import methods of class template specializations
@@ -227,79 +449,88 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
   clang::FunctionDecl* template_decl_for_method =
       function_decl->getInstantiatedFromMemberFunction();
   if (template_decl_for_method) {
-    // Some methods in STL are explicitly marked with
-    // `__attribute__((exclude_from_explicit_instantiation))`, and attempt to
-    // instantiate them may crash clang, so we skip them for now.
-    bool skip_instantiation = false;
-    if (template_decl_for_method->hasAttrs()) {
-      skip_instantiation = std::any_of(
-          function_decl->attr_begin(), function_decl->attr_end(),
-          [](auto attr) {
-            return clang::isa<clang::ExcludeFromExplicitInstantiationAttr>(
-                attr);
-          });
+    if (!ictx_.invocation_.should_instantiate_template_from_path(
+            ictx_.sema_.getSourceManager(),
+            template_decl_for_method->getLocation())) {
+      return unsupported(FormattedError::Static(
+          "Function template instantiation forbidden by blocklist"));
     }
-    if (!function_decl->isDefined() && !skip_instantiation) {
-      // Here, we have the option to instantiate the function
-      // definition recursively, that is, to instantiate the function
-      // templates invoked within the (templated) body. This checks the
-      // validity of the function template more thoroughly than simply
-      // ensuring the type of the invoked function template is correct: e.g.,
-      // If `Recursive` is set, a diagnostic would be emitted if the function
-      // template invoked in the body fails to instantiate (e.g., due to a
-      // static_assert) but still passes type checking. However, this has the
-      // side effect of actually instantiating the invoked function template
-      // and the invoked function template would be considered "defined", so
-      // we wouldn't be able to get diagnostics when actually importing the
-      // invoked function template.
-      // TODO(b/248542210): Propagate the validity check of function templates
-      // in a function template body.
-      // TODO(b/248542210): `clang::Sema::InstantiateClassMembers` checks more
-      // constraints (than here) when instantiating the methods, consider use
-      // that API instead (and avoid calling `InstantiateFunctionDefinition`
-      // here). We don't use it now because we cannot clearly attribute
-      // emitted diagnostics to a member decl (we need diagnostics because the
-      // decl may be considered valid `!decl->isInvalidDecl()` while its
-      // instantiation may fail.)
-      auto point_of_instantiation = function_decl->getPointOfInstantiation();
-      // Point of instantiation is invalid if Crubit is eagerly
-      // instantiating a method of a class template specialization.
-      if (point_of_instantiation.isInvalid()) {
-        point_of_instantiation = function_decl->getLocation();
-      }
-      crubit::RecordingDiagnosticConsumer diagnostic_recorder =
-          crubit::RecordDiagnostics(ictx_.sema_.getDiagnostics(), [&] {
-            // Generally, clang is able to instantiate templates like this even
-            // after parsing completes. However, in rare cases it accesses
-            // transient parsing state (Scope) which was already cleaned up.
-            //
-            // HACK: We need to create a fake TU scope to avoid a crash in
-            // `clang::Sema::InstantiateFunctionDefinition` when it tries to
-            // access the translation unit scope, which it incorrectly assumes
-            // is always non-null. This should be fixed in clang.
-            //
-            // Specifically, the crash happens when Crubit instantiates a
-            // class template with a defaulted copy constructor, introducing
-            // lazily-injected builtins such as `memcpy` to be introduced to the
-            // TU scope.
-            //
-            // See b/401857961 where this was observed and cl/265779405 where a
-            // similar issue was fixed in CLIF.
-            FakeTUScope fake_tu_scope(ictx_);
-            ictx_.sema_.InstantiateFunctionDefinition(point_of_instantiation,
-                                                      function_decl);
-          });
-      std::string diagnostics =
-          diagnostic_recorder.ConcatenatedDiagnostics("Diagnostics emitted:\n");
-      if (diagnostic_recorder.getNumErrors() != 0) {
-        // Clang considers the function decl valid even fatal diagnostics is
-        // emitted during instantiation. However, such diagnostics would fail
-        // compilation of generated bindings, so it's invalid as far as Crubit
-        // is concerned, thus set it as invalid here.
-        function_decl->setInvalidDecl();
-        return unsupported(FormattedError::PrefixedStrCat(
-            "Failed to instantiate the function/method template", diagnostics));
-      }
+    // It turns out that some of the functions marked with
+    // `__attribute__((exclude_from_explicit_instantiation))` can cause us to
+    // generate invalid bindings. For example, std::forward_list::sort() is
+    // marked with _LIBCPP_HIDE_FROM_ABI (which includes
+    // exclude_from_explicit_instantiations); sort() does not compile for types
+    // that don't work with __less<>(). Previously, we avoided instantiating
+    // these entirely because of some alleged instability in clang (though we
+    // still tried to generate bindings for them!).
+    //
+    // We can either instantiate these functions (as we do now) or possibly
+    // allowlist them. We can't just unconditionally try to bind them because
+    // we will generate bad code.
+    //
+    // Note that inline definitions (`void sort() { sort(__less<>()); }`)
+    // are considered to be "defined" even if we don't try and instantiate
+    // their dependencies.
+    //
+    // We attempt to instantiate as many transitive templates as we can.
+    // The first time a template is instantiated, we'll get diagnostics from
+    // Clang (for substitution failure, bad static_asserts, etc). We only get
+    // these once. However, we can (and, as it turns out, we must) still crawl
+    // the AST of already-instantiated templates to check for error conditions.
+    //
+    // We have also explored using typechecking functions in Sema directly to
+    // detect bad instantiations (e.g., by building up a function definition
+    // that looks exactly like a Crubit thunk and trying to typecheck that).
+    // This does not work, presumably because Clang does not re-check for
+    // deeply broken instantiations (like ones that have RecoveryExprs in them)
+    // until some subsequent full AST traversal like lowering to LLVM.
+    auto point_of_instantiation = function_decl->getPointOfInstantiation();
+    // Point of instantiation is invalid if Crubit is eagerly
+    // instantiating a method of a class template specialization.
+    if (point_of_instantiation.isInvalid()) {
+      point_of_instantiation = function_decl->getLocation();
+    }
+    crubit::RecordingDiagnosticConsumer diagnostic_recorder =
+        crubit::RecordDiagnostics(ictx_.sema_.getDiagnostics(), [&] {
+          // Generally, clang is able to instantiate templates like this even
+          // after parsing completes. However, in rare cases it accesses
+          // transient parsing state (Scope) which was already cleaned up.
+          //
+          // HACK: We need to create a fake TU scope to avoid a crash in
+          // `clang::Sema::InstantiateFunctionDefinition` when it tries to
+          // access the translation unit scope, which it incorrectly assumes
+          // is always non-null. This should be fixed in clang.
+          //
+          // Specifically, the crash happens when Crubit instantiates a
+          // class template with a defaulted copy constructor, introducing
+          // lazily-injected builtins such as `memcpy` to be introduced to the
+          // TU scope.
+          //
+          // See b/401857961 where this was observed and cl/265779405 where a
+          // similar issue was fixed in CLIF.
+          FakeTUScope fake_tu_scope(ictx_);
+          ictx_.sema_.InstantiateFunctionDefinition(point_of_instantiation,
+                                                    function_decl);
+          // Check that any newly discovered dependencies can be instantiated.
+          ictx_.sema_.PerformPendingInstantiations();
+        });
+    std::string diagnostics =
+        diagnostic_recorder.ConcatenatedDiagnostics("Diagnostics emitted:\n");
+    if (diagnostic_recorder.getNumErrors() != 0) {
+      // Clang considers the function decl valid even fatal diagnostics is
+      // emitted during instantiation. However, such diagnostics would fail
+      // compilation of generated bindings, so it's invalid as far as Crubit
+      // is concerned, thus set it as invalid here.
+      function_decl->setInvalidDecl();
+      return unsupported(FormattedError::PrefixedStrCat(
+          "Failed to instantiate the function/method template", diagnostics));
+    } else if (auto invalid_decl_name =
+                   GetInvalidCallTarget(ictx_, function_decl);
+               !invalid_decl_name.empty()) {
+      // TODO(zarko): This error message doesn't appear in the output code,
+      return unsupported(FormattedError::PrefixedStrCat(
+          "Instantiating this template relies on an invalid decl",
+          invalid_decl_name));
     }
   }
   if (function_decl->isInvalidDecl()) {
@@ -307,75 +538,76 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
         FormattedError::Static("Function declaration is considered invalid"));
   }
   // See DefineDefaultedFunction in SemaDeclCXX.cpp.
-  // TODO: b/436870965 - This is intentionally very narrow in scope (just for
-  // copy assignments) right now.
+  // TODO(zarko): This is intentionally very narrow in scope (just for
+  // copy assignments) right now. See b/436870965.
   if (auto defaulted_kind = ictx_.sema_.getDefaultedFunctionKind(function_decl);
       defaulted_kind.isSpecialMember()) {
-    auto special_member_kind = defaulted_kind.asSpecialMember();
-    if (special_member_kind == clang::CXXSpecialMemberKind::CopyAssignment &&
-        !function_decl->isDeleted() && function_decl->isImplicit() &&
-        !function_decl->doesThisDeclarationHaveABody()) {
-      crubit::RecordingDiagnosticConsumer diagnostic_recorder =
-          crubit::RecordDiagnostics(ictx_.sema_.getDiagnostics(), [&] {
-            if (auto* mutable_method =
-                    dyn_cast<clang::CXXMethodDecl>(function_decl);
-                mutable_method != nullptr) {
-              FakeTUScope fake_tu_scope(ictx_);
-              clang::Sema::SynthesizedFunctionScope synthesized_function_scope(
-                  ictx_.sema_, mutable_method);
-              // TODO: b/436870965 - Strangely, clang has this flag set on
-              // an unused implicit default operator=. Should we undo the
-              // changes after running DefineImplicitCopyAssignment (i.e.,
-              // delete the body and restore the flag)?
-              mutable_method->setWillHaveBody(false);
-              ictx_.sema_.DefineImplicitCopyAssignment(
-                  function_decl->getLocation(), mutable_method);
+    // TODO(zarko): Possibly eliminate a redundant check here (have we done this
+    // already if function_decl is a function template that is also defaulted?)
+    if (auto target = GetInvalidCallTarget(ictx_, function_decl);
+        !target.empty()) {
+      return unsupported(FormattedError::PrefixedStrCat(
+          "Defaulted function relies on an invalid decl", target));
+    }
+  }
+
+  bool assumed_lifetimes_enabled = ictx_.AreAssumedLifetimesEnabledForTarget(
+      ictx_.GetOwningTarget(function_decl));
+  clang::tidy::lifetimes::LifetimeSymbolTable lifetime_symbol_table;
+  std::optional<clang::tidy::lifetimes::FunctionLifetimes> lifetimes;
+  std::vector<std::string> lifetime_inputs;
+  Errors errors;
+
+  if (assumed_lifetimes_enabled) {
+    auto lifetime_inputs_or_err =
+        CollectLifetimeInputs(ictx_.sema_.getASTContext(), function_decl);
+    if (!lifetime_inputs_or_err.ok()) {
+      errors.Add(FormattedError::FromStatus(
+          std::move(lifetime_inputs_or_err).status()));
+    } else {
+      lifetime_inputs.reserve(lifetime_inputs_or_err->size());
+      absl::c_transform(*lifetime_inputs_or_err,
+                        std::back_inserter(lifetime_inputs),
+                        [](absl::string_view lifetime_view) {
+                          return std::string(lifetime_view);
+                        });
+    }
+  } else {
+    llvm::Expected<clang::tidy::lifetimes::FunctionLifetimes> lifetimes_or_err =
+        clang::tidy::lifetimes::GetLifetimeAnnotations(
+            function_decl, *ictx_.invocation_.lifetime_context_,
+            &lifetime_symbol_table);
+    if (lifetimes_or_err) {
+      lifetimes = std::move(*lifetimes_or_err);
+    } else {
+      using clang::tidy::lifetimes::LifetimeError;
+      llvm::Error remaining_err = llvm::handleErrors(
+          lifetimes_or_err.takeError(),
+          [](std::unique_ptr<LifetimeError> lifetime_err) -> llvm::Error {
+            switch (lifetime_err->type()) {
+              case LifetimeError::Type::ElisionNotEnabled:
+              case LifetimeError::Type::CannotElideOutputLifetimes:
+                // If elision is not enabled or output lifetimes cannot be
+                // elided, we want to import the function with raw lifetime-less
+                // pointers. Just return success here; this will leave the
+                // `lifetimes` optional empty, and we will then handle this
+                // accordingly below.
+                return llvm::Error::success();
+                break;
+              default:
+                return llvm::Error(std::move(lifetime_err));
+                break;
             }
           });
-      if (diagnostic_recorder.getNumErrors() != 0) {
-        return unsupported(FormattedError::Static(
-            "Implicit copy assignment is considered invalid"));
+      if (remaining_err) {
+        return unsupported(FormattedError::PrefixedStrCat(
+            "Unable to get lifetime annotations",
+            llvm::toString(std::move(remaining_err))));
       }
     }
   }
 
-  clang::tidy::lifetimes::LifetimeSymbolTable lifetime_symbol_table;
-  std::optional<clang::tidy::lifetimes::FunctionLifetimes> lifetimes;
-  llvm::Expected<clang::tidy::lifetimes::FunctionLifetimes> lifetimes_or_err =
-      clang::tidy::lifetimes::GetLifetimeAnnotations(
-          function_decl, *ictx_.invocation_.lifetime_context_,
-          &lifetime_symbol_table);
-  if (lifetimes_or_err) {
-    lifetimes = std::move(*lifetimes_or_err);
-  } else {
-    using clang::tidy::lifetimes::LifetimeError;
-    llvm::Error remaining_err = llvm::handleErrors(
-        lifetimes_or_err.takeError(),
-        [](std::unique_ptr<LifetimeError> lifetime_err) -> llvm::Error {
-          switch (lifetime_err->type()) {
-            case LifetimeError::Type::ElisionNotEnabled:
-            case LifetimeError::Type::CannotElideOutputLifetimes:
-              // If elision is not enabled or output lifetimes cannot be
-              // elided, we want to import the function with raw lifetime-less
-              // pointers. Just return success here; this will leave the
-              // `lifetimes` optional empty, and we will then handle this
-              // accordingly below.
-              return llvm::Error::success();
-              break;
-            default:
-              return llvm::Error(std::move(lifetime_err));
-              break;
-          }
-        });
-    if (remaining_err) {
-      return unsupported(FormattedError::PrefixedStrCat(
-          "Unable to get lifetime annotations",
-          llvm::toString(std::move(remaining_err))));
-    }
-  }
-
   std::vector<FuncParam> params;
-  Errors errors;
   if (auto* method_decl =
           clang::dyn_cast<clang::CXXMethodDecl>(function_decl)) {
     if (!ictx_.HasBeenAlreadySuccessfullyImported(method_decl->getParent())) {
@@ -388,22 +620,70 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
       if (lifetimes) {
         this_lifetimes = &lifetimes->GetThisLifetimes();
       }
-      absl::StatusOr<CcType> this_param_type =
+      CcType this_param_type =
           ictx_.ConvertQualType(method_decl->getThisType(), this_lifetimes,
-                                /*nullable=*/false);
-      if (!this_param_type.ok()) {
-        errors.Add(
-            FormattedError::PrefixedStrCat("`this` parameter is not supported",
-                                           this_param_type.status().message()));
-      } else {
-        ApplyRefQualifierToThisPointer(*this_param_type,
-                                       method_decl->getRefQualifier());
-
-        params.push_back(
-            {.type = *std::move(this_param_type),
-             .identifier = Identifier("__this"),
-             // TODO(b/319524852): catch `[[clang::lifetimebound]]` on `this`.
-             .unknown_attr = {}});
+                                /*nullable=*/false, assumed_lifetimes_enabled);
+      if (assumed_lifetimes_enabled) {
+        if (auto qual_type = method_decl->getType(); !qual_type.isNull()) {
+          // Since getThisType desugars `this` (among other nontrivial
+          // transformations), we need to post-hoc crawl through annotations
+          // on the CXXMethodDecl to collect lifetimes. For example, for a
+          // function like `int* $b f() && $a [[clang::lifetimebound]]`, we'll
+          // see a type like:
+          //
+          // (AttributedType (AttributedType (FunctionProtoType
+          //     (AttributedType (PointerType ...)))))
+          //
+          // where the first two AttributedTypes are meant to bind to `this`.
+          auto this_lifetime_views = CollectExplicitLifetimes(
+              ictx_.sema_.getASTContext(), *qual_type.getTypePtr());
+          if (!this_lifetime_views.ok()) {
+            errors.Add(FormattedError::PrefixedStrCat(
+                "Can't collect lifetimes for `this`",
+                this_lifetime_views.status().message()));
+          } else if (!this_lifetime_views->empty() &&
+                     !this_param_type.explicit_lifetimes.empty()) {
+            errors.Add(FormattedError::PrefixedStrCat(
+                "Extra explicit lifetimes on `this`",
+                absl::StrJoin(*this_lifetime_views, ", ")));
+          } else {
+            this_param_type.explicit_lifetimes.reserve(
+                this_lifetime_views->size());
+            absl::c_transform(
+                *this_lifetime_views,
+                std::back_inserter(this_param_type.explicit_lifetimes),
+                [](absl::string_view lifetime_view) {
+                  return std::string(lifetime_view);
+                });
+          }
+        }
+      }
+      ApplyRefQualifierToThisPointer(this_param_type,
+                                     method_decl->getRefQualifier(),
+                                     assumed_lifetimes_enabled);
+      params.push_back(
+          {.type = std::move(this_param_type),
+           .identifier = Identifier("__this"),
+           // TODO(b/319524852): catch `[[clang::lifetimebound]]` on `this`.
+           .unknown_attr = {}});
+      if (assumed_lifetimes_enabled && !method_decl->getType().isNull()) {
+        auto clang_annotations =
+            CollectClangLifetimeAnnotationsForMemberFunctionType(
+                ictx_.sema_.getASTContext(),
+                *method_decl->getType().getTypePtr());
+        if (!clang_annotations.ok()) {
+          errors.Add(FormattedError::PrefixedStrCat(
+              "Can't collect clang lifetime annotations for `this`",
+              clang_annotations.status().message()));
+        } else {
+          if (clang_annotations->lifetimebound) {
+            params.back().clang_lifetimebound = true;
+          }
+          if (!clang_annotations->lifetime_capture_by.empty()) {
+            params.back().clang_lifetime_capture_by =
+                std::move(clang_annotations->lifetime_capture_by);
+          }
+        }
       }
     }
   }
@@ -418,27 +698,41 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
     if (lifetimes) {
       param_lifetimes = &lifetimes->GetParamLifetimes(i);
     }
-    auto param_type = ictx_.ConvertQualType(param->getType(), param_lifetimes);
-    if (!param_type.ok()) {
-      errors.Add(
-          FormattedError::Substitute("Parameter #$0 is not supported: $1", i,
-                                     param_type.status().message()));
-      continue;
-    }
+    CcType param_type =
+        ictx_.ConvertQualType(param->getType(), param_lifetimes,
+                              /*nullable=*/true, assumed_lifetimes_enabled);
 
     std::optional<Identifier> param_name = GetTranslatedParamName(param);
     CHECK(param_name.has_value());  // No known failure cases.
 
     absl::StatusOr<std::optional<std::string>> unknown_attr =
-        CollectUnknownAttrs(*param);
+        CollectUnknownAttrs(
+            *param, assumed_lifetimes_enabled
+                        ? IsClangLifetimeAnnotation
+                        : [](const clang::Attr& attr) { return false; });
     if (!unknown_attr.ok()) {
-      errors.Add(FormattedError::FromStatus(std::move(unknown_attr.status())));
+      errors.Add(FormattedError::FromStatus(std::move(unknown_attr).status()));
       continue;
     }
-
-    params.push_back({.type = *param_type,
+    params.push_back({.type = std::move(param_type),
                       .identifier = *std::move(param_name),
-                      .unknown_attr = std::move(*unknown_attr)});
+                      .unknown_attr = *std::move(unknown_attr)});
+
+    if (assumed_lifetimes_enabled) {
+      auto lifetimebound = param->specific_attrs<clang::LifetimeBoundAttr>();
+      if (!lifetimebound.empty()) {
+        params.back().clang_lifetimebound = true;
+      }
+      auto lifetime_capture_by =
+          param->specific_attrs<clang::LifetimeCaptureByAttr>();
+      if (!lifetime_capture_by.empty()) {
+        for (const clang::LifetimeCaptureByAttr* attr : lifetime_capture_by) {
+          for (const auto& param : attr->params()) {
+            params.back().clang_lifetime_capture_by.push_back(param);
+          }
+        }
+      }
+    }
   }
 
   bool undeduced_return_type =
@@ -466,7 +760,8 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
       return_lifetimes = &lifetimes->GetReturnLifetimes();
     }
     return_type =
-        ictx_.ConvertQualType(function_decl->getReturnType(), return_lifetimes);
+        ictx_.ConvertQualType(function_decl->getReturnType(), return_lifetimes,
+                              /*nullable=*/true, assumed_lifetimes_enabled);
     if (!return_type.ok()) {
       errors.Add(FormattedError::PrefixedStrCat(
           "Return type is not supported", return_type.status().message()));
@@ -497,51 +792,51 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
     if (def->isInlined()) is_inline = true;
     if (def->isThisDeclarationADefinition()) is_defined = true;
   }
-  if (!is_defined)  // Template members may not be defined until instantiation.
+  if (!is_defined) {
+    // Template members may not be defined until instantiation.
     if (auto* pat = function_decl->getTemplateInstantiationPattern()) {
-      if (pat->isThisDeclarationADefinition()) is_defined = true;
+      if (pat->isThisDeclarationADefinition()) {
+        is_defined = true;
+      }
     }
+  }
   // It is valid to declare an inline function but not define it, as long as it
   // is not odr-used. Our thunk can't call it, so it is not callable from Rust.
   if (is_inline && !is_defined) {
     errors.Add(FormattedError::Static("Inline function is not defined"));
   }
 
-  std::optional<MemberFuncMetadata> member_func_metadata;
+  std::optional<InstanceMethodMetadata> instance_metadata;
   if (auto* method_decl =
           clang::dyn_cast<clang::CXXMethodDecl>(function_decl)) {
-    std::optional<MemberFuncMetadata::InstanceMethodMetadata> instance_metadata;
     if (method_decl->isInstance()) {
-      MemberFuncMetadata::ReferenceQualification reference;
+      InstanceMethodMetadata::ReferenceQualification reference;
       switch (method_decl->getRefQualifier()) {
         case clang::RQ_LValue:
-          reference = MemberFuncMetadata::kLValue;
+          reference = InstanceMethodMetadata::kLValue;
           break;
         case clang::RQ_RValue:
-          reference = MemberFuncMetadata::kRValue;
+          reference = InstanceMethodMetadata::kRValue;
           break;
         case clang::RQ_None:
-          reference = MemberFuncMetadata::kUnqualified;
+          reference = InstanceMethodMetadata::kUnqualified;
           break;
       }
-      instance_metadata = MemberFuncMetadata::InstanceMethodMetadata{
+      instance_metadata = InstanceMethodMetadata{
           .reference = reference,
           .is_const = method_decl->isConst(),
           .is_virtual = method_decl->isVirtual(),
       };
     }
-
-    member_func_metadata = MemberFuncMetadata{
-        .record_id = ictx_.GenerateItemId(method_decl->getParent()),
-        .instance_method_metadata = instance_metadata};
   }
 
   if (!errors.error_set.empty()) {
     return ictx_.ImportUnsupportedItem(
         *function_decl,
-        UnsupportedItem::Path{.ident = (*translated_name).cc_identifier,
+        UnsupportedItem::Path{.ident = translated_name->cc_identifier,
                               .enclosing_item_id = *enclosing_item_id},
-        std::vector(errors.error_set.begin(), errors.error_set.end()));
+        std::vector(errors.error_set.begin(), errors.error_set.end()),
+        must_bind_);
   }
 
   bool has_c_calling_convention =
@@ -579,10 +874,12 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
           return true;
         } else if (clang::isa<clang::NoReturnAttr>(attr)) {
           return true;  // we call isNoReturn below, instead
-        } else if (clang::isa<clang::UnsafeBufferUsageAttr>(attr)) {
+        } else if (clang::isa<clang::UnsafeBufferUsageAttr>(attr) ||
+                   clang::isa<clang::RequiresCapabilityAttr>(attr)) {
           return true;  // Handled in `GetSafetyAnnotation()`
         } else if (clang::isa<clang::AsmLabelAttr>(attr) ||
                    clang::isa<clang::ConstAttr>(attr) ||
+                   clang::isa<clang::FinalAttr>(attr) ||
                    clang::isa<clang::ExcludeFromExplicitInstantiationAttr>(
                        attr) ||
                    clang::isa<clang::NoThrowAttr>(attr) ||
@@ -590,7 +887,15 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
                    clang::isa<clang::PureAttr>(attr) ||
                    clang::isa<clang::ReinitializesAttr>(attr) ||
                    clang::isa<clang::UnusedAttr>(attr) ||
-                   clang::isa<clang::AlwaysInlineAttr>(attr)) {
+                   clang::isa<clang::AlwaysInlineAttr>(attr) ||
+                   clang::isa<clang::AssertCapabilityAttr>(attr) ||
+                   clang::isa<clang::AcquireCapabilityAttr>(attr) ||
+                   clang::isa<clang::TryAcquireCapabilityAttr>(attr) ||
+                   clang::isa<clang::ReleaseCapabilityAttr>(attr) ||
+                   clang::isa<clang::NoThreadSafetyAnalysisAttr>(attr) ||
+                   clang::isa<clang::LockReturnedAttr>(attr) ||
+                   clang::isa<clang::AbiTagAttr>(attr) ||
+                   clang::isa<clang::LocksExcludedAttr>(attr)) {
           // These attributes don't affect Rust.
           return true;
         }
@@ -599,40 +904,45 @@ std::optional<IR::Item> FunctionDeclImporter::Import(
   if (!unknown_attr.ok()) {
     return ictx_.ImportUnsupportedItem(
         *function_decl,
-        UnsupportedItem::Path{.ident = (*translated_name).cc_identifier,
+        UnsupportedItem::Path{.ident = translated_name->cc_identifier,
                               .enclosing_item_id = *enclosing_item_id},
-        FormattedError::FromStatus(std::move(unknown_attr.status())));
+        {FormattedError::FromStatus(std::move(unknown_attr).status())},
+        must_bind_);
   }
 
   // Silence ClangTidy, checked above: calling `errors.Add` if
   // `!return_type.ok()` and returning early if `!errors.empty()`.
   CHECK_OK(return_type);
 
+  auto name_info = function_decl->getNameInfo();
   return Func{
-      .cc_name = (*translated_name).cc_identifier,
-      .rs_name = (*translated_name).rs_identifier(),
+      .cc_name = translated_name->cc_identifier,
+      .rs_name = translated_name->rs_identifier(),
+      .unique_name = ictx_.GetUniqueName(*function_decl),
       .owning_target = ictx_.GetOwningTarget(function_decl),
       .doc_comment = std::move(doc_comment),
       .mangled_name = ictx_.GetMangledName(function_decl),
-      .return_type = *return_type,
+      .return_type = *std::move(return_type),
       .params = std::move(params),
       .lifetime_params = std::move(lifetime_params),
       .is_inline = is_inline,
-      .member_func_metadata = std::move(member_func_metadata),
+      .instance_method_metadata = std::move(instance_metadata),
       .is_extern_c = function_decl->isExternC(),
       .is_noreturn = function_decl->isNoReturn(),
       .is_variadic = function_decl->isVariadic(),
       .is_consteval = function_decl->isConsteval(),
       .nodiscard = std::move(nodiscard),
       .deprecated = std::move(deprecated),
-      .unknown_attr = std::move(*unknown_attr),
+      .unknown_attr = *std::move(unknown_attr),
       .has_c_calling_convention = has_c_calling_convention,
       .is_member_or_descendant_of_class_template =
           is_member_or_descendant_of_class_template,
       .safety_annotation = safety_annotation,
-      .source_loc = ictx_.ConvertSourceLocation(function_decl->getBeginLoc()),
+      .source_loc =
+          ictx_.ConvertSourceLocation(function_decl->getBeginLoc(), &name_info),
       .id = ictx_.GenerateItemId(function_decl),
       .enclosing_item_id = *std::move(enclosing_item_id),
+      .lifetime_inputs = std::move(lifetime_inputs),
   };
 }
 

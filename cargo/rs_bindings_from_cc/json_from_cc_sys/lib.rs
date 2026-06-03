@@ -6,4 +6,4 @@
 
 extern crate cc_ffi_types_sys;
 extern crate cc_ir_sys;
-extern crate ir_from_cc_sys;
+extern crate ir_from_cc_dependency_sys;

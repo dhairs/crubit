@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 //! Supporting types to read and display Crubit feature flags
-//! (<internal link>)
+//! (crubit.rs-features)
 use serde::Deserialize;
 
 flagset::flags! {
@@ -18,21 +18,48 @@ flagset::flags! {
 
         Wrapper,
 
-        /// Enable the native Rust std::vector<T> reimplementation.
-        StdVector,
-
-        /// Enable the native Rust std::unique_ptr<T> reimplementation.
-        StdUniquePtr,
-
-        /// Enable handling non-Unpin types with the `ctor` crate.
-        NonUnpinCtor,
+        /// Enable support for types, but not necessarily functions.
+        /// This is automatically enabled by `Supported`.
+        Types,
 
         /// Experimental is never *set* without also setting Supported, but we allow it to be
         /// *required* without also requiring Supported, so that error messages can be more direct.
         Experimental,
 
-        /// Enable emitting custom ffi_11 types instead of `core::ffi` types.
-        CustomFfiTypes,
+        /// Use ergonomic lifetime defaults when interpreting lifetime annotations.
+        AssumeLifetimes,
+
+        /// Unconditionally assume that the `this` pointer is a reference, even in the absence of
+        /// a lifetime annotation or other justification.
+        AssumeThisLifetimes,
+
+        /// Disable AssumeLifetimes (useful for :experimental).
+        NoAssumeLifetimes,
+
+        /// Enable experimental support for `rs_std::DynCallable` and `absl::AnyInvocable`.
+        Callables,
+
+        /// Mark C++ types with `[[gsl::Pointer]]` as unsafe.
+        UnsafeView,
+
+        /// Generate bindings using the protobuf IR.
+        UseProtobufIR,
+
+        /// C++ default constructors are checked to fully initialize all public fields.
+        CheckDefaultInitialized,
+
+        /// Prepend `::` to `cpp_type` in annotations.
+        LeadingColonsForCppType,
+
+        /// Generate bindings for (non-Crubit special-cased) template instances.
+        TemplateInstantiation,
+
+        /// Emit `rs_std::Tuple` everywhere instead of C++ `std::tuple`.
+        LayoutCompatTuple,
+
+        /// Always specialize generics in cpp_api_from_rust, instead of doing composable bridging
+        /// when possible.
+        AlwaysSpecializeGenericsInCppApiFromRust,
     }
 }
 
@@ -40,17 +67,27 @@ impl CrubitFeature {
     /// The name of this feature.
     ///
     /// This is used for serialization/deserialization: an aspect hint maps to a
-    /// list of short names, whicwhichbh are passed to Crubit to enable the
+    /// list of short names, which are passed to Crubit to enable the
     /// corresponding feature bits.
     pub fn short_name(&self) -> &'static str {
         match self {
             Self::Supported => "supported",
             Self::Wrapper => "wrapper",
-            Self::StdVector => "std_vector",
-            Self::StdUniquePtr => "std_unique_ptr",
-            Self::NonUnpinCtor => "non_unpin_ctor",
+            Self::Types => "types",
             Self::Experimental => "experimental",
-            Self::CustomFfiTypes => "custom_ffi_types",
+            Self::AssumeLifetimes => "assume_lifetimes",
+            Self::AssumeThisLifetimes => "assume_this_lifetimes",
+            Self::NoAssumeLifetimes => "no_assume_lifetimes",
+            Self::Callables => "callables",
+            Self::UseProtobufIR => "use_protobuf_ir",
+            Self::UnsafeView => "unsafe_view",
+            Self::CheckDefaultInitialized => "check_default_initialized",
+            Self::LeadingColonsForCppType => "leading_colons_for_cpp_type",
+            Self::TemplateInstantiation => "template_instantiation",
+            Self::LayoutCompatTuple => "layout_compat_tuple",
+            Self::AlwaysSpecializeGenericsInCppApiFromRust => {
+                "always_specialize_generics_in_cpp_api_from_rust"
+            }
         }
     }
 
@@ -61,11 +98,25 @@ impl CrubitFeature {
         match self {
             Self::Supported => "//features:supported",
             Self::Wrapper => "//features:wrapper",
-            Self::StdVector => "//features:std_vector",
-            Self::StdUniquePtr => "//features:std_unique_ptr",
-            Self::NonUnpinCtor => "//features:non_unpin_ctor",
+            Self::Types => "//features:types",
             Self::Experimental => "//features:experimental",
-            Self::CustomFfiTypes => "//features:custom_ffi_types",
+            Self::AssumeLifetimes => "//features:assume_lifetimes",
+            Self::AssumeThisLifetimes => "//features:assume_this_lifetimes",
+            Self::NoAssumeLifetimes => "//features:no_assume_lifetimes",
+            Self::Callables => "//features:callables",
+            Self::UseProtobufIR => "//features:use_protobuf_ir",
+            Self::UnsafeView => "//features:unsafe_view",
+            Self::CheckDefaultInitialized => {
+                "//features:check_default_initialized"
+            }
+            Self::LeadingColonsForCppType => {
+                "//features:leading_colons_for_cpp_type"
+            }
+            Self::TemplateInstantiation => "//features:template_instantiation",
+            Self::LayoutCompatTuple => "//features:layout_compat_tuple",
+            Self::AlwaysSpecializeGenericsInCppApiFromRust => {
+                "//features:always_specialize_generics_in_cpp_api_from_rust"
+            }
         }
     }
 }
@@ -73,15 +124,33 @@ impl CrubitFeature {
 /// Returns the set of features named by this short name.
 pub fn named_features(name: &[u8]) -> Option<flagset::FlagSet<CrubitFeature>> {
     let features = match name {
-        b"all" => flagset::FlagSet::<CrubitFeature>::full(),
-        b"supported" => CrubitFeature::Supported.into(),
+        // LINT.IfChange
+        b"all" => {
+            flagset::FlagSet::<CrubitFeature>::full()
+                - CrubitFeature::NoAssumeLifetimes
+                - CrubitFeature::LayoutCompatTuple
+                - CrubitFeature::AlwaysSpecializeGenericsInCppApiFromRust
+        }
+        // `supported` automatically implies `types`.
+        b"supported" => CrubitFeature::Supported | CrubitFeature::Types,
         b"wrapper" => CrubitFeature::Wrapper.into(),
-        b"std_vector" => CrubitFeature::StdVector.into(),
-        b"std_unique_ptr" => CrubitFeature::StdUniquePtr.into(),
-        b"non_unpin_ctor" => CrubitFeature::NonUnpinCtor.into(),
+        b"types" => CrubitFeature::Types.into(),
         b"experimental" => CrubitFeature::Experimental.into(),
-        b"custom_ffi_types" => CrubitFeature::CustomFfiTypes.into(),
+        b"assume_lifetimes" => CrubitFeature::AssumeLifetimes.into(),
+        b"assume_this_lifetimes" => CrubitFeature::AssumeThisLifetimes.into(),
+        b"no_assume_lifetimes" => CrubitFeature::NoAssumeLifetimes.into(),
+        b"callables" => CrubitFeature::Callables.into(),
+        b"use_protobuf_ir" => CrubitFeature::UseProtobufIR.into(),
+        b"unsafe_view" => CrubitFeature::UnsafeView.into(),
+        b"check_default_initialized" => CrubitFeature::CheckDefaultInitialized.into(),
+        b"leading_colons_for_cpp_type" => CrubitFeature::LeadingColonsForCppType.into(),
+        b"template_instantiation" => CrubitFeature::TemplateInstantiation.into(),
+        b"layout_compat_tuple" => CrubitFeature::LayoutCompatTuple.into(),
+        b"always_specialize_generics_in_cpp_api_from_rust" => {
+            CrubitFeature::AlwaysSpecializeGenericsInCppApiFromRust.into()
+        }
         _ => return None,
+        // LINT.ThenChange(//depot/rs_bindings_from_cc/importer.cc, //depot/features/BUILD)
     };
     Some(features)
 }
@@ -157,6 +226,12 @@ impl<'de> Deserialize<'de> for SerializedCrubitFeatures {
                     result |= flags;
                 }
 
+                if result.contains(CrubitFeature::NoAssumeLifetimes) {
+                    result -= CrubitFeature::AssumeLifetimes;
+                }
+
+                result -= CrubitFeature::NoAssumeLifetimes;
+
                 Ok(SerializedCrubitFeatures(result))
             }
         }
@@ -173,7 +248,7 @@ mod tests {
     #[gtest]
     fn test_serialized_crubit_feature() {
         let SerializedCrubitFeature(features) = serde_json::from_str("\"supported\"").unwrap();
-        assert_eq!(features, CrubitFeature::Supported);
+        assert_eq!(features, CrubitFeature::Supported | CrubitFeature::Types);
     }
 
     #[gtest]
@@ -183,11 +258,16 @@ mod tests {
             features,
             CrubitFeature::Supported
                 | CrubitFeature::Wrapper
-                | CrubitFeature::StdVector
-                | CrubitFeature::StdUniquePtr
-                | CrubitFeature::NonUnpinCtor
+                | CrubitFeature::Types
                 | CrubitFeature::Experimental
-                | CrubitFeature::CustomFfiTypes
+                | CrubitFeature::AssumeLifetimes
+                | CrubitFeature::AssumeThisLifetimes
+                | CrubitFeature::Callables
+                | CrubitFeature::UnsafeView
+                | CrubitFeature::UseProtobufIR
+                | CrubitFeature::CheckDefaultInitialized
+                | CrubitFeature::LeadingColonsForCppType
+                | CrubitFeature::TemplateInstantiation
         );
     }
 
@@ -201,7 +281,10 @@ mod tests {
     fn test_serialized_crubit_features() {
         let SerializedCrubitFeatures(features) =
             serde_json::from_str("[\"supported\", \"experimental\"]").unwrap();
-        assert_eq!(features, CrubitFeature::Supported | CrubitFeature::Experimental);
+        assert_eq!(
+            features,
+            CrubitFeature::Supported | CrubitFeature::Types | CrubitFeature::Experimental
+        );
     }
 
     #[gtest]
@@ -211,11 +294,16 @@ mod tests {
             features,
             CrubitFeature::Supported
                 | CrubitFeature::Wrapper
-                | CrubitFeature::StdVector
-                | CrubitFeature::StdUniquePtr
-                | CrubitFeature::NonUnpinCtor
+                | CrubitFeature::Types
                 | CrubitFeature::Experimental
-                | CrubitFeature::CustomFfiTypes
+                | CrubitFeature::AssumeLifetimes
+                | CrubitFeature::AssumeThisLifetimes
+                | CrubitFeature::Callables
+                | CrubitFeature::UnsafeView
+                | CrubitFeature::UseProtobufIR
+                | CrubitFeature::CheckDefaultInitialized
+                | CrubitFeature::LeadingColonsForCppType
+                | CrubitFeature::TemplateInstantiation
         );
     }
 
@@ -227,11 +315,38 @@ mod tests {
             features,
             CrubitFeature::Supported
                 | CrubitFeature::Wrapper
-                | CrubitFeature::StdVector
-                | CrubitFeature::StdUniquePtr
-                | CrubitFeature::NonUnpinCtor
+                | CrubitFeature::Types
                 | CrubitFeature::Experimental
-                | CrubitFeature::CustomFfiTypes
+                | CrubitFeature::AssumeLifetimes
+                | CrubitFeature::AssumeThisLifetimes
+                | CrubitFeature::Callables
+                | CrubitFeature::UnsafeView
+                | CrubitFeature::UseProtobufIR
+                | CrubitFeature::CheckDefaultInitialized
+                | CrubitFeature::LeadingColonsForCppType
+                | CrubitFeature::TemplateInstantiation
+        );
+    }
+
+    #[gtest]
+    fn test_serialized_crubit_features_all_overlapping_no_assume_lifetimes() {
+        let SerializedCrubitFeatures(features) = serde_json::from_str(
+            "[\"all\", \"supported\", \"experimental\", \"no_assume_lifetimes\"]",
+        )
+        .unwrap();
+        assert_eq!(
+            features,
+            CrubitFeature::Supported
+                | CrubitFeature::Wrapper
+                | CrubitFeature::Types
+                | CrubitFeature::Experimental
+                | CrubitFeature::AssumeThisLifetimes
+                | CrubitFeature::Callables
+                | CrubitFeature::UnsafeView
+                | CrubitFeature::UseProtobufIR
+                | CrubitFeature::CheckDefaultInitialized
+                | CrubitFeature::LeadingColonsForCppType
+                | CrubitFeature::TemplateInstantiation
         );
     }
 }

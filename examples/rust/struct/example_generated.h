@@ -4,23 +4,26 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // example_crate_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_EXAMPLES_RUST_STRUCT_EXAMPLE_CRATE_GOLDEN
 #define THIRD_PARTY_CRUBIT_EXAMPLES_RUST_STRUCT_EXAMPLE_CRATE_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 #include "support/internal/slot.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 namespace example_crate {
 
-// Generated from:
-// examples/rust/struct/example.rs;l=6
 struct CRUBIT_INTERNAL_RUST_TYPE(":: example_crate_golden :: Struct") alignas(4)
     [[clang::trivial_abi]] Struct final {
  public:
@@ -36,15 +39,13 @@ struct CRUBIT_INTERNAL_RUST_TYPE(":: example_crate_golden :: Struct") alignas(4)
   Struct(const Struct&);
 
   // Clone::clone_from
-  Struct& operator=(const Struct&);
+  ::example_crate::Struct& operator=(const Struct&);
 
   Struct(::crubit::UnsafeRelocateTag, Struct&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
   union {
-    // Generated from:
-    // examples/rust/struct/example.rs;l=7
-    std::int32_t a;
+    ::std::int32_t a;
   };
 
  private:
@@ -60,10 +61,13 @@ static_assert(
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(::example_crate::Struct* __ret_ptr);
 }
-inline Struct::Struct() { __crubit_internal::__crubit_thunk_default(this); }
-static_assert(std::is_trivially_destructible_v<Struct>);
-static_assert(std::is_trivially_move_constructible_v<Struct>);
-static_assert(std::is_trivially_move_assignable_v<Struct>);
+inline ::example_crate::Struct::Struct() {
+  __crubit_internal::__crubit_thunk_default(this);
+}
+static_assert(::std::is_trivially_destructible_v<Struct>);
+static_assert(
+    ::std::is_trivially_move_constructible_v<::example_crate::Struct>);
+static_assert(::std::is_trivially_move_assignable_v<::example_crate::Struct>);
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_clone(::example_crate::Struct const&,
                                      ::example_crate::Struct* __ret_ptr);
@@ -72,10 +76,11 @@ namespace __crubit_internal {
 extern "C" void __crubit_thunk_clone_ufrom(::example_crate::Struct&,
                                            ::example_crate::Struct const&);
 }
-inline Struct::Struct(const Struct& other) {
+inline ::example_crate::Struct::Struct(const Struct& other) {
   __crubit_internal::__crubit_thunk_clone(other, this);
 }
-inline Struct& Struct::operator=(const Struct& other) {
+inline ::example_crate::Struct& ::example_crate::Struct::operator=(
+    const Struct& other) {
   if (this != &other) {
     __crubit_internal::__crubit_thunk_clone_ufrom(*this, other);
   }
@@ -85,4 +90,6 @@ inline void Struct::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(Struct, a));
 }
 }  // namespace example_crate
+
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_EXAMPLES_RUST_STRUCT_EXAMPLE_CRATE_GOLDEN

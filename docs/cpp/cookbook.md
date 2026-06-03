@@ -18,8 +18,8 @@ the recommended practices to evolve over time, as Crubit's capabilities expand!
 
 ## Making types Rust-movable {#rust_movable}
 
-As described in <internal link>/cpp/classes_and_structs#rust_movable, types cannot be
-passed by value in Rust unless they are Rust-movable.
+As described in crubit.rs/cpp/classes_and_structs#rust_movable, types have a
+more pleasant API when they are Rust-movable.
 
 This can happen for a couple of easily fixable reasons, described in
 subsections:
@@ -38,12 +38,12 @@ more radically restructuring your code to avoid those patterns.
 
 ### `ABSL_ATTRIBUTE_TRIVIAL_ABI` {#trivial_abi}
 
-<internal link>/cpp/cookbook#trivial_abi
+crubit.rs/cpp/cookbook#trivial_abi
 
 One of the ways a type can become non-Rust-movable is if it has a copy/move
 constructor / assignment operator, or a destructor. In that case, Clang will
 assume that it cannot be trivially relocated, **unless** it is annotated with
-`ABSL_ATTRIBUTE_TRIVIAL_ABI`.
+[`ABSL_ATTRIBUTE_TRIVIAL_ABI`](https://github.com/abseil/abseil-cpp/blob/master/absl/base/attributes.h#:~:text=ABSL_ATTRIBUTE_TRIVIAL_ABI).
 
 ```c++ {.bad}
 struct LogWhenDestroyed {
@@ -80,7 +80,7 @@ struct ABSL_ATTRIBUTE_TRIVIAL_ABI LogWhenDestroyed {
 
 ### Boxing in a pointer {#boxing}
 
-<internal link>/cpp/cookbook#boxing
+crubit.rs/cpp/cookbook#boxing
 
 One of the ways a type can become non-Rust-movable is if it has a field, where
 the type of that field is not Rust-movable. There is no way to override this:
@@ -120,8 +120,8 @@ ABI. If you aren't sure about whether you are using the unstable ABI, it is like
 
 If you tightly control your dependencies, you might be using
 libc++'s unstable ABI. The unstable ABI, among other things, makes
-`unique_ptr<T>` Rust-movable. In fact, it is Rust-movable even if `T` itself is
-not.
+`unique_ptr<T>` (and `shared_ptr<T>`) Rust-movable. In fact, it is Rust-movable
+even if `T` itself is not.
 
 This means that if a particular field is making its parent type
 non-Rust-movable, one fix is to wrap it in a `unique_ptr`:
@@ -135,7 +135,7 @@ struct Person {
 
 ```c++ {.good}
 struct Person {
-  // boxed to make Person rust-movable: <internal link>/cpp/cookbook#boxing
+  // boxed to make Person rust-movable: crubit.rs/cpp/cookbook#boxing
   std::unique_ptr<std::string> name;
   int age;
 }
@@ -162,7 +162,7 @@ struct Person {
 
 ```c++ {.good}
 struct ABSL_ATTRIBUTE_TRIVIAL_ABI Person {
-  // Owned, boxed to make Person rust-movable: <internal link>/cpp/cookbook#boxing
+  // Owned, boxed to make Person rust-movable: crubit.rs/cpp/cookbook#boxing
   std::string* name;
   int age;
 
@@ -180,11 +180,11 @@ does not care about the address of `Person`.)
 
 ## Renaming functions for Rust {#renaming}
 
-<internal link>/cpp/cookbook#renaming
+crubit.rs/cpp/cookbook#renaming
 
 Overloaded functions cannot be called from Rust (yet: b/213280424). To make them
-available anyway, you can define new non-overloaded functions with different
-names:
+available anyway, you can use the `CRUBIT_RUST_NAME` attribute macro to specify
+a unique Rust name for each overload:
 
 ```c++ {.bad}
 void Foo(int x);
@@ -192,14 +192,113 @@ void Foo(float x);
 ```
 
 ```c++ {.good}
-void Foo(int x);
-void Foo(float x);
+#include "support/annotations.h"
 
-// For Rust callers: <internal link>/cpp/cookbook#renaming
-inline void FooInt(int x) {return Foo(x);}
-// For Rust callers: <internal link>/cpp/cookbook#renaming
-inline void FooFloat(float x) {return Foo(x);}
+CRUBIT_RUST_NAME("FooInt")
+void Foo(int x);
+CRUBIT_RUST_NAME("FooFloat")
+void Foo(float x);
 ```
+
+## Thread-safety {#thread_safety}
+
+WARNING: This is subtle and dangerous, and remains a work in progress. Avoid
+unless necessary.
+
+SUMMARY: To make a mutating C++ method safe to call concurrently in Rust, the
+data it accesses should be `mutable`, and the method should be wrapped in a
+method accepting `&self`.
+
+TODO(b/481405536): `mutable` doesn't work for trivially copyable types.
+
+TODO(b/481398972): `mutable` doesn't work for `public` fields.
+
+TODO(b/482619016): The approach described here is excessively manual.
+
+TODO(b/440403437): Safer mutably aliasing references aren't mentioned here,
+because they do not yet exist.
+
+Many C++ types use notions of
+["thread-compatibility" and "thread-safety"](https://abseil.io/blog/20180531-regular-types#data-races-and-thread-safety-properties),
+which can be approximately defined as so:
+
+thread-compatible
+:   It is safe to perform `const` accesses concurrently across multiple threads,
+    similar to `Sync`.
+
+thread-safe
+:   It is safe to perform non-`const` accesses concurrently across multiple
+    threads.
+
+Rust has no analogue to "thread-safe" in this sense: you cannot ever alias via a
+`&mut T` across threads, and aliasing via `*mut T` is not ever safe, and is not
+a documented workflow for most types. Instead, Rust mutation operations that are
+intended to be safe to call concurrently across multiple threads are designed to
+take a `&T`.
+
+(Accordingly, a `&T` is a "shared reference" -- not a const reference!)
+
+In order to take a non-const method, and expose it to Rust using `&self`, the
+following steps need to be taken:
+
+1.  The class must be documented as thread-safe.
+2.  The field being mutated must be marked as `mutable`, even if it is only
+    mutated in non-const methods, so that internal mutation in Rust does not
+    cause UB.
+
+    Non `mutable` fields will not become `UnsafeCell` fields, and it is UB to
+    mutate them on a `&T`. Also, the object itself may have been created as a
+    `const` object in C++, causing UB in C++. (The concrete behavior is likely
+    to be ignored writes, or crashes.)
+
+    Due to b/481398972, this field cannot be public. Due to b/481405536, the
+    class itself must not be trivially copyable.
+
+3.  The method must be manually wrapped in something accessible via `const T&` /
+    `&self`. For example:
+
+    ```c++
+    class FakeClock {
+     public:
+      // TODO($USER): Remove the destructor once b/481405536 is fixed.
+      ~FakeClock() {}
+      CRUBIT_RUST_NAME("advance_mut")
+      void Advance(int n) {
+        DoNotUseForRustOnlyAdvance(n);
+      }
+
+      CRUBIT_RUST_NAME("advance")
+      void InternalDoNotUseForRustOnlyAdvance(int n) const {
+        mytime_ += n;
+      }
+     private:
+      // Mutable for Rust.
+      mutable int mytime_;
+    };
+    ```
+
+    You can also wrap it in Rust, but this is more dangerous, as there is no
+    enforcement that the method only modifies `mutable` fields, and requires
+    more extensive unsafe documentation and review:
+
+    ```rust {.bad}
+    impl FakeClock {
+      pub fn advance(&self, n: c_int) {
+        // SAFETY:
+        //  * `self` is a valid reference to a `FakeClock`, and `Advance`
+        //    does not borrow it for longer than `'_`
+        //  * `Advance` mutates `self`, but only mutates the `mytime_` field,
+        //    which is `mutable` in C++ (so safe even on a constant-storage
+        //    instance of `FakeClock`), and is behind an `UnsafeCell` in
+        //    the generated Rust bindings (so safe to mutate on a `&self`).
+        //  * `FakeClock` is thread-safe, so even though Rust `FakeClock` is
+        //    `Sync`, this does not form a data race.
+        unsafe {
+          FakeClock::Advance(self as *const _ as *mut _, n);
+        }
+      }
+    }
+    ```
 
 ## Working around blocking bugs in Crubit {#blockers}
 
@@ -212,16 +311,24 @@ The following workarounds can help get you moving again:
 ### Disable Crubit on a declaration {#disable-declaration}
 
 If a declaration causes hard failures within Crubit, that declaration alone can
-be disabled using the CRUBIT_DO_NOT_BIND attribute macro, defined in
-support/annotations.h. This must be paired with an additional entry in
-rs_bindings_from_cc/bazel_support/generate_bindings.bzl, recording the name of the item.
+be disabled using the `CRUBIT_DO_NOT_BIND` attribute macro:
 
-To mail the CL performing this change, use <internal link>_manage: add
-`AUTO_MANAGE=testing:TGP` to the CL description.
+```c++
+#include "support/annotations.h"
 
-NOTE: By disabling Crubit on this declaration, items which depend on it may
-also, in turn, not receive bindings. For example, if it declares a type, then
-functions which accept or return that type will also not receive bindings.
+CRUBIT_DO_NOT_BIND  // b/123: Crubit crashes on std::crash_rust_plz_t
+void foo(std::crash_rust_plz_t*);
+```
+
+> NOTE: By disabling Crubit on this declaration, items which depend on it may
+> also, in turn, not receive bindings. For example, if it declares a type, then
+> functions which accept or return that type will also not receive bindings.
+>
+> For that reason, except for functions, `CRUBIT_DO_NOT_BIND` requires modifying
+> an allowlist at
+> rs_bindings_from_cc/bazel_support/generate_bindings.bzl.
+> Changes to that file are most easily mailed using <internal link>_manage: add
+> `AUTO_MANAGE=testing:TGP` to the CL description.
 
 ### Disable Crubit on a header {#disable-header}
 
@@ -247,3 +354,188 @@ To mail the CL performing this change, use <internal link>_manage: add
 > header is owned by two targets, it's preferable to move the header into a
 > third target, depended on by both. That way, functions which use types defined
 > in that header will still get bindings, in both targets.
+
+## Making backwards-compatible changes to C++ code with Rust callers {#compatibility}
+
+Because Rust does not have all the features C++ does, some changes that do not
+*usually* break a C++ caller can break a Rust caller. For example, most C++
+callers will not be broken by adding a new overload to an overload set, but that
+does break Rust callers, because Rust doesn't have overloading.
+
+Most of the time, you can think of Rust users (and Crubit) as the most
+pathological possible C++ caller, relying on all the details of your API.
+
+The following sections attempt to be an exhaustive list of the things you might
+expect to be able to do if you only have C++ callers, but cannot do with Rust
+callers.
+
+### Making a type non-Rust-movable {#compatibility-non_movable}
+
+If a type is made non-Rust-movable, when it was previously Rust-movable, this
+will break all but the most trivial of Rust callers.
+
+Specifically, the following operations are compatibility-breaking if the type
+was Rust-movable:
+
+*   Adding a virtual method.
+*   Adding a user-defined copy constructor, move constructor, or destructor,
+    without specifying `ABSL_ATTRIBUTE_TRIVIAL_ABI`.
+*   Adding a non-Rust-movable field or base class (such as `std::string`).
+
+```c++ {.no-copy}
+struct Before {
+  int x;
+};
+struct After {
+  ~After() {}
+
+  int x;
+  std::string y;
+};
+
+Before ReturnBefore();
+After ReturnAfter();
+```
+
+```rust {.no-copy}
+#[derive(Copy, Clone)]
+struct Before {...}
+struct After {...}
+
+pub fn ReturnBefore() -> Before {...}
+pub fn ReturnAfter() -> Ctor![After] {...}
+```
+
+**Fix:** Preserve Rust-movability, as described above in
+[Making types Rust-movable](#rust_movable)
+
+```c++ {.good, .no-copy}
+class ABSL_ATTRIBUTE_TRIVIAL_ABI CompatibleAfter {
+  ~After() {}
+
+  int x;
+  std::unique_ptr<std::string> y;
+};
+```
+
+### Adding or removing virtual destructors {#compatibility-polymorphic}
+
+If a type's destructor is made virtual, or was previously virtual and now
+becomes nonvirtual, this changes how Rust callers invoke destruction. For
+example, `unique_ptr<T>` becomes `virtual_unique_ptr<T>` if `T` has a virtual
+destructor.
+
+```c++ {.no-copy}
+class Before {};
+class After {~After(){}};
+
+std::unique_ptr<Before> ReturnBefore();
+std::unique_ptr<After> ReturnAfter();
+```
+
+```rust {.no-copy}
+pub fn ReturnBefore() -> cc_std::std::unique_ptr<Before> {...}
+pub fn ReturnAfter() -> cc_std::std::virtual_unique_ptr<After> {...}
+
+let _: cc_std::std::unique_ptr<_> = ReturnAfter();  // error[E0308]: mismatched types
+```
+
+**Fix:** Migrate callers that use heap allocated types such as `unique_ptr`.
+
+```rust {.good .no-copy}
+let _: cc_std::std::virtual_unique_ptr<_> = ReturnAfter();
+```
+
+### Adding an overload {#compatibility-overload}
+
+Except for constructors and operators, adding an overload to a C++ function will
+cause it to no longer receive bindings, unless the overloads are given distinct
+names in Rust (via `CRUBIT_RUST_NAME`).
+
+```c++ {.no-copy}
+void Before();
+
+void After();
+void After(int);
+```
+
+```rust {.no-copy}
+pub fn Before() {...}
+// No bindings for After.
+```
+
+**Fix:** Use `CRUBIT_RUST_NAME("NewName")` to specify a per-overload name.
+
+```c++ {.good .no-copy}
+void CompatibleAfter();
+
+CRUBIT_RUST_NAME("CompatibleAfterInt")
+void CompatibleAfter(int);
+```
+
+```rust {.good .no-copy}
+pub fn CompatibleAfter() {...}
+pub fn CompatibleAfterInt(_: c_int) {...}
+```
+
+### Changing types with implicit conversions {#compatibility-conversions}
+
+In C++, it is often compatible to change from, for example, accepting an
+`int32_t` to a `int64_t`, or similar. This is not a compatible change in Rust,
+because implicit conversions do not exist.
+
+```c++ {.no-copy}
+void Before(int32_t);
+void After(int64_t);
+```
+
+```rust {.no-copy}
+pub fn Before(_: i32) {...}
+pub fn After(_: i64) {...}
+
+let x: i32 = ...;
+After(x);  // error[E0308]: mismatched types
+```
+
+**Fix:** Migrate callers.
+
+```rust {.good .no-copy}
+After(x.into())
+```
+
+### Unsupported features {#compatibility-unsupported}
+
+Use of other unsupported features of C++, such as `decltype` or various
+unsupported clang attributes, will also cause breakages for Rust callers.
+
+This is an open-ended failure category, and includes, at minimum:
+
+*   Changing from a concrete function to a template function
+*   Changing from an ordinary class to a type alias to a template specialization
+*   Unrecognized attributes
+*   Types that do not have Crubit support yet
+
+For instance:
+
+```c++ {.no-copy}
+int Before(int x) {...}
+
+[[clang::very_interesting_advanced_attribute]]
+auto After(int x) -> decltype(x + std::declval<int>()) {...}
+```
+
+```rust {.no-copy}
+pub fn Before(_: c_int) -> c_int {...}
+// No bindings for After
+```
+
+**Fix:** Avoid the use of these features, or wrap with Rust-only functions that
+avoid the use of these features.
+
+```c++ {.good .no-copy}
+int CompatibleAfter(int x) {return After(x);}
+```
+
+```rust {.good .no-copy}
+pub fn After(_: c_int) -> c_int {...}
+```

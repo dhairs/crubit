@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
 use quote::quote;
-use test_helpers::{test_format_item, test_generated_bindings};
+use test_helpers::{test_format_item, test_format_item_with_features, test_generated_bindings};
 use token_stream_matchers::{assert_cc_matches, assert_rs_matches};
 
 /// The `test_generated_bindings_struct` test covers only a single example
@@ -89,7 +89,8 @@ fn test_format_bridged_type_in_generic_types() {
         let err = result.unwrap_err();
         assert_eq!(
             err,
-            "Error handling parameter #0 of type `std::option::Option<std::boxed::Box<std::result::Result<RustType, ()>>>`: Result as a bridge type is not yet supported"
+            "Error handling parameter #0 of type `std::option::Option<std::boxed::Box<std::result::Result<RustType, ()>>>`: \
+            Failed to construct CrubitAbiType for std::boxed::Box<std::result::Result<RustType, ()>> because it does not have a move ctor or assignment operator."
         );
     });
 }
@@ -124,6 +125,46 @@ fn test_format_struct_cpp_name() {
             }
         );
     });
+}
+
+#[test]
+fn test_format_struct_cpp_name_with_kythe_annotations() {
+    let test_src = r#"
+            #[doc="CRUBIT_ANNOTATE: cpp_name=Bar"]
+            pub struct Foo {
+                pub x: i32,
+            }
+        "#;
+    test_format_item_with_features(
+        test_src,
+        "Foo",
+        crubit_feature::CrubitFeature::Experimental | crubit_feature::CrubitFeature::Supported,
+        /* with_kythe_annotations= */ true,
+        |result| {
+            let result = result.unwrap().unwrap();
+            let main_api = &result.main_api;
+            let comment =
+                "CRUBIT_ANNOTATE: cpp_name=Bar\n\nGenerated from: <crubit_unittests.rs>;l=3";
+            let field_comment = "Generated from: <crubit_unittests.rs>;l=4";
+            assert_cc_matches!(
+                main_api.tokens,
+                quote! {
+                    __CAPTURE_TAG__ "<crubit_unittests.rs>" "75" "78"
+                    __COMMENT__ #comment
+                    struct CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: Foo") alignas(4)
+                    [[clang::trivial_abi]] __CAPTURE_BEGIN__ Bar __CAPTURE_END__ final {
+                      ...
+                      union {
+                        __CAPTURE_TAG__ "<crubit_unittests.rs>" "101" "102"
+                        __COMMENT__ #field_comment
+                        ::std :: int32_t __CAPTURE_BEGIN__ x __CAPTURE_END__;
+                      };
+                      ...
+                    };
+                }
+            );
+        },
+    );
 }
 
 #[test]
@@ -168,8 +209,8 @@ fn test_format_item_unsupported_lifetime_generic_struct() {
                  public:
                   ...
                   static ::rust_out::Point new_(
-                    std::int32_t const* [[clang::annotate_type("lifetime", "b")]] crubit_nonnull _x,
-                    std::int32_t const* [[clang::annotate_type("lifetime", "c")]] crubit_nonnull _y);
+                    ::std::int32_t const* $b crubit_nonnull _x,
+                    ::std::int32_t const* $c crubit_nonnull _y);
                   ...
                 };
             }
@@ -205,403 +246,21 @@ fn test_format_item_unsupported_generic_union() {
     });
 }
 
-/// This is a test for a regular struct - a struct with named fields.
-/// https://doc.rust-lang.org/reference/items/structs.html refers to this kind of struct as
-/// `StructStruct` or "nominal struct type".
 #[test]
-fn test_format_item_struct_with_fields() {
+fn test_format_item_enum_with_one_byte_size() {
     let test_src = r#"
-            pub struct SomeStruct {
-                pub x: i32,
-                pub y: i32,
-            }
-
-            const _: () = assert!(std::mem::size_of::<SomeStruct>() == 8);
-            const _: () = assert!(std::mem::align_of::<SomeStruct>() == 4);
-        "#;
-    test_format_item(test_src, "SomeStruct", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) alignas(4) [[clang::trivial_abi]] SomeStruct final {
-                    public:
-                        __COMMENT__ "`rust_out::SomeStruct` doesn't implement the `Default` trait"
-                        SomeStruct() = delete;
-
-                        __COMMENT__ "No custom `Drop` impl and no custom \"drop glue\" required"
-                        ~SomeStruct() = default;
-                        SomeStruct(SomeStruct&&) = default;
-                        SomeStruct& operator=(SomeStruct&&) = default;
-
-                        __COMMENT__ "`rust_out::SomeStruct` doesn't implement the `Clone` trait"
-                        SomeStruct(const SomeStruct&) = delete;
-                        SomeStruct& operator=(const SomeStruct&) = delete;
-
-                        SomeStruct(::crubit::UnsafeRelocateTag, SomeStruct&& value) {
-                          memcpy(this, &value, sizeof(value));
-                        }
-                        union { ... std::int32_t x; };
-                        union { ... std::int32_t y; };
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(SomeStruct) == 8, ...);
-                static_assert(alignof(SomeStruct) == 4, ...);
-                static_assert(std::is_trivially_destructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_constructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_assignable_v<SomeStruct>);
-                inline void SomeStruct::__crubit_field_offset_assertions() {
-                  static_assert(0 == offsetof(SomeStruct, x));
-                  static_assert(4 == offsetof(SomeStruct, y));
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::SomeStruct>() == 8);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::SomeStruct>() == 4);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, x) == 0);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, y) == 4);
-            }
-        );
-    });
-}
-
-/// This is a test for `TupleStruct` or "tuple struct" - for more details
-/// please refer to https://doc.rust-lang.org/reference/items/structs.html
-#[test]
-fn test_format_item_struct_with_tuple() {
-    let test_src = r#"
-            pub struct TupleStruct(pub i32, pub i32);
-            const _: () = assert!(std::mem::size_of::<TupleStruct>() == 8);
-            const _: () = assert!(std::mem::align_of::<TupleStruct>() == 4);
-        "#;
-    test_format_item(test_src, "TupleStruct", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) alignas(4) [[clang::trivial_abi]] TupleStruct final {
-                    public:
-                        __COMMENT__ "`rust_out::TupleStruct` doesn't implement the `Default` trait"
-                        TupleStruct() = delete;
-
-                        __COMMENT__ "Synthesized tuple constructor"
-                        TupleStruct(std::int32_t __field0, std::int32_t __field1)
-                            : __field0(std::move(__field0)), __field1(std::move(__field1)) {}
-
-                        __COMMENT__ "No custom `Drop` impl and no custom \"drop glue\" required"
-                        ~TupleStruct() = default;
-                        TupleStruct(TupleStruct&&) = default;
-                        TupleStruct& operator=(TupleStruct&&) = default;
-
-                        __COMMENT__ "`rust_out::TupleStruct` doesn't implement the `Clone` trait"
-                        TupleStruct(const TupleStruct&) = delete;
-                        TupleStruct& operator=(const TupleStruct&) = delete;
-                        TupleStruct(::crubit::UnsafeRelocateTag, TupleStruct&& value) {
-                          memcpy(this, &value, sizeof(value));
-                        }
-                        union { ... std::int32_t __field0; };
-                        union { ... std::int32_t __field1; };
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(TupleStruct) == 8, ...);
-                static_assert(alignof(TupleStruct) == 4, ...);
-                static_assert(std::is_trivially_destructible_v<TupleStruct>);
-                static_assert(std::is_trivially_move_constructible_v<TupleStruct>);
-                static_assert(std::is_trivially_move_assignable_v<TupleStruct>);
-                inline void TupleStruct::__crubit_field_offset_assertions() {
-                  static_assert(0 == offsetof(TupleStruct, __field0));
-                  static_assert(4 == offsetof(TupleStruct, __field1));
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::TupleStruct>() == 8);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::TupleStruct>() == 4);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::TupleStruct, 0) == 0);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::TupleStruct, 1) == 4);
-            }
-        );
-    });
-}
-
-/// This test the scenario where Rust lays out field in a different order
-/// than the source order.
-#[test]
-fn test_format_item_struct_with_reordered_field_offsets() {
-    let test_src = r#"
-            pub struct SomeStruct {
-                pub field1: i16,
-                pub field2: i32,
-                pub field3: i16,
-            }
-
-            const _: () = assert!(std::mem::size_of::<SomeStruct>() == 8);
-            const _: () = assert!(std::mem::align_of::<SomeStruct>() == 4);
-        "#;
-    test_format_item(test_src, "SomeStruct", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) alignas(4) [[clang::trivial_abi]] SomeStruct final {
-                    ...
-                    // The particular order below is not guaranteed,
-                    // so we may need to adjust this test assertion
-                    // (if Rust changes how it lays out the fields).
-                        union { ... std::int32_t field2; };
-                        union { ... std::int16_t field1; };
-                        union { ... std::int16_t field3; };
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(SomeStruct) == 8, ...);
-                static_assert(alignof(SomeStruct) == 4, ...);
-                static_assert(std::is_trivially_destructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_constructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_assignable_v<SomeStruct>);
-                inline void SomeStruct::__crubit_field_offset_assertions() {
-                  static_assert(0 == offsetof(SomeStruct, field2));
-                  static_assert(4 == offsetof(SomeStruct, field1));
-                  static_assert(6 == offsetof(SomeStruct, field3));
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::SomeStruct>() == 8);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::SomeStruct>() == 4);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, field2)
-                                       == 0);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, field1)
-                                       == 4);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, field3)
-                                       == 6);
-            }
-        );
-    });
-}
-
-/// Tuple fields must not be bridged to std::tuple, because that is not layout-compatible.
-#[test]
-fn test_format_item_struct_with_tuple_fields() {
-    let test_src = r#"
-            pub struct SomeStruct {
-                pub tuple_field: (i32,),
-                pub empty_tuple_field: (),
+            #[derive(Clone, Copy)]
+            pub enum StringType {
+                Literal,
+                NotLiteral,
             }
         "#;
-    test_format_item(test_src, "SomeStruct", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                {
-                    ...
-                    unsigned char tuple_field[4];
-                    __COMMENT__ "Skipped bindings for field `empty_tuple_field`: ZST fields are not supported (b/258259459)"
-                    ...
-                }
-            }
-        );
-    });
-}
-
-#[test]
-fn test_format_item_struct_with_packed_layout() {
-    let test_src = r#"
-            #[repr(packed(1))]
-            pub struct SomeStruct {
-                pub field1: u16,
-                pub field2: u32,
-            }
-            const _: () = assert!(::std::mem::size_of::<SomeStruct>() == 6);
-            const _: () = assert!(::std::mem::align_of::<SomeStruct>() == 1);
-        "#;
-    test_format_item(test_src, "SomeStruct", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) alignas(1) [[clang::trivial_abi]] __attribute__((packed)) SomeStruct final {
-                    ...
-                        union { ... std::uint16_t field1; };
-                        union { ... std::uint32_t field2; };
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(SomeStruct) == 6, ...);
-                static_assert(alignof(SomeStruct) == 1, ...);
-                static_assert(std::is_trivially_destructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_constructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_assignable_v<SomeStruct>);
-                inline void SomeStruct::__crubit_field_offset_assertions() {
-                  static_assert(0 == offsetof(SomeStruct, field1));
-                  static_assert(2 == offsetof(SomeStruct, field2));
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::SomeStruct>() == 6);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::SomeStruct>() == 1);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, field1)
-                                       == 0);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, field2)
-                                       == 2);
-            }
-        );
-    });
-}
-
-#[test]
-fn test_format_item_struct_with_explicit_padding_in_generated_code() {
-    let test_src = r#"
-            pub struct SomeStruct {
-                pub f1: u8,
-                pub f2: u32,
-            }
-            const _: () = assert!(::std::mem::size_of::<SomeStruct>() == 8);
-            const _: () = assert!(::std::mem::align_of::<SomeStruct>() == 4);
-        "#;
-    test_format_item(test_src, "SomeStruct", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) alignas(4) [[clang::trivial_abi]] SomeStruct final {
-                    ...
-                        union { ... std::uint32_t f2; };
-                        union { ... std::uint8_t f1; };
-                    private: unsigned char __padding0[3];
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(SomeStruct) == 8, ...);
-                static_assert(alignof(SomeStruct) == 4, ...);
-                static_assert(std::is_trivially_destructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_constructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_assignable_v<SomeStruct>);
-                inline void SomeStruct::__crubit_field_offset_assertions() {
-                  static_assert(0 == offsetof(SomeStruct, f2));
-                  static_assert(4 == offsetof(SomeStruct, f1));
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::SomeStruct>() == 8);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::SomeStruct>() == 4);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, f2) == 0);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, f1) == 4);
-            }
-        );
-    });
-}
-
-#[test]
-fn test_format_item_struct_with_explicit_padding_on_private_field_in_generated_code() {
-    let test_src = r#"
-            pub struct SomeStruct {
-                #[allow(dead_code)]
-                f1: u8,
-                pub f2: u32,
-            }
-            const _: () = assert!(::std::mem::size_of::<SomeStruct>() == 8);
-            const _: () = assert!(::std::mem::align_of::<SomeStruct>() == 4);
-        "#;
-    test_format_item(test_src, "SomeStruct", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) alignas(4) [[clang::trivial_abi]] SomeStruct final {
-                    ...
-                        union { ... std::uint32_t f2; };
-                    private:
-                        union { ... std::uint8_t f1; };
-                        unsigned char __padding0[3];
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(SomeStruct) == 8, ...);
-                static_assert(alignof(SomeStruct) == 4, ...);
-                static_assert(std::is_trivially_destructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_constructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_assignable_v<SomeStruct>);
-                inline void SomeStruct::__crubit_field_offset_assertions() {
-                  static_assert(0 == offsetof(SomeStruct, f2));
-                  static_assert(4 == offsetof(SomeStruct, f1));
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::SomeStruct>() == 8);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::SomeStruct>() == 4);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, f2) == 0);
-            }
-        );
+    // The input above used to crash (tag size is 8 bytes - size of an `usize`, but
+    // the ADT size is only 1 byte).  This test just makes sure that this input no
+    // longer triggers a crash (i.e. there is intentionally no other
+    // verification).
+    test_format_item(test_src, "StringType", |result| {
+        result.unwrap().unwrap();
     });
 }
 
@@ -621,103 +280,6 @@ fn test_format_item_unsupported_struct_with_name_that_is_reserved_keyword() {
             main_api.tokens,
             quote! {
                 struct ... reinterpret_cast_ final
-            }
-        );
-    });
-}
-
-#[test]
-fn test_format_item_struct_with_unsupported_field_type() {
-    let test_src = r#"
-            pub struct SomeStruct {
-                pub successful_field: i32,
-                pub unsupported_field: Option<[i32; 3]>,
-            }
-        "#;
-    test_format_item(test_src, "SomeStruct", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        let broken_field_msg = "Field type has been replaced with a blob of bytes: \
-                                Unsupported bridge type: [i32; 3_usize]";
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct ... SomeStruct final {
-                    ...
-                    private:
-                        __COMMENT__ #broken_field_msg
-                        unsigned char unsupported_field[16];
-                    public:
-                        union { ... std::int32_t successful_field; };
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-                ...
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(SomeStruct) == 20, ...);
-                static_assert(alignof(SomeStruct) == 4, ...);
-                static_assert(std::is_trivially_destructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_constructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_assignable_v<SomeStruct>);
-                inline void SomeStruct::__crubit_field_offset_assertions() {
-                  static_assert(0 == offsetof(SomeStruct, unsupported_field));
-                  static_assert(16 == offsetof(SomeStruct, successful_field));
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::SomeStruct>() == 20);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::SomeStruct>() == 4);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct,
-                                                             unsupported_field) == 0);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct,
-                                                             successful_field) == 16);
-            }
-        );
-    });
-}
-
-/// This test verifies how reference type fields are represented in the
-/// generated bindings.  See b/286256327.
-///
-/// In some of the past discussions we tentatively decided that the
-/// generated bindings shouldn't use C++ references in fields - instead
-/// a C++ pointer should be used.  One reason is that C++ references
-/// cannot be assigned to (i.e. rebound), and therefore C++ pointers
-/// more accurately represent the semantics of Rust fields.  The pointer
-/// type should probably use some form of C++ annotations to mark it as
-/// non-nullable.
-#[test]
-fn test_format_item_struct_with_unsupported_field_of_reference_type() {
-    let test_src = r#"
-            // `'static` lifetime can be used in a non-generic struct - this let's us
-            // test reference fieles without requiring support for generic structs.
-            pub struct NonGenericSomeStruct {
-                pub reference_field: &'static i32,
-            }
-        "#;
-    test_format_item(test_src, "NonGenericSomeStruct", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        let broken_field_msg = "Field type has been replaced with a blob of bytes: \
-                                Can't format `&'static i32`, because references \
-                                are only supported in function parameter types, \
-                                return types, and consts (b/286256327)";
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                private:
-                    __COMMENT__ #broken_field_msg
-                    unsigned char reference_field[8];
-                ...
             }
         );
     });
@@ -790,68 +352,6 @@ fn test_format_item_unsupported_struct_with_only_zero_sized_type_fields() {
 }
 
 #[test]
-fn test_format_item_unsupported_struct_with_some_zero_sized_type_fields() {
-    let test_src = r#"
-            pub struct ZeroSizedType;
-            pub struct SomeStruct {
-                pub zst1: ZeroSizedType,
-                pub successful_field: i32,
-                pub zst2: ZeroSizedType,
-            }
-        "#;
-    test_format_item(test_src, "SomeStruct", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        let broken_field_msg_zst1 =
-            "Skipped bindings for field `zst1`: ZST fields are not supported (b/258259459)";
-        let broken_field_msg_zst2 =
-            "Skipped bindings for field `zst2`: ZST fields are not supported (b/258259459)";
-
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct ... SomeStruct final {
-                    ...
-                        union { ... std::int32_t successful_field; };
-                    __COMMENT__ #broken_field_msg_zst1
-                    __COMMENT__ #broken_field_msg_zst2
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-                ...
-            }
-        );
-
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(SomeStruct) == 4, ...);
-                static_assert(alignof(SomeStruct) == 4, ...);
-                static_assert(std::is_trivially_destructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_constructible_v<SomeStruct>);
-                static_assert(std::is_trivially_move_assignable_v<SomeStruct>);
-                inline void SomeStruct::__crubit_field_offset_assertions() {
-                static_assert(0 == offsetof(SomeStruct, successful_field));
-                }
-            }
-        );
-
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::SomeStruct>() == 4);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::SomeStruct>() == 4);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, successful_field) == 0);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, zst1) == 4);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeStruct, zst2) == 4);
-
-            }
-        );
-    });
-}
-
-#[test]
 fn test_format_item_struct_with_dynamically_sized_field() {
     let test_src = r#"
             #![allow(dead_code)]
@@ -876,16 +376,15 @@ fn test_format_item_struct_fields_with_doc_comments() {
                 pub successful_field: i32,
 
                 /// Documentation of `unsupported_field`.
-                pub unsupported_field: Option<[i32; 3]>,
+                pub unsupported_field: std::mem::ManuallyDrop<i64>,
             }
         "#;
     test_format_item(test_src, "SomeStruct", |result| {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
-        let comment_for_successful_field = " Documentation of `successful_field`.\n\n\
-              Generated from: <crubit_unittests.rs>;l=4";
+        let comment_for_successful_field = " Documentation of `successful_field`.";
         let comment_for_unsupported_field = "Field type has been replaced with a blob of bytes: \
-             Unsupported bridge type: [i32; 3_usize]";
+             Generic types are not supported yet (b/259749095)";
         assert_cc_matches!(
             main_api.tokens,
             quote! {
@@ -894,12 +393,13 @@ fn test_format_item_struct_fields_with_doc_comments() {
                     ...
                     private:
                         __COMMENT__ #comment_for_unsupported_field
-                        unsigned char unsupported_field[16];
+                        ::std::array<unsigned char, 8> unsupported_field;
                     public:
                         union {
                             __COMMENT__ #comment_for_successful_field
-                            std::int32_t successful_field;
+                            ::std::int32_t successful_field;
                         };
+                        ...
                     private:
                         static void __crubit_field_offset_assertions();
                 };
@@ -909,134 +409,47 @@ fn test_format_item_struct_fields_with_doc_comments() {
     });
 }
 
-/// This is a test for an enum that only has `EnumItemDiscriminant` items
-/// (and doesn't have `EnumItemTuple` or `EnumItemStruct` items).  See
-/// also https://doc.rust-lang.org/reference/items/enumerations.html
 #[test]
-fn test_format_item_enum_with_only_discriminant_items() {
+fn test_format_item_enum_with_kythe_annotations() {
     let test_src = r#"
-            pub enum SomeEnum {
-                Red,
-                Green = 123,
-                Blue,
+            #[doc="CRUBIT_ANNOTATE: cpp_enum=enum class"]
+            #[repr(transparent)]
+            pub struct SomeEnum(i32);
+            impl SomeEnum {
+                pub const VARIANT_0: SomeEnum = SomeEnum(0);
+                pub const VARIANT_1: SomeEnum = SomeEnum(1);
+                pub const VARIANT_2: SomeEnum = SomeEnum(2);
             }
-
-            const _: () = assert!(std::mem::size_of::<SomeEnum>() == 1);
-            const _: () = assert!(std::mem::align_of::<SomeEnum>() == 1);
         "#;
-    test_format_item(test_src, "SomeEnum", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        let no_fields_msg = "Field type has been replaced with a blob of bytes: \
-                             No support for bindings of individual non-repr(C) `enum`s";
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) alignas(1) [[clang::trivial_abi]] SomeEnum final {
-                    public:
-                        __COMMENT__ "`rust_out::SomeEnum` doesn't implement the `Default` trait"
-                        SomeEnum() = delete;
-
-                        __COMMENT__ "No custom `Drop` impl and no custom \"drop glue\" required"
-                        ~SomeEnum() = default;
-                        SomeEnum(SomeEnum&&) = default;
-                        SomeEnum& operator=(SomeEnum&&) = default;
-
-                        __COMMENT__ "`rust_out::SomeEnum` doesn't implement the `Clone` trait"
-                        SomeEnum(const SomeEnum&) = delete;
-                        SomeEnum& operator=(const SomeEnum&) = delete;
-
-                        SomeEnum(::crubit::UnsafeRelocateTag, SomeEnum&& value) {
-                          memcpy(this, &value, sizeof(value));
-                        }
-                    private:
-                        __COMMENT__ #no_fields_msg
-                        unsigned char __opaque_blob_of_bytes[1];
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(SomeEnum) == 1, ...);
-                static_assert(alignof(SomeEnum) == 1, ...);
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::SomeEnum>() == 1);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::SomeEnum>() == 1);
-            }
-        );
-    });
-}
-
-/// This is a test for an enum that has `EnumItemTuple` and `EnumItemStruct`
-/// items. See also https://doc.rust-lang.org/reference/items/enumerations.html
-#[test]
-fn test_format_item_enum_with_tuple_and_struct_items() {
-    let test_src = r#"
-            pub enum Point {
-                Cartesian(f32, f32),
-                Polar{ dist: f32, angle: f32 },
-            }
-
-            const _: () = assert!(std::mem::size_of::<Point>() == 12);
-            const _: () = assert!(std::mem::align_of::<Point>() == 4);
-        "#;
-    test_format_item(test_src, "Point", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        let no_fields_msg = "Field type has been replaced with a blob of bytes: \
-                             No support for bindings of individual non-repr(C) `enum`s";
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) alignas(4) [[clang::trivial_abi]] Point final {
-                    public:
-                        __COMMENT__ "`rust_out::Point` doesn't implement the `Default` trait"
-                        Point() = delete;
-
-                        __COMMENT__ "No custom `Drop` impl and no custom \"drop glue\" required"
-                        ~Point() = default;
-                        Point(Point&&) = default;
-                        Point& operator=(Point&&) = default;
-
-                        __COMMENT__ "`rust_out::Point` doesn't implement the `Clone` trait"
-                        Point(const Point&) = delete;
-                        Point& operator=(const Point&) = delete;
-
-                        Point(::crubit::UnsafeRelocateTag, Point&& value) {
-                          memcpy(this, &value, sizeof(value));
-                        }
-                    private:
-                        __COMMENT__ #no_fields_msg
-                        unsigned char __opaque_blob_of_bytes[12];
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(Point) == 12, ...);
-                static_assert(alignof(Point) == 4, ...);
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::Point>() == 12);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::Point>() == 4);
-            }
-        );
-    });
+    test_format_item_with_features(
+        test_src,
+        "SomeEnum",
+        crubit_feature::CrubitFeature::Experimental | crubit_feature::CrubitFeature::Supported,
+        /* with_kythe_annotations= */ true,
+        |result| {
+            let result = result.unwrap().unwrap();
+            let main_api = &result.main_api;
+            let comment =
+                "CRUBIT_ANNOTATE: cpp_enum=enum class\n\nGenerated from: <crubit_unittests.rs>;l=4";
+            let provenance_0 = quote! { __CAPTURE_TAG__ "<crubit_unittests.rs>" "184" "193" __COMMENT__ "Generated from: <crubit_unittests.rs>;l=6" };
+            let provenance_1 = quote! { __CAPTURE_TAG__ "<crubit_unittests.rs>" "245" "254" __COMMENT__ "Generated from: <crubit_unittests.rs>;l=7" };
+            let provenance_2 = quote! { __CAPTURE_TAG__ "<crubit_unittests.rs>" "306" "315" __COMMENT__ "Generated from: <crubit_unittests.rs>;l=8" };
+            assert_cc_matches!(
+                main_api.tokens,
+                quote! {
+                    ...
+                    __CAPTURE_TAG__ "<crubit_unittests.rs>" "115" "123" __COMMENT__ #comment
+                    enum class CRUBIT_INTERNAL_RUST_TYPE(...) __CAPTURE_BEGIN__ SomeEnum __CAPTURE_END__
+                    ... {
+                    ... #provenance_0 __CAPTURE_BEGIN__ VARIANT_0 __CAPTURE_END__ = ...
+                    ... #provenance_1 __CAPTURE_BEGIN__ VARIANT_1 __CAPTURE_END__ = ...
+                    ... #provenance_2 __CAPTURE_BEGIN__ VARIANT_2 __CAPTURE_END__ = ...
+                    }
+                    ...
+                }
+            );
+        },
+    );
 }
 
 /// This test covers how zero-variant enums are handled.  See also
@@ -1049,71 +462,6 @@ fn test_format_item_unsupported_enum_zero_variants() {
     test_format_item(test_src, "ZeroVariantEnum", |result| {
         let err = result.unwrap_err();
         assert_eq!(err, "Zero-sized types (ZSTs) are not supported (b/258259459)");
-    });
-}
-
-/// This is a test for a `union`.  See also
-/// https://doc.rust-lang.org/reference/items/unions.html
-#[test]
-fn test_format_item_union() {
-    let test_src = r#"
-            pub union SomeUnion {
-                pub i: i32,
-                pub f: f64,
-            }
-
-            const _: () = assert!(std::mem::size_of::<SomeUnion>() == 8);
-            const _: () = assert!(std::mem::align_of::<SomeUnion>() == 8);
-        "#;
-    test_format_item(test_src, "SomeUnion", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                union CRUBIT_INTERNAL_RUST_TYPE(...) alignas(8) [[clang::trivial_abi]] SomeUnion final {
-                    public:
-                        __COMMENT__ "`rust_out::SomeUnion` doesn't implement the `Default` trait"
-                        SomeUnion() = delete;
-
-                        __COMMENT__ "No custom `Drop` impl and no custom \"drop glue\" required"
-                        ~SomeUnion() = default;
-                        SomeUnion(SomeUnion&&) = default;
-                        SomeUnion& operator=(SomeUnion&&) = default;
-
-                        __COMMENT__ "`rust_out::SomeUnion` doesn't implement the `Clone` trait"
-                        SomeUnion(const SomeUnion&) = delete;
-                        SomeUnion& operator=(const SomeUnion&) = delete;
-                    ...
-                    struct {
-                        ...
-                        std::int32_t value;
-                    } i;
-                    ...
-                    struct {
-                        ...
-                        double value;
-                    } f;
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(SomeUnion) == 8, ...);
-                static_assert(alignof(SomeUnion) == 8, ...);
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::SomeUnion>() == 8);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::SomeUnion>() == 8);
-            }
-        );
     });
 }
 
@@ -1130,8 +478,7 @@ fn test_format_item_doc_comments_union() {
     test_format_item(test_src, "SomeUnionWithDocs", |result| {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
-        let comment = " Doc for some union.\n\n\
-                       Generated from: <crubit_unittests.rs>;l=3";
+        let comment = " Doc for some union.";
         assert_cc_matches!(
             main_api.tokens,
             quote! {
@@ -1156,8 +503,7 @@ fn test_format_item_doc_comments_enum() {
     test_format_item(test_src, "SomeEnumWithDocs", |result| {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
-        let comment = " Doc for some enum. \n\n\
-                        Generated from: <crubit_unittests.rs>;l=3";
+        let comment = " Doc for some enum. ";
         assert_cc_matches!(
             main_api.tokens,
             quote! {
@@ -1184,8 +530,7 @@ fn test_format_item_doc_comments_struct() {
     test_format_item(test_src, "SomeStructWithDocs", |result| {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
-        let comment = "Doc for some struct.\n\n\
-                       Generated from: <crubit_unittests.rs>;l=4";
+        let comment = "Doc for some struct.";
         assert_cc_matches!(
             main_api.tokens,
             quote! {
@@ -1210,8 +555,7 @@ fn test_format_item_doc_comments_tuple_struct() {
     test_format_item(test_src, "SomeTupleStructWithDocs", |result| {
         let result = result.unwrap().unwrap();
         let main_api = &result.main_api;
-        let comment = " Doc for some tuple struct.\n\n\
-                       Generated from: <crubit_unittests.rs>;l=5";
+        let comment = " Doc for some tuple struct.";
         assert_cc_matches!(
             main_api.tokens,
             quote! {
@@ -1263,7 +607,6 @@ fn test_cpp_enum_fails_if_implements_method() {
 }
 
 #[test]
-#[should_panic]
 fn test_cpp_enum_fails_for_rust_union() {
     let test_src = r#"
     #![feature(transparent_unions)]
@@ -1275,7 +618,17 @@ fn test_cpp_enum_fails_for_rust_union() {
     }
     "#;
 
-    test_format_item(test_src, "Color", |_result| {});
+    test_format_item(test_src, "Color", |result| {
+        assert_cc_matches!(
+            result.unwrap().unwrap().main_api.tokens,
+            quote! {
+                ...
+                __COMMENT__ "CRUBIT_ANNOTATE: cpp_enum=enum class"
+                union CRUBIT_INTERNAL_RUST_TYPE(":: rust_out :: Color") Color : ::std::int32_t {};
+                ...
+            }
+        );
+    });
 }
 
 #[test]
@@ -1290,284 +643,6 @@ fn test_cpp_enum_fails_for_rust_enum() {
     "#;
 
     test_format_item(test_src, "Color", |_result| {});
-}
-
-#[test]
-fn test_repr_c_enum_fields() {
-    let test_src = r#"
-    #[repr(C, i32)]
-    pub enum SomeEnum {
-        A(i32),
-        B{x: u32},
-        C,
-        D{foo: i32, bar: i32} = 3,
-    }
-
-    const _: () = assert!(std::mem::size_of::<SomeEnum>() == 12);
-    const _: () = assert!(std::mem::align_of::<SomeEnum>() == 4);
-    "#;
-
-    test_format_item(test_src, "SomeEnum", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) ... [[clang::trivial_abi]] SomeEnum final {
-                    public:
-                        ...
-                        __COMMENT__ "`rust_out::SomeEnum` doesn't implement the `Default` trait"
-                        SomeEnum() = delete;
-                        ...
-                        __COMMENT__ "No custom `Drop` impl and no custom \"drop glue\" required"
-                        ~SomeEnum() = default;
-                        SomeEnum(SomeEnum&&) = default;
-                        SomeEnum& operator=(SomeEnum&&) = default;
-
-                        __COMMENT__ "`rust_out::SomeEnum` doesn't implement the `Clone` trait"
-                        SomeEnum(const SomeEnum&) = delete;
-                        SomeEnum& operator=(const SomeEnum&) = delete;
-                        ...
-                        struct alignas(...) __crubit_A_struct {
-                            public:
-                                std::int32_t __field0;
-                        };
-                        ...
-                        struct alignas(...) __crubit_B_struct {
-                            public:
-                                std::uint32_t x;
-                        };
-                        ...
-                        __COMMENT__ "Variant C has no size, so no struct is generated."
-                        ...
-                        struct alignas(...) __crubit_D_struct {
-                            public:
-                                std::int32_t foo;
-                                std::int32_t bar;
-                        };
-                        ...
-                        enum class Tag : std::int32_t {
-                            A = 0,
-                            B = 1,
-                            C = 2,
-                            D = 3,
-                        };
-                        ...
-                        public:
-                            Tag tag;
-                        ...
-                        public:
-                            union {
-                                __crubit_A_struct A;
-                                __crubit_B_struct B;
-                                __crubit_D_struct D;
-                            };
-                        ...
-                    ...
-                };
-            }
-        );
-    })
-}
-
-#[test]
-fn test_repr_c_enum_with_zst() {
-    let test_src = r#"
-    #[repr(C, i32)]
-    pub enum SomeEnum {
-        A(()),
-    }
-
-    const _: () = assert!(std::mem::size_of::<SomeEnum>() == 4);
-    const _: () = assert!(std::mem::align_of::<SomeEnum>() == 4);
-    "#;
-
-    test_format_item(test_src, "SomeEnum", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                struct CRUBIT_INTERNAL_RUST_TYPE(...) ... [[clang::trivial_abi]] SomeEnum final {
-                    public:
-                        ...
-                        __COMMENT__ "`rust_out::SomeEnum` doesn't implement the `Default` trait"
-                        SomeEnum() = delete;
-                        ...
-                        __COMMENT__ "No custom `Drop` impl and no custom \"drop glue\" required"
-                        ~SomeEnum() = default;
-                        SomeEnum(SomeEnum&&) = default;
-                        SomeEnum& operator=(SomeEnum&&) = default;
-
-                        __COMMENT__ "`rust_out::SomeEnum` doesn't implement the `Clone` trait"
-                        SomeEnum(const SomeEnum&) = delete;
-                        SomeEnum& operator=(const SomeEnum&) = delete;
-                        ...
-                        __COMMENT__ "Variant A has no size, so no struct is generated."
-                        ...
-                        enum class Tag : std::int32_t {
-                            A = 0,
-                        };
-                        ...
-                        public:
-                            Tag tag;
-                        ...
-                    ...
-                };
-            }
-        );
-    })
-}
-
-#[test]
-fn test_repr_c_union_fields() {
-    let test_src = r#"
-    #[repr(C)]
-    pub union SomeUnion {
-        pub x: u16,
-        pub y: u32,
-    }
-
-    const _: () = assert!(std::mem::size_of::<SomeUnion>() == 4);
-    const _: () = assert!(std::mem::align_of::<SomeUnion>() == 4);
-    "#;
-
-    test_format_item(test_src, "SomeUnion", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                union CRUBIT_INTERNAL_RUST_TYPE(...) alignas(4) [[clang::trivial_abi]] SomeUnion final {
-                    public:
-                        ...
-                        __COMMENT__ "`rust_out::SomeUnion` doesn't implement the `Default` trait"
-                        SomeUnion() = delete;
-                        ...
-                        __COMMENT__ "No custom `Drop` impl and no custom \"drop glue\" required"
-                        ~SomeUnion() = default;
-                        SomeUnion(SomeUnion&&) = default;
-                        SomeUnion& operator=(SomeUnion&&) = default;
-
-                        __COMMENT__ "`rust_out::SomeUnion` doesn't implement the `Clone` trait"
-                        SomeUnion(const SomeUnion&) = delete;
-                        SomeUnion& operator=(const SomeUnion&) = delete;
-                        ...
-                        std::uint16_t x;
-                        ...
-                        std::uint32_t y;
-
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-            }
-        );
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(SomeUnion) == 4, ...);
-                static_assert(alignof(SomeUnion) == 4, ...);
-                static_assert(std::is_trivially_destructible_v<SomeUnion>);
-                static_assert(std::is_trivially_move_constructible_v<SomeUnion>);
-                static_assert(std::is_trivially_move_assignable_v<SomeUnion>);
-                inline void SomeUnion::__crubit_field_offset_assertions() {
-                  static_assert(0 == offsetof(SomeUnion, x));
-                  static_assert(0 == offsetof(SomeUnion, y));
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::SomeUnion>() == 4);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::SomeUnion>() == 4);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeUnion, x) == 0);
-                const _: () = assert!( ::core::mem::offset_of!(::rust_out::SomeUnion, y) == 0);
-            }
-        );
-    })
-}
-
-#[test]
-fn test_union_fields() {
-    let test_src = r#"
-    pub union SomeUnion {
-        pub x: u16,
-        pub y: u32,
-    }
-
-    const _: () = assert!(std::mem::size_of::<SomeUnion>() == 4);
-    const _: () = assert!(std::mem::align_of::<SomeUnion>() == 4);
-    "#;
-
-    test_format_item(test_src, "SomeUnion", |result| {
-        let result = result.unwrap().unwrap();
-        let main_api = &result.main_api;
-        assert!(!main_api.prereqs.is_empty());
-        assert_cc_matches!(
-            main_api.tokens,
-            quote! {
-                ...
-                union CRUBIT_INTERNAL_RUST_TYPE(...) alignas(4) [[clang::trivial_abi]] SomeUnion final {
-                    public:
-                        ...
-                        __COMMENT__ "`rust_out::SomeUnion` doesn't implement the `Default` trait"
-                        SomeUnion() = delete;
-                        ...
-                        __COMMENT__ "No custom `Drop` impl and no custom \"drop glue\" required"
-                        ~SomeUnion() = default;
-                        SomeUnion(SomeUnion&&) = default;
-                        SomeUnion& operator=(SomeUnion&&) = default;
-
-                        __COMMENT__ "`rust_out::SomeUnion` doesn't implement the `Clone` trait"
-                        SomeUnion(const SomeUnion&) = delete;
-                        SomeUnion& operator=(const SomeUnion&) = delete;
-                        ...
-                        struct {
-                            ...
-                            std::uint16_t value;
-                        } x;
-                        ...
-                        struct {
-                            ...
-                            std::uint32_t value;
-                        } y;
-                    private:
-                        static void __crubit_field_offset_assertions();
-                };
-            }
-        );
-
-        // Note: we don't check for offsets here, because we don't know necessarily know
-        // what the offset will be.
-        assert_cc_matches!(
-            result.cc_details.tokens,
-            quote! {
-                static_assert(sizeof(SomeUnion) == 4, ...);
-                static_assert(alignof(SomeUnion) == 4, ...);
-                static_assert(std::is_trivially_destructible_v<SomeUnion>);
-                static_assert(std::is_trivially_move_constructible_v<SomeUnion>);
-                static_assert(std::is_trivially_move_assignable_v<SomeUnion>);
-                inline void SomeUnion::__crubit_field_offset_assertions() {
-                  ...
-                }
-            }
-        );
-        assert_rs_matches!(
-            result.rs_details.tokens,
-            quote! {
-                const _: () = assert!(::std::mem::size_of::<::rust_out::SomeUnion>() == 4);
-                const _: () = assert!(::std::mem::align_of::<::rust_out::SomeUnion>() == 4);
-                ...
-            }
-        );
-    })
 }
 
 #[test]
@@ -1595,7 +670,7 @@ fn test_repr_c_union_unknown_fields() {
                         ...
                     private:
                         __COMMENT__ "Field type has been replaced with a blob of bytes: Generic types are not supported yet (b/259749095)"
-                        unsigned char z[8];
+                        ::std::array<unsigned char, 8> z;
                     ...
                 };
             }
@@ -1689,19 +764,19 @@ fn test_format_item_rename_field_with_conflicting_name() {
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                std::int32_t a_;
+                ::std::int32_t a_;
             }
         );
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                std::int32_t b_;
+                ::std::int32_t b_;
             }
         );
         assert_cc_matches!(
             main_api.tokens,
             quote! {
-                std::int32_t c;
+                ::std::int32_t c;
             }
         );
         // Check that the fields are not renamed in the Rust side.
@@ -1979,12 +1054,12 @@ fn test_deprecated_attr_for_struct_fields() {
                     ...
                     union {
                         ...
-                        [[deprecated("Use `y` instead")]] std::uint32_t x;
+                        [[deprecated("Use `y` instead")]] ::std::uint32_t x;
                     }
                     ...
                     union {
                         ...
-                        std::uint32_t y;
+                        ::std::uint32_t y;
                     }
                     ...
                 };
@@ -2021,9 +1096,9 @@ fn test_deprecated_attr_for_impl_block() {
             quote! {
                 struct ... SomeStruct final {
                     ...
-                    ... [[deprecated("Use AnotherStruct instead")]] std::uint32_t sum() const ...
+                    ... [[deprecated("Use AnotherStruct instead")]] ::std::uint32_t sum() const ...
                     ...
-                    ... [[deprecated("Use AnotherStruct instead")]] std::uint32_t product() const ...
+                    ... [[deprecated("Use AnotherStruct instead")]] ::std::uint32_t product() const ...
                     ...
                 };
             }

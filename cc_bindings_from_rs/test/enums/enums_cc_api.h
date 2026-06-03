@@ -4,60 +4,207 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // enums_golden
-// Features: custom_ffi_types, experimental, non_unpin_ctor, std_unique_ptr,
-// std_vector, supported, wrapper
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_ENUMS_ENUMS_GOLDEN
 #define THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_ENUMS_ENUMS_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 #include "support/internal/memswap.h"
 #include "support/internal/slot.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 #include <utility>
 
-namespace enums {
+#include "support/rs_std/rs_alloc.h"
 
-namespace repr_c {
+namespace enums::qr_error {
+struct StructuredQrError;
+struct CRUBIT_INTERNAL_RUST_TYPE(
+    ":: enums_golden :: qr_error :: QrError") alignas(8) [[clang::trivial_abi]]
+QrError final {
+ public:
+  // `enums_golden::qr_error::QrError` doesn't implement the `Default` trait
+  QrError() = delete;
 
-// Generated from:
-// cc_bindings_from_rs/test/enums/enums.rs;l=11
+  static constexpr QrError MakeDataTooLong();
+
+  static constexpr QrError MakeInvalidVersion();
+
+  static constexpr QrError MakeUnsupportedCharacterSet();
+
+  static constexpr QrError MakeInvalidEciDesignator();
+
+  static constexpr QrError MakeInvalidCharacter();
+
+  static ::enums::qr_error::QrError MakeStructured(
+      ::enums::qr_error::StructuredQrError __param_0);
+
+  // No custom `Drop` impl and no custom "drop glue" required
+  ~QrError() = default;
+  QrError(QrError&&) = default;
+  QrError& operator=(QrError&&) = default;
+
+  // Rust types that are `Copy` get trivial, `default` C++ copy constructor and
+  // assignment operator.
+  QrError(const QrError&) = default;
+  QrError& operator=(const QrError&) = default;
+  QrError(::crubit::UnsafeRelocateTag, QrError&& value) {
+    ::std::memcpy(this, &value, sizeof(value));
+  }
+
+  bool is_data_too_long() const;
+
+  bool operator==(::enums::qr_error::QrError const& other) const;
+
+ private:
+  // Field type has been replaced with a blob of bytes: No support for bindings
+  // of individual non-repr(C) `enum`s
+  ::std::array<unsigned char, 24> __opaque_blob_of_bytes;
+
+ private:
+  struct PrivateBytesTag {};
+  constexpr QrError(PrivateBytesTag, ::std::array<unsigned char, 24> bytes)
+      : __opaque_blob_of_bytes(bytes) {}
+
+ private:
+  static void __crubit_field_offset_assertions();
+};
+
+struct CRUBIT_INTERNAL_RUST_TYPE(
+    ":: enums_golden :: qr_error :: StructuredQrError") alignas(8)
+    [[clang::trivial_abi]] StructuredQrError final {
+ public:
+  // `enums_golden::qr_error::StructuredQrError` doesn't implement the `Default`
+  // trait
+  StructuredQrError() = delete;
+
+  static constexpr StructuredQrError MakeAtLeast2Pieces();
+
+  static ::enums::qr_error::StructuredQrError MakeTotalMismatch(
+      ::std::uintptr_t __param_0);
+
+  static constexpr StructuredQrError MakeMissingParts();
+
+  static constexpr StructuredQrError MakeParity();
+
+  static constexpr StructuredQrError MakeTooShort();
+
+  static constexpr StructuredQrError MakeStructuredWrongMode();
+
+  static constexpr StructuredQrError MakeStructuredWrongEnc();
+
+  static ::enums::qr_error::StructuredQrError MakeSeqGreaterThanTotal(
+      ::std::uint8_t __param_0, ::std::uint8_t __param_1);
+
+  static ::enums::qr_error::StructuredQrError MakeLengthMismatch(
+      ::std::uintptr_t __param_0, ::std::uintptr_t __param_1);
+
+  static ::enums::qr_error::StructuredQrError MakeUnsupportedVersion(
+      ::std::int16_t __param_0);
+
+  static ::enums::qr_error::StructuredQrError MakeSplitMax16(
+      ::std::uintptr_t __param_0);
+
+  // No custom `Drop` impl and no custom "drop glue" required
+  ~StructuredQrError() = default;
+  StructuredQrError(StructuredQrError&&) = default;
+  StructuredQrError& operator=(StructuredQrError&&) = default;
+
+  // Rust types that are `Copy` get trivial, `default` C++ copy constructor and
+  // assignment operator.
+  StructuredQrError(const StructuredQrError&) = default;
+  StructuredQrError& operator=(const StructuredQrError&) = default;
+  StructuredQrError(::crubit::UnsafeRelocateTag, StructuredQrError&& value) {
+    ::std::memcpy(this, &value, sizeof(value));
+  }
+
+  bool operator==(::enums::qr_error::StructuredQrError const& other) const;
+
+ private:
+  // Field type has been replaced with a blob of bytes: No support for bindings
+  // of individual non-repr(C) `enum`s
+  ::std::array<unsigned char, 24> __opaque_blob_of_bytes;
+
+ private:
+  struct PrivateBytesTag {};
+  constexpr StructuredQrError(PrivateBytesTag,
+                              ::std::array<unsigned char, 24> bytes)
+      : __opaque_blob_of_bytes(bytes) {}
+
+ private:
+  static void __crubit_field_offset_assertions();
+};
+
+}  // namespace enums::qr_error
+
+namespace enums::repr_c {
+
 struct CRUBIT_INTERNAL_RUST_TYPE(":: enums_golden :: repr_c :: MyEnum") alignas(
     8) [[clang::trivial_abi]] MyEnum final {
  public:
   // Default::default
   MyEnum();
 
+  static ::enums::repr_c::MyEnum MakeE(::rs::alloc::string::String __param_0,
+                                       ::std::int32_t __param_1);
+
+  static ::enums::repr_c::MyEnum MakeA(::std::int32_t __param_0,
+                                       ::std::int64_t __param_1);
+
+  static MyEnum MakeF();
+
+  // Error generating bindings for variant `enums_golden::repr_c::MyEnum::Z`
+  // defined at
+  // cc_bindings_from_rs/test/enums/enums.rs;l=15:
+  // Tuple type `()` is not supported in this context
+
+  static MyEnum MakeG();
+
+  // Error generating bindings for variant `enums_golden::repr_c::MyEnum::B`
+  // defined at
+  // cc_bindings_from_rs/test/enums/enums.rs;l=17:
+  // Constructing non-tuple, struct-like enum variants is not supported:
+  // b/487357254
+
+  // Error generating bindings for variant `enums_golden::repr_c::MyEnum::C`
+  // defined at
+  // cc_bindings_from_rs/test/enums/enums.rs;l=18:
+  // Constructing non-tuple, struct-like enum variants is not supported:
+  // b/487357254
+
+  static MyEnum MakeD();
+
   // Drop::drop
   ~MyEnum();
 
   MyEnum(MyEnum&&);
-  MyEnum& operator=(MyEnum&&);
+  ::enums::repr_c::MyEnum& operator=(MyEnum&&);
 
   // `enums_golden::repr_c::MyEnum` doesn't implement the `Clone` trait
   MyEnum(const MyEnum&) = delete;
   MyEnum& operator=(const MyEnum&) = delete;
   MyEnum(::crubit::UnsafeRelocateTag, MyEnum&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
   struct alignas(0) __crubit_E_struct {
-   private:
-    // Field type has been replaced with a blob of bytes: Type
-    // `std::string::String` comes from the `alloc` crate, but no
-    // `--crate-header` was specified for this crate
-    unsigned char __field0[24];
-
    public:
-    std::int32_t __field1;
+    ::rs::alloc::string::String __field0;
+    ::std::int32_t __field1;
   };
   struct alignas(0) __crubit_A_struct {
    public:
-    std::int32_t __field0;
-    std::int64_t __field1;
+    ::std::int32_t __field0;
+    ::std::int64_t __field1;
   };
   // Variant F has no size, so no struct is generated.
 
@@ -72,13 +219,13 @@ struct CRUBIT_INTERNAL_RUST_TYPE(":: enums_golden :: repr_c :: MyEnum") alignas(
   };
   struct alignas(0) __crubit_C_struct {
    public:
-    std::int32_t a;
-    std::int32_t b;
-    std::int32_t c;
+    ::std::int32_t a;
+    ::std::int32_t b;
+    ::std::int32_t c;
   };
   // Variant D has no size, so no struct is generated.
 
-  enum class Tag : std::int64_t {
+  enum class Tag : ::std::int64_t {
     E = 0,
     A = 1,
     F = 2,
@@ -101,15 +248,17 @@ struct CRUBIT_INTERNAL_RUST_TYPE(":: enums_golden :: repr_c :: MyEnum") alignas(
   };
 
  private:
+  struct PrivateTagCtorTag {};
+  constexpr MyEnum(PrivateTagCtorTag, Tag tag) : tag(tag) {}
+
+ private:
   static void __crubit_field_offset_assertions();
 };
 
-}  // namespace repr_c
+}  // namespace enums::repr_c
 
-namespace repr_c_clone_active_variant {
+namespace enums::repr_c_clone_active_variant {
 
-// Generated from:
-// cc_bindings_from_rs/test/enums/enums.rs;l=79
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: enums_golden :: repr_c_clone_active_variant :: "
     "CloneActiveVariant") alignas(4) [[clang::trivial_abi]]
@@ -117,6 +266,15 @@ CloneActiveVariant final {
  public:
   // Default::default
   CloneActiveVariant();
+
+  static ::enums::repr_c_clone_active_variant::CloneActiveVariant MakeA(
+      ::std::int32_t __param_0);
+
+  static ::enums::repr_c_clone_active_variant::CloneActiveVariant MakeB(
+      ::std::int32_t __param_0);
+
+  static ::enums::repr_c_clone_active_variant::CloneActiveVariant MakeC(
+      ::std::int32_t __param_0);
 
   // No custom `Drop` impl and no custom "drop glue" required
   ~CloneActiveVariant() = default;
@@ -127,25 +285,26 @@ CloneActiveVariant final {
   CloneActiveVariant(const CloneActiveVariant&);
 
   // Clone::clone_from
-  CloneActiveVariant& operator=(const CloneActiveVariant&);
+  ::enums::repr_c_clone_active_variant::CloneActiveVariant& operator=(
+      const CloneActiveVariant&);
 
   CloneActiveVariant(::crubit::UnsafeRelocateTag, CloneActiveVariant&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
   struct alignas(0) __crubit_A_struct {
    public:
-    std::int32_t __field0;
+    ::std::int32_t __field0;
   };
   struct alignas(0) __crubit_B_struct {
    public:
-    std::int32_t __field0;
+    ::std::int32_t __field0;
   };
   struct alignas(0) __crubit_C_struct {
    public:
-    std::int32_t __field0;
+    ::std::int32_t __field0;
   };
 
-  enum class Tag : std::int8_t {
+  enum class Tag : ::std::int8_t {
     A = 0,
     B = 1,
     C = 2,
@@ -162,33 +321,35 @@ CloneActiveVariant final {
   };
 
  private:
+  struct PrivateTagCtorTag {};
+  constexpr CloneActiveVariant(PrivateTagCtorTag, Tag tag) : tag(tag) {}
+
+ private:
   static void __crubit_field_offset_assertions();
 };
 
-// Generated from:
-// cc_bindings_from_rs/test/enums/enums.rs;l=101
 bool is_a(::enums::repr_c_clone_active_variant::CloneActiveVariant const& e);
 
-// Generated from:
-// cc_bindings_from_rs/test/enums/enums.rs;l=105
 bool is_b(::enums::repr_c_clone_active_variant::CloneActiveVariant const& e);
 
-// Generated from:
-// cc_bindings_from_rs/test/enums/enums.rs;l=109
 bool is_c(::enums::repr_c_clone_active_variant::CloneActiveVariant const& e);
 
-}  // namespace repr_c_clone_active_variant
+}  // namespace enums::repr_c_clone_active_variant
 
-namespace repr_c_clone_counter {
+namespace enums::repr_c_clone_counter {
 
-// Generated from:
-// cc_bindings_from_rs/test/enums/enums.rs;l=55
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: enums_golden :: repr_c_clone_counter :: CloneCount") alignas(8)
     [[clang::trivial_abi]] CloneCount final {
  public:
   // Default::default
   CloneCount();
+
+  // Error generating bindings for variant
+  // `enums_golden::repr_c_clone_counter::CloneCount::A` defined at
+  // cc_bindings_from_rs/test/enums/enums.rs;l=56:
+  // Constructing non-tuple, struct-like enum variants is not supported:
+  // b/487357254
 
   // No custom `Drop` impl and no custom "drop glue" required
   ~CloneCount() = default;
@@ -199,17 +360,17 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   CloneCount(const CloneCount&);
 
   // Clone::clone_from
-  CloneCount& operator=(const CloneCount&);
+  ::enums::repr_c_clone_counter::CloneCount& operator=(const CloneCount&);
 
   CloneCount(::crubit::UnsafeRelocateTag, CloneCount&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
   struct alignas(0) __crubit_A_struct {
    public:
-    std::int32_t* p;
+    ::std::int32_t* p;
   };
 
-  enum class Tag : std::int8_t {
+  enum class Tag : ::std::int8_t {
     A = 0,
   };
 
@@ -222,15 +383,17 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   };
 
  private:
+  struct PrivateTagCtorTag {};
+  constexpr CloneCount(PrivateTagCtorTag, Tag tag) : tag(tag) {}
+
+ private:
   static void __crubit_field_offset_assertions();
 };
 
-}  // namespace repr_c_clone_counter
+}  // namespace enums::repr_c_clone_counter
 
-namespace repr_c_drop {
+namespace enums::repr_c_drop {
 
-// Generated from:
-// cc_bindings_from_rs/test/enums/enums.rs;l=31
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: enums_golden :: repr_c_drop :: DropMe") alignas(8)
     [[clang::trivial_abi]] DropMe final {
@@ -238,34 +401,46 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   // Default::default
   DropMe();
 
+  static ::enums::repr_c_drop::DropMe MakeA(::std::int32_t __param_0);
+
+  static ::enums::repr_c_drop::DropMe MakeB(::std::int64_t __param_0);
+
+  static DropMe MakeQ();
+
+  // Error generating bindings for variant
+  // `enums_golden::repr_c_drop::DropMe::C` defined at
+  // cc_bindings_from_rs/test/enums/enums.rs;l=35:
+  // Constructing non-tuple, struct-like enum variants is not supported:
+  // b/487357254
+
   // Drop::drop
   ~DropMe();
 
   DropMe(DropMe&&);
-  DropMe& operator=(DropMe&&);
+  ::enums::repr_c_drop::DropMe& operator=(DropMe&&);
 
   // `enums_golden::repr_c_drop::DropMe` doesn't implement the `Clone` trait
   DropMe(const DropMe&) = delete;
   DropMe& operator=(const DropMe&) = delete;
   DropMe(::crubit::UnsafeRelocateTag, DropMe&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
   struct alignas(0) __crubit_A_struct {
    public:
-    std::int32_t __field0;
+    ::std::int32_t __field0;
   };
   struct alignas(0) __crubit_B_struct {
    public:
-    std::int64_t __field0;
+    ::std::int64_t __field0;
   };
   // Variant Q has no size, so no struct is generated.
 
   struct alignas(0) __crubit_C_struct {
    public:
-    std::int32_t* p;
+    ::std::int32_t* p;
   };
 
-  enum class Tag : std::uint32_t {
+  enum class Tag : ::std::uint32_t {
     A = 0,
     B = 1,
     Q = 2,
@@ -283,12 +458,485 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   };
 
  private:
+  struct PrivateTagCtorTag {};
+  constexpr DropMe(PrivateTagCtorTag, Tag tag) : tag(tag) {}
+
+ private:
   static void __crubit_field_offset_assertions();
 };
 
-}  // namespace repr_c_drop
+}  // namespace enums::repr_c_drop
 
-namespace repr_c {
+namespace enums::repr_int {
+
+//  Two `NoPayloadX` variants to test that the tag is correctly set
+//  (`NoPayload1` should have a tag of 0 and therefore `NoPayload2` is a
+//  slightly better test for things like encoding the tag value with the
+//  proper endianness, especially given that the tag is 4 bytes wide).
+struct CRUBIT_INTERNAL_RUST_TYPE(
+    ":: enums_golden :: repr_int :: IntReprEnumWithNoPayload") alignas(4)
+    [[clang::trivial_abi]] IntReprEnumWithNoPayload final {
+ public:
+  // `enums_golden::repr_int::IntReprEnumWithNoPayload` doesn't implement the
+  // `Default` trait
+  IntReprEnumWithNoPayload() = delete;
+
+  static constexpr IntReprEnumWithNoPayload MakeNoPayload1();
+
+  static constexpr IntReprEnumWithNoPayload MakeNoPayload2();
+
+  // No custom `Drop` impl and no custom "drop glue" required
+  ~IntReprEnumWithNoPayload() = default;
+  IntReprEnumWithNoPayload(IntReprEnumWithNoPayload&&) = default;
+  IntReprEnumWithNoPayload& operator=(IntReprEnumWithNoPayload&&) = default;
+
+  // `enums_golden::repr_int::IntReprEnumWithNoPayload` doesn't implement the
+  // `Clone` trait
+  IntReprEnumWithNoPayload(const IntReprEnumWithNoPayload&) = delete;
+  IntReprEnumWithNoPayload& operator=(const IntReprEnumWithNoPayload&) = delete;
+  IntReprEnumWithNoPayload(::crubit::UnsafeRelocateTag,
+                           IntReprEnumWithNoPayload&& value) {
+    ::std::memcpy(this, &value, sizeof(value));
+  }
+
+  bool is_no_payload1() const;
+
+  bool is_no_payload2() const;
+
+ private:
+  // Field type has been replaced with a blob of bytes: No support for bindings
+  // of individual non-repr(C) `enum`s
+  ::std::array<unsigned char, 4> __opaque_blob_of_bytes;
+
+ private:
+  struct PrivateBytesTag {};
+  constexpr IntReprEnumWithNoPayload(PrivateBytesTag,
+                                     ::std::array<unsigned char, 4> bytes)
+      : __opaque_blob_of_bytes(bytes) {}
+
+ private:
+  static void __crubit_field_offset_assertions();
+};
+
+}  // namespace enums::repr_int
+
+namespace enums::repr_rust {
+
+//  Doc comment of RustReprEnum.
+struct CRUBIT_INTERNAL_RUST_TYPE(
+    ":: enums_golden :: repr_rust :: RustReprEnum") alignas(4)
+    [[clang::trivial_abi]] RustReprEnum final {
+ public:
+  // `enums_golden::repr_rust::RustReprEnum` doesn't implement the `Default`
+  // trait
+  RustReprEnum() = delete;
+
+  //  Doc comment of Variant1.
+  static constexpr RustReprEnum MakeVariant1();
+
+  static constexpr RustReprEnum MakeVariant2();
+
+  static constexpr RustReprEnum MakeVariant3();
+
+  static ::enums::repr_rust::RustReprEnum MakeTuplePayloadVariant(
+      ::std::int32_t __param_0, ::std::int32_t __param_1);
+
+  // Error generating bindings for variant
+  // `enums_golden::repr_rust::RustReprEnum::StructPayloadVariant` defined at
+  // cc_bindings_from_rs/test/enums/enums.rs;l=122:
+  // Constructing non-tuple, struct-like enum variants is not supported:
+  // b/487357254
+
+  // No custom `Drop` impl and no custom "drop glue" required
+  ~RustReprEnum() = default;
+  RustReprEnum(RustReprEnum&&) = default;
+  RustReprEnum& operator=(RustReprEnum&&) = default;
+
+  // `enums_golden::repr_rust::RustReprEnum` doesn't implement the `Clone` trait
+  RustReprEnum(const RustReprEnum&) = delete;
+  RustReprEnum& operator=(const RustReprEnum&) = delete;
+  RustReprEnum(::crubit::UnsafeRelocateTag, RustReprEnum&& value) {
+    ::std::memcpy(this, &value, sizeof(value));
+  }
+
+  ::std::int32_t get_variant_number() const;
+
+  bool is_tuple_payload_variant() const;
+
+  ::std::int32_t get_first_item_from_tuple_payload() const;
+
+ private:
+  // Field type has been replaced with a blob of bytes: No support for bindings
+  // of individual non-repr(C) `enum`s
+  ::std::array<unsigned char, 12> __opaque_blob_of_bytes;
+
+ private:
+  struct PrivateBytesTag {};
+  constexpr RustReprEnum(PrivateBytesTag, ::std::array<unsigned char, 12> bytes)
+      : __opaque_blob_of_bytes(bytes) {}
+
+ private:
+  static void __crubit_field_offset_assertions();
+};
+
+struct CRUBIT_INTERNAL_RUST_TYPE(
+    ":: enums_golden :: repr_rust :: "
+    "RustReprWithNamingConflictBetweenCtorsAndMethods") alignas(4)
+    [[clang::trivial_abi]]
+    RustReprWithNamingConflictBetweenCtorsAndMethods final {
+ public:
+  // `enums_golden::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods`
+  // doesn't implement the `Default` trait
+  RustReprWithNamingConflictBetweenCtorsAndMethods() = delete;
+
+  // Error generating bindings for variant
+  // `enums_golden::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods::NoPayloadVariant`
+  // defined at
+  // cc_bindings_from_rs/test/enums/enums.rs;l=160:
+  // Conflicting member function name: MakeNoPayloadVariant
+
+  // Error generating bindings for variant
+  // `enums_golden::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods::TuplePayloadVariant`
+  // defined at
+  // cc_bindings_from_rs/test/enums/enums.rs;l=161:
+  // Conflicting member function name: MakeTuplePayloadVariant
+
+  // Error generating bindings for variant
+  // `enums_golden::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods::StructPayloadVariant`
+  // defined at
+  // cc_bindings_from_rs/test/enums/enums.rs;l=162:
+  // Constructing non-tuple, struct-like enum variants is not supported:
+  // b/487357254
+
+  // No custom `Drop` impl and no custom "drop glue" required
+  ~RustReprWithNamingConflictBetweenCtorsAndMethods() = default;
+  RustReprWithNamingConflictBetweenCtorsAndMethods(
+      RustReprWithNamingConflictBetweenCtorsAndMethods&&) = default;
+  RustReprWithNamingConflictBetweenCtorsAndMethods& operator=(
+      RustReprWithNamingConflictBetweenCtorsAndMethods&&) = default;
+
+  // `enums_golden::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods`
+  // doesn't implement the `Clone` trait
+  RustReprWithNamingConflictBetweenCtorsAndMethods(
+      const RustReprWithNamingConflictBetweenCtorsAndMethods&) = delete;
+  RustReprWithNamingConflictBetweenCtorsAndMethods& operator=(
+      const RustReprWithNamingConflictBetweenCtorsAndMethods&) = delete;
+  RustReprWithNamingConflictBetweenCtorsAndMethods(
+      ::crubit::UnsafeRelocateTag,
+      RustReprWithNamingConflictBetweenCtorsAndMethods&& value) {
+    ::std::memcpy(this, &value, sizeof(value));
+  }
+
+  //  Presence of this function tests the scenario where `MakeNoPayloadVariant`
+  //  is a name of:
+  //  1. A static method (here/below).
+  //  2. An auto-generated factory/constructor static method
+  static ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods
+  MakeNoPayloadVariant();
+
+  static ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods
+  MakeTuplePayloadVariant(::std::int32_t i);
+
+  static ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods
+  MakeStructPayloadVariant(::std::int32_t x);
+
+ private:
+  // Field type has been replaced with a blob of bytes: No support for bindings
+  // of individual non-repr(C) `enum`s
+  ::std::array<unsigned char, 8> __opaque_blob_of_bytes;
+
+ private:
+  struct PrivateBytesTag {};
+  constexpr RustReprWithNamingConflictBetweenCtorsAndMethods(
+      PrivateBytesTag, ::std::array<unsigned char, 8> bytes)
+      : __opaque_blob_of_bytes(bytes) {}
+
+ private:
+  static void __crubit_field_offset_assertions();
+};
+
+// Error generating bindings for enum
+// `enums_golden::repr_rust::RustReprWithSingleNoPayloadVariant` defined at
+// cc_bindings_from_rs/test/enums/enums.rs;l=151:
+// Zero-sized types (ZSTs) are not supported (b/258259459)
+
+struct CRUBIT_INTERNAL_RUST_TYPE(
+    ":: enums_golden :: repr_rust :: "
+    "RustReprWithSingleTuplePayloadVariant") alignas(4) [[clang::trivial_abi]]
+RustReprWithSingleTuplePayloadVariant final {
+ public:
+  // `enums_golden::repr_rust::RustReprWithSingleTuplePayloadVariant` doesn't
+  // implement the `Default` trait
+  RustReprWithSingleTuplePayloadVariant() = delete;
+
+  static ::enums::repr_rust::RustReprWithSingleTuplePayloadVariant
+  MakeSingleVariant(::std::int32_t __param_0);
+
+  // No custom `Drop` impl and no custom "drop glue" required
+  ~RustReprWithSingleTuplePayloadVariant() = default;
+  RustReprWithSingleTuplePayloadVariant(
+      RustReprWithSingleTuplePayloadVariant&&) = default;
+  RustReprWithSingleTuplePayloadVariant& operator=(
+      RustReprWithSingleTuplePayloadVariant&&) = default;
+
+  // `enums_golden::repr_rust::RustReprWithSingleTuplePayloadVariant` doesn't
+  // implement the `Clone` trait
+  RustReprWithSingleTuplePayloadVariant(
+      const RustReprWithSingleTuplePayloadVariant&) = delete;
+  RustReprWithSingleTuplePayloadVariant& operator=(
+      const RustReprWithSingleTuplePayloadVariant&) = delete;
+  RustReprWithSingleTuplePayloadVariant(
+      ::crubit::UnsafeRelocateTag,
+      RustReprWithSingleTuplePayloadVariant&& value) {
+    ::std::memcpy(this, &value, sizeof(value));
+  }
+
+ private:
+  // Field type has been replaced with a blob of bytes: No support for bindings
+  // of individual non-repr(C) `enum`s
+  ::std::array<unsigned char, 4> __opaque_blob_of_bytes;
+
+ private:
+  struct PrivateBytesTag {};
+  constexpr RustReprWithSingleTuplePayloadVariant(
+      PrivateBytesTag, ::std::array<unsigned char, 4> bytes)
+      : __opaque_blob_of_bytes(bytes) {}
+
+ private:
+  static void __crubit_field_offset_assertions();
+};
+
+}  // namespace enums::repr_rust
+
+namespace enums::qr_error {
+
+static_assert(
+    sizeof(QrError) == 24,
+    "Verify that ADT layout didn't change since this header got generated");
+static_assert(
+    alignof(QrError) == 8,
+    "Verify that ADT layout didn't change since this header got generated");
+
+// `static` constructor
+inline constexpr QrError QrError::MakeDataTooLong() {
+  return QrError(PrivateBytesTag{}, {11, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                     0,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+// `static` constructor
+inline constexpr QrError QrError::MakeInvalidVersion() {
+  return QrError(PrivateBytesTag{}, {12, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                     0,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+// `static` constructor
+inline constexpr QrError QrError::MakeUnsupportedCharacterSet() {
+  return QrError(PrivateBytesTag{}, {13, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                     0,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+// `static` constructor
+inline constexpr QrError QrError::MakeInvalidEciDesignator() {
+  return QrError(PrivateBytesTag{}, {14, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                     0,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+// `static` constructor
+inline constexpr QrError QrError::MakeInvalidCharacter() {
+  return QrError(PrivateBytesTag{}, {15, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+                                     0,  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_Structured(
+    ::enums::qr_error::StructuredQrError*,
+    ::enums::qr_error::QrError* __ret_ptr);
+}
+inline ::enums::qr_error::QrError QrError::MakeStructured(
+    ::enums::qr_error::StructuredQrError __param_0) {
+  crubit::Slot<::enums::qr_error::QrError> __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_Structured(&__param_0,
+                                               __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+static_assert(::std::is_trivially_destructible_v<QrError>);
+static_assert(
+    ::std::is_trivially_move_constructible_v<::enums::qr_error::QrError>);
+static_assert(
+    ::std::is_trivially_move_assignable_v<::enums::qr_error::QrError>);
+static_assert(
+    ::std::is_trivially_copy_constructible_v<::enums::qr_error::QrError>);
+static_assert(
+    ::std::is_trivially_copy_assignable_v<::enums::qr_error::QrError>);
+namespace __crubit_internal {
+extern "C" bool __crubit_thunk_is_udata_utoo_ulong(
+    ::enums::qr_error::QrError const&);
+}
+inline bool QrError::is_data_too_long() const {
+  auto&& self = *this;
+  return __crubit_internal::__crubit_thunk_is_udata_utoo_ulong(self);
+}
+
+namespace __crubit_internal {
+extern "C" bool __crubit_thunk_PartialEq_ueq(::enums::qr_error::QrError const&,
+                                             ::enums::qr_error::QrError const&);
+}
+inline bool QrError::operator==(::enums::qr_error::QrError const& other) const {
+  auto&& self = *this;
+  return __crubit_internal::__crubit_thunk_PartialEq_ueq(self, other);
+}
+inline void QrError::__crubit_field_offset_assertions() {
+  static_assert(0 == offsetof(QrError, __opaque_blob_of_bytes));
+}
+static_assert(
+    sizeof(StructuredQrError) == 24,
+    "Verify that ADT layout didn't change since this header got generated");
+static_assert(
+    alignof(StructuredQrError) == 8,
+    "Verify that ADT layout didn't change since this header got generated");
+
+// `static` constructor
+inline constexpr StructuredQrError StructuredQrError::MakeAtLeast2Pieces() {
+  return StructuredQrError(
+      PrivateBytesTag{},
+      {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_TotalMismatch(
+    ::std::uintptr_t, ::enums::qr_error::StructuredQrError* __ret_ptr);
+}
+inline ::enums::qr_error::StructuredQrError
+StructuredQrError::MakeTotalMismatch(::std::uintptr_t __param_0) {
+  crubit::Slot<::enums::qr_error::StructuredQrError>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_TotalMismatch(__param_0,
+                                                  __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+// `static` constructor
+inline constexpr StructuredQrError StructuredQrError::MakeMissingParts() {
+  return StructuredQrError(
+      PrivateBytesTag{},
+      {2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+// `static` constructor
+inline constexpr StructuredQrError StructuredQrError::MakeParity() {
+  return StructuredQrError(
+      PrivateBytesTag{},
+      {3, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+// `static` constructor
+inline constexpr StructuredQrError StructuredQrError::MakeTooShort() {
+  return StructuredQrError(
+      PrivateBytesTag{},
+      {4, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+// `static` constructor
+inline constexpr StructuredQrError
+StructuredQrError::MakeStructuredWrongMode() {
+  return StructuredQrError(
+      PrivateBytesTag{},
+      {5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+// `static` constructor
+inline constexpr StructuredQrError StructuredQrError::MakeStructuredWrongEnc() {
+  return StructuredQrError(
+      PrivateBytesTag{},
+      {6, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_SeqGreaterThanTotal(
+    ::std::uint8_t, ::std::uint8_t,
+    ::enums::qr_error::StructuredQrError* __ret_ptr);
+}
+inline ::enums::qr_error::StructuredQrError
+StructuredQrError::MakeSeqGreaterThanTotal(::std::uint8_t __param_0,
+                                           ::std::uint8_t __param_1) {
+  crubit::Slot<::enums::qr_error::StructuredQrError>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_SeqGreaterThanTotal(__param_0, __param_1,
+                                                        __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_LengthMismatch(
+    ::std::uintptr_t, ::std::uintptr_t,
+    ::enums::qr_error::StructuredQrError* __ret_ptr);
+}
+inline ::enums::qr_error::StructuredQrError
+StructuredQrError::MakeLengthMismatch(::std::uintptr_t __param_0,
+                                      ::std::uintptr_t __param_1) {
+  crubit::Slot<::enums::qr_error::StructuredQrError>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_LengthMismatch(__param_0, __param_1,
+                                                   __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_UnsupportedVersion(
+    ::std::int16_t, ::enums::qr_error::StructuredQrError* __ret_ptr);
+}
+inline ::enums::qr_error::StructuredQrError
+StructuredQrError::MakeUnsupportedVersion(::std::int16_t __param_0) {
+  crubit::Slot<::enums::qr_error::StructuredQrError>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_UnsupportedVersion(__param_0,
+                                                       __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_SplitMax16(
+    ::std::uintptr_t, ::enums::qr_error::StructuredQrError* __ret_ptr);
+}
+inline ::enums::qr_error::StructuredQrError StructuredQrError::MakeSplitMax16(
+    ::std::uintptr_t __param_0) {
+  crubit::Slot<::enums::qr_error::StructuredQrError>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_SplitMax16(__param_0,
+                                               __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+static_assert(::std::is_trivially_destructible_v<StructuredQrError>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::enums::qr_error::StructuredQrError>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::enums::qr_error::StructuredQrError>);
+static_assert(::std::is_trivially_copy_constructible_v<
+              ::enums::qr_error::StructuredQrError>);
+static_assert(::std::is_trivially_copy_assignable_v<
+              ::enums::qr_error::StructuredQrError>);
+namespace __crubit_internal {
+extern "C" bool __crubit_thunk_PartialEq_ueq(
+    ::enums::qr_error::StructuredQrError const&,
+    ::enums::qr_error::StructuredQrError const&);
+}
+inline bool StructuredQrError::operator==(
+    ::enums::qr_error::StructuredQrError const& other) const {
+  auto&& self = *this;
+  return __crubit_internal::__crubit_thunk_PartialEq_ueq(self, other);
+}
+inline void StructuredQrError::__crubit_field_offset_assertions() {
+  static_assert(0 == offsetof(StructuredQrError, __opaque_blob_of_bytes));
+}
+}  // namespace enums::qr_error
+
+namespace enums::repr_c {
 
 static_assert(
     sizeof(MyEnum) == 40,
@@ -299,13 +947,59 @@ static_assert(
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(::enums::repr_c::MyEnum* __ret_ptr);
 }
-inline MyEnum::MyEnum() { __crubit_internal::__crubit_thunk_default(this); }
+inline ::enums::repr_c::MyEnum::MyEnum() {
+  __crubit_internal::__crubit_thunk_default(this);
+}
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_E(::rs::alloc::string::String*, ::std::int32_t,
+                                 ::enums::repr_c::MyEnum* __ret_ptr);
+}
+inline ::enums::repr_c::MyEnum MyEnum::MakeE(
+    ::rs::alloc::string::String __param_0, ::std::int32_t __param_1) {
+  crubit::Slot __param_0_slot((::std::move(__param_0)));
+  crubit::Slot<::enums::repr_c::MyEnum> __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_E(__param_0_slot.Get(), __param_1,
+                                      __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_A(::std::int32_t, ::std::int64_t,
+                                 ::enums::repr_c::MyEnum* __ret_ptr);
+}
+inline ::enums::repr_c::MyEnum MyEnum::MakeA(::std::int32_t __param_0,
+                                             ::std::int64_t __param_1) {
+  crubit::Slot<::enums::repr_c::MyEnum> __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_A(__param_0, __param_1,
+                                      __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+// `static` constructor
+inline MyEnum MyEnum::MakeF() {
+  return MyEnum(PrivateTagCtorTag{}, Tag{INT64_C(2)});
+}
+
+// `static` constructor
+inline MyEnum MyEnum::MakeG() {
+  return MyEnum(PrivateTagCtorTag{}, Tag{INT64_C(4)});
+}
+
+// `static` constructor
+inline MyEnum MyEnum::MakeD() {
+  return MyEnum(PrivateTagCtorTag{}, Tag{INT64_C(10002)});
+}
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_drop(::enums::repr_c::MyEnum&);
 }
 inline MyEnum::~MyEnum() { __crubit_internal::__crubit_thunk_drop(*this); }
-inline MyEnum::MyEnum(MyEnum&& other) : MyEnum() { *this = std::move(other); }
-inline MyEnum& MyEnum::operator=(MyEnum&& other) {
+inline ::enums::repr_c::MyEnum::MyEnum(MyEnum&& other) : MyEnum() {
+  *this = ::std::move(other);
+}
+inline ::enums::repr_c::MyEnum& ::enums::repr_c::MyEnum::operator=(
+    MyEnum&& other) {
   crubit::MemSwap(*this, other);
   return *this;
 }
@@ -314,6 +1008,7 @@ inline void MyEnum::__crubit_field_offset_assertions() {
   static_assert(8 == offsetof(MyEnum, A));
   static_assert(8 == offsetof(MyEnum, B));
   static_assert(8 == offsetof(MyEnum, C));
+  static_assert(0 == offsetof(MyEnum::__crubit_E_struct, __field0));
   static_assert(24 == offsetof(MyEnum::__crubit_E_struct, __field1));
   static_assert(0 == offsetof(MyEnum::__crubit_A_struct, __field0));
   static_assert(8 == offsetof(MyEnum::__crubit_A_struct, __field1));
@@ -323,9 +1018,9 @@ inline void MyEnum::__crubit_field_offset_assertions() {
   static_assert(4 == offsetof(MyEnum::__crubit_C_struct, b));
   static_assert(8 == offsetof(MyEnum::__crubit_C_struct, c));
 }
-}  // namespace repr_c
+}  // namespace enums::repr_c
 
-namespace repr_c_clone_active_variant {
+namespace enums::repr_c_clone_active_variant {
 
 static_assert(
     sizeof(CloneActiveVariant) == 8,
@@ -337,12 +1032,56 @@ namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(
     ::enums::repr_c_clone_active_variant::CloneActiveVariant* __ret_ptr);
 }
-inline CloneActiveVariant::CloneActiveVariant() {
+inline ::enums::repr_c_clone_active_variant::CloneActiveVariant::
+    CloneActiveVariant() {
   __crubit_internal::__crubit_thunk_default(this);
 }
-static_assert(std::is_trivially_destructible_v<CloneActiveVariant>);
-static_assert(std::is_trivially_move_constructible_v<CloneActiveVariant>);
-static_assert(std::is_trivially_move_assignable_v<CloneActiveVariant>);
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_A(
+    ::std::int32_t,
+    ::enums::repr_c_clone_active_variant::CloneActiveVariant* __ret_ptr);
+}
+inline ::enums::repr_c_clone_active_variant::CloneActiveVariant
+CloneActiveVariant::MakeA(::std::int32_t __param_0) {
+  crubit::Slot<::enums::repr_c_clone_active_variant::CloneActiveVariant>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_A(__param_0, __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_B(
+    ::std::int32_t,
+    ::enums::repr_c_clone_active_variant::CloneActiveVariant* __ret_ptr);
+}
+inline ::enums::repr_c_clone_active_variant::CloneActiveVariant
+CloneActiveVariant::MakeB(::std::int32_t __param_0) {
+  crubit::Slot<::enums::repr_c_clone_active_variant::CloneActiveVariant>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_B(__param_0, __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_C(
+    ::std::int32_t,
+    ::enums::repr_c_clone_active_variant::CloneActiveVariant* __ret_ptr);
+}
+inline ::enums::repr_c_clone_active_variant::CloneActiveVariant
+CloneActiveVariant::MakeC(::std::int32_t __param_0) {
+  crubit::Slot<::enums::repr_c_clone_active_variant::CloneActiveVariant>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_C(__param_0, __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+static_assert(::std::is_trivially_destructible_v<CloneActiveVariant>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::enums::repr_c_clone_active_variant::CloneActiveVariant>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::enums::repr_c_clone_active_variant::CloneActiveVariant>);
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_clone(
     ::enums::repr_c_clone_active_variant::CloneActiveVariant const&,
@@ -353,11 +1092,13 @@ extern "C" void __crubit_thunk_clone_ufrom(
     ::enums::repr_c_clone_active_variant::CloneActiveVariant&,
     ::enums::repr_c_clone_active_variant::CloneActiveVariant const&);
 }
-inline CloneActiveVariant::CloneActiveVariant(const CloneActiveVariant& other) {
+inline ::enums::repr_c_clone_active_variant::CloneActiveVariant::
+    CloneActiveVariant(const CloneActiveVariant& other) {
   __crubit_internal::__crubit_thunk_clone(other, this);
 }
-inline CloneActiveVariant& CloneActiveVariant::operator=(
-    const CloneActiveVariant& other) {
+inline ::enums::repr_c_clone_active_variant::CloneActiveVariant& ::enums::
+    repr_c_clone_active_variant::CloneActiveVariant::operator=(
+        const CloneActiveVariant& other) {
   if (this != &other) {
     __crubit_internal::__crubit_thunk_clone_ufrom(*this, other);
   }
@@ -398,9 +1139,9 @@ inline bool is_c(
   return __crubit_internal::__crubit_thunk_is_uc(e);
 }
 
-}  // namespace repr_c_clone_active_variant
+}  // namespace enums::repr_c_clone_active_variant
 
-namespace repr_c_clone_counter {
+namespace enums::repr_c_clone_counter {
 
 static_assert(
     sizeof(CloneCount) == 16,
@@ -412,12 +1153,14 @@ namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(
     ::enums::repr_c_clone_counter::CloneCount* __ret_ptr);
 }
-inline CloneCount::CloneCount() {
+inline ::enums::repr_c_clone_counter::CloneCount::CloneCount() {
   __crubit_internal::__crubit_thunk_default(this);
 }
-static_assert(std::is_trivially_destructible_v<CloneCount>);
-static_assert(std::is_trivially_move_constructible_v<CloneCount>);
-static_assert(std::is_trivially_move_assignable_v<CloneCount>);
+static_assert(::std::is_trivially_destructible_v<CloneCount>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::enums::repr_c_clone_counter::CloneCount>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::enums::repr_c_clone_counter::CloneCount>);
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_clone(
     ::enums::repr_c_clone_counter::CloneCount const&,
@@ -428,10 +1171,12 @@ extern "C" void __crubit_thunk_clone_ufrom(
     ::enums::repr_c_clone_counter::CloneCount&,
     ::enums::repr_c_clone_counter::CloneCount const&);
 }
-inline CloneCount::CloneCount(const CloneCount& other) {
+inline ::enums::repr_c_clone_counter::CloneCount::CloneCount(
+    const CloneCount& other) {
   __crubit_internal::__crubit_thunk_clone(other, this);
 }
-inline CloneCount& CloneCount::operator=(const CloneCount& other) {
+inline ::enums::repr_c_clone_counter::CloneCount& ::enums::
+    repr_c_clone_counter::CloneCount::operator=(const CloneCount& other) {
   if (this != &other) {
     __crubit_internal::__crubit_thunk_clone_ufrom(*this, other);
   }
@@ -441,9 +1186,9 @@ inline void CloneCount::__crubit_field_offset_assertions() {
   static_assert(8 == offsetof(CloneCount, A));
   static_assert(0 == offsetof(CloneCount::__crubit_A_struct, p));
 }
-}  // namespace repr_c_clone_counter
+}  // namespace enums::repr_c_clone_counter
 
-namespace repr_c_drop {
+namespace enums::repr_c_drop {
 
 static_assert(
     sizeof(DropMe) == 16,
@@ -454,13 +1199,44 @@ static_assert(
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(::enums::repr_c_drop::DropMe* __ret_ptr);
 }
-inline DropMe::DropMe() { __crubit_internal::__crubit_thunk_default(this); }
+inline ::enums::repr_c_drop::DropMe::DropMe() {
+  __crubit_internal::__crubit_thunk_default(this);
+}
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_A(::std::int32_t,
+                                 ::enums::repr_c_drop::DropMe* __ret_ptr);
+}
+inline ::enums::repr_c_drop::DropMe DropMe::MakeA(::std::int32_t __param_0) {
+  crubit::Slot<::enums::repr_c_drop::DropMe> __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_A(__param_0, __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_B(::std::int64_t,
+                                 ::enums::repr_c_drop::DropMe* __ret_ptr);
+}
+inline ::enums::repr_c_drop::DropMe DropMe::MakeB(::std::int64_t __param_0) {
+  crubit::Slot<::enums::repr_c_drop::DropMe> __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_B(__param_0, __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+// `static` constructor
+inline DropMe DropMe::MakeQ() {
+  return DropMe(PrivateTagCtorTag{}, Tag{INT64_C(2)});
+}
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_drop(::enums::repr_c_drop::DropMe&);
 }
 inline DropMe::~DropMe() { __crubit_internal::__crubit_thunk_drop(*this); }
-inline DropMe::DropMe(DropMe&& other) : DropMe() { *this = std::move(other); }
-inline DropMe& DropMe::operator=(DropMe&& other) {
+inline ::enums::repr_c_drop::DropMe::DropMe(DropMe&& other) : DropMe() {
+  *this = ::std::move(other);
+}
+inline ::enums::repr_c_drop::DropMe& ::enums::repr_c_drop::DropMe::operator=(
+    DropMe&& other) {
   crubit::MemSwap(*this, other);
   return *this;
 }
@@ -472,7 +1248,232 @@ inline void DropMe::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(DropMe::__crubit_B_struct, __field0));
   static_assert(0 == offsetof(DropMe::__crubit_C_struct, p));
 }
-}  // namespace repr_c_drop
+}  // namespace enums::repr_c_drop
 
-}  // namespace enums
+namespace enums::repr_int {
+
+static_assert(
+    sizeof(IntReprEnumWithNoPayload) == 4,
+    "Verify that ADT layout didn't change since this header got generated");
+static_assert(
+    alignof(IntReprEnumWithNoPayload) == 4,
+    "Verify that ADT layout didn't change since this header got generated");
+
+// `static` constructor
+inline constexpr IntReprEnumWithNoPayload
+IntReprEnumWithNoPayload::MakeNoPayload1() {
+  return IntReprEnumWithNoPayload(PrivateBytesTag{}, {0, 0, 0, 0});
+}
+
+// `static` constructor
+inline constexpr IntReprEnumWithNoPayload
+IntReprEnumWithNoPayload::MakeNoPayload2() {
+  return IntReprEnumWithNoPayload(PrivateBytesTag{}, {210, 4, 0, 0});
+}
+static_assert(::std::is_trivially_destructible_v<IntReprEnumWithNoPayload>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::enums::repr_int::IntReprEnumWithNoPayload>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::enums::repr_int::IntReprEnumWithNoPayload>);
+namespace __crubit_internal {
+extern "C" bool __crubit_thunk_is_uno_upayload1(
+    ::enums::repr_int::IntReprEnumWithNoPayload const&);
+}
+inline bool IntReprEnumWithNoPayload::is_no_payload1() const {
+  auto&& self = *this;
+  return __crubit_internal::__crubit_thunk_is_uno_upayload1(self);
+}
+
+namespace __crubit_internal {
+extern "C" bool __crubit_thunk_is_uno_upayload2(
+    ::enums::repr_int::IntReprEnumWithNoPayload const&);
+}
+inline bool IntReprEnumWithNoPayload::is_no_payload2() const {
+  auto&& self = *this;
+  return __crubit_internal::__crubit_thunk_is_uno_upayload2(self);
+}
+inline void IntReprEnumWithNoPayload::__crubit_field_offset_assertions() {
+  static_assert(0 ==
+                offsetof(IntReprEnumWithNoPayload, __opaque_blob_of_bytes));
+}
+}  // namespace enums::repr_int
+
+namespace enums::repr_rust {
+
+static_assert(
+    sizeof(RustReprEnum) == 12,
+    "Verify that ADT layout didn't change since this header got generated");
+static_assert(
+    alignof(RustReprEnum) == 4,
+    "Verify that ADT layout didn't change since this header got generated");
+
+// `static` constructor
+inline constexpr RustReprEnum RustReprEnum::MakeVariant1() {
+  return RustReprEnum(PrivateBytesTag{}, {0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+// `static` constructor
+inline constexpr RustReprEnum RustReprEnum::MakeVariant2() {
+  return RustReprEnum(PrivateBytesTag{}, {1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+// `static` constructor
+inline constexpr RustReprEnum RustReprEnum::MakeVariant3() {
+  return RustReprEnum(PrivateBytesTag{}, {2, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0});
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_TuplePayloadVariant(
+    ::std::int32_t, ::std::int32_t,
+    ::enums::repr_rust::RustReprEnum* __ret_ptr);
+}
+inline ::enums::repr_rust::RustReprEnum RustReprEnum::MakeTuplePayloadVariant(
+    ::std::int32_t __param_0, ::std::int32_t __param_1) {
+  crubit::Slot<::enums::repr_rust::RustReprEnum> __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_TuplePayloadVariant(__param_0, __param_1,
+                                                        __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+static_assert(::std::is_trivially_destructible_v<RustReprEnum>);
+static_assert(
+    ::std::is_trivially_move_constructible_v<::enums::repr_rust::RustReprEnum>);
+static_assert(
+    ::std::is_trivially_move_assignable_v<::enums::repr_rust::RustReprEnum>);
+namespace __crubit_internal {
+extern "C" ::std::int32_t __crubit_thunk_get_uvariant_unumber(
+    ::enums::repr_rust::RustReprEnum const&);
+}
+inline ::std::int32_t RustReprEnum::get_variant_number() const {
+  auto&& self = *this;
+  return __crubit_internal::__crubit_thunk_get_uvariant_unumber(self);
+}
+
+namespace __crubit_internal {
+extern "C" bool __crubit_thunk_is_utuple_upayload_uvariant(
+    ::enums::repr_rust::RustReprEnum const&);
+}
+inline bool RustReprEnum::is_tuple_payload_variant() const {
+  auto&& self = *this;
+  return __crubit_internal::__crubit_thunk_is_utuple_upayload_uvariant(self);
+}
+
+namespace __crubit_internal {
+extern "C" ::std::int32_t __crubit_thunk_get_ufirst_uitem_ufrom_utuple_upayload(
+    ::enums::repr_rust::RustReprEnum const&);
+}
+inline ::std::int32_t RustReprEnum::get_first_item_from_tuple_payload() const {
+  auto&& self = *this;
+  return __crubit_internal::
+      __crubit_thunk_get_ufirst_uitem_ufrom_utuple_upayload(self);
+}
+inline void RustReprEnum::__crubit_field_offset_assertions() {
+  static_assert(0 == offsetof(RustReprEnum, __opaque_blob_of_bytes));
+}
+static_assert(
+    sizeof(RustReprWithNamingConflictBetweenCtorsAndMethods) == 8,
+    "Verify that ADT layout didn't change since this header got generated");
+static_assert(
+    alignof(RustReprWithNamingConflictBetweenCtorsAndMethods) == 4,
+    "Verify that ADT layout didn't change since this header got generated");
+static_assert(::std::is_trivially_destructible_v<
+              RustReprWithNamingConflictBetweenCtorsAndMethods>);
+static_assert(
+    ::std::is_trivially_move_constructible_v<
+        ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods>);
+static_assert(
+    ::std::is_trivially_move_assignable_v<
+        ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods>);
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_MakeNoPayloadVariant(
+    ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods*
+        __ret_ptr);
+}
+inline ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods
+RustReprWithNamingConflictBetweenCtorsAndMethods::MakeNoPayloadVariant() {
+  crubit::Slot<
+      ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_MakeNoPayloadVariant(
+      __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_MakeTuplePayloadVariant(
+    ::std::int32_t,
+    ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods*
+        __ret_ptr);
+}
+inline ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods
+RustReprWithNamingConflictBetweenCtorsAndMethods::MakeTuplePayloadVariant(
+    ::std::int32_t i) {
+  crubit::Slot<
+      ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_MakeTuplePayloadVariant(
+      i, __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_MakeStructPayloadVariant(
+    ::std::int32_t,
+    ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods*
+        __ret_ptr);
+}
+inline ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods
+RustReprWithNamingConflictBetweenCtorsAndMethods::MakeStructPayloadVariant(
+    ::std::int32_t x) {
+  crubit::Slot<
+      ::enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_MakeStructPayloadVariant(
+      x, __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+inline void RustReprWithNamingConflictBetweenCtorsAndMethods::
+    __crubit_field_offset_assertions() {
+  static_assert(0 == offsetof(RustReprWithNamingConflictBetweenCtorsAndMethods,
+                              __opaque_blob_of_bytes));
+}
+static_assert(
+    sizeof(RustReprWithSingleTuplePayloadVariant) == 4,
+    "Verify that ADT layout didn't change since this header got generated");
+static_assert(
+    alignof(RustReprWithSingleTuplePayloadVariant) == 4,
+    "Verify that ADT layout didn't change since this header got generated");
+
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_SingleVariant(
+    ::std::int32_t,
+    ::enums::repr_rust::RustReprWithSingleTuplePayloadVariant* __ret_ptr);
+}
+inline ::enums::repr_rust::RustReprWithSingleTuplePayloadVariant
+RustReprWithSingleTuplePayloadVariant::MakeSingleVariant(
+    ::std::int32_t __param_0) {
+  crubit::Slot<::enums::repr_rust::RustReprWithSingleTuplePayloadVariant>
+      __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_SingleVariant(__param_0,
+                                                  __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+static_assert(
+    ::std::is_trivially_destructible_v<RustReprWithSingleTuplePayloadVariant>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::enums::repr_rust::RustReprWithSingleTuplePayloadVariant>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::enums::repr_rust::RustReprWithSingleTuplePayloadVariant>);
+inline void
+RustReprWithSingleTuplePayloadVariant::__crubit_field_offset_assertions() {
+  static_assert(0 == offsetof(RustReprWithSingleTuplePayloadVariant,
+                              __opaque_blob_of_bytes));
+}
+}  // namespace enums::repr_rust
+
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_ENUMS_ENUMS_GOLDEN

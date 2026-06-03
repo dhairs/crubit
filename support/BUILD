@@ -2,6 +2,7 @@
 
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_proc_macro", "rust_test")
+load("//build_integration:build_integration.bzl", "bazel_to_builds")
 load("//common:crubit_wrapper_macros_oss.bzl", "crubit_rust_test")
 
 package(default_applicable_licenses = ["//:license"])
@@ -14,12 +15,30 @@ exports_files(
 )
 
 rust_library(
+    name = "cref",
+    srcs = ["cref.rs"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    visibility = [
+        "//visibility:public",
+    ],
+)
+
+rust_test(
+    name = "cref_test",
+    srcs = ["cref_test.rs"],
+    deps = [
+        ":cref",
+        "@crate_index//:googletest",
+    ],
+)
+
+rust_library(
     name = "ctor",
     srcs = ["ctor.rs"],
     compatible_with = ["//buildenv/target:non_prod"],
     proc_macro_deps = [":ctor_proc_macros"],
     # LINT.IfChange
-    rustc_flags = ["-Zallow-features=allow_internal_unstable,negative_impls,super_let"],
+    rustc_flags = ["-Zallow-features=allow_internal_unstable,auto_traits,negative_impls,super_let"],
     # LINT.ThenChange(//docs/overview/unstable_features.md)
     visibility = [
         "//visibility:public",
@@ -33,7 +52,7 @@ rust_proc_macro(
     deps = [
         "@crate_index//:proc-macro2",
         "@crate_index//:quote",  # v1
-        "@crate_index//:syn",  # v1
+        "@crate_index//:syn",  # v2
     ],
 )
 
@@ -45,7 +64,7 @@ cc_library(
         "//visibility:public",
     ],
     deps = [
-        "//support:annotations_internal",
+        ":annotations_internal",
     ],
 )
 
@@ -62,6 +81,15 @@ cc_library(
     ],
 )
 
+cc_library(
+    name = "lifetime_annotations",
+    hdrs = ["lifetime_annotations.h"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    visibility = [
+        "//visibility:public",
+    ],
+)
+
 rust_proc_macro(
     name = "crubit_annotate",
     srcs = ["crubit_annotate.rs"],
@@ -72,7 +100,7 @@ rust_proc_macro(
     deps = [
         "@crate_index//:proc-macro2",
         "@crate_index//:quote",  # v1
-        "@crate_index//:syn",  # v1
+        "@crate_index//:syn",  # v2
     ],
 )
 
@@ -90,6 +118,7 @@ crubit_rust_test(
     deps = [
         "//common:token_stream_matchers",
         "@crate_index//:googletest",
+        "@crate_index//:static_assertions",  # v1
     ],
 )
 
@@ -122,13 +151,14 @@ rust_test(
 
 rust_test(
     name = "ctor_proc_macros_e2e_test",
-    srcs = ["ctor_proc_macros_test.rs"],
+    srcs = ["ctor_proc_macros_e2e_test.rs"],
     # LINT.IfChange
     rustc_flags = ["-Zallow-features=negative_impls"],
     # LINT.ThenChange(//docs/overview/unstable_features.md)
     deps = [
         ":ctor",
         "@crate_index//:googletest",
+        "@crate_index//:static_assertions",  # v1
     ],
 )
 
@@ -148,7 +178,7 @@ rust_library(
     crate_features = ["unstable"],
     proc_macro_deps = [":forward_declare_proc_macros"],
     # LINT.IfChange
-    rustc_flags = ["-Zallow-features=extern_types,negative_impls,vec_into_raw_parts,unsized_const_params,adt_const_params"],
+    rustc_flags = ["-Zallow-features=extern_types,negative_impls,unsized_const_params,adt_const_params"],
     # LINT.ThenChange(//docs/overview/unstable_features.md)
     visibility = [
         "//visibility:public",
@@ -165,7 +195,7 @@ rust_proc_macro(
     deps = [
         "@crate_index//:proc-macro2",
         "@crate_index//:quote",  # v1
-        "@crate_index//:syn",  # v1
+        "@crate_index//:syn",  # v2
     ],
 )
 
@@ -209,6 +239,15 @@ rust_test(
     ],)
 
 rust_library(
+    name = "operator",
+    srcs = ["operator.rs"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    visibility = [
+        "//visibility:public",
+    ],
+)
+
+rust_library(
     name = "bridge_rust",
     srcs = ["bridge.rs"],
     compatible_with = ["//buildenv/target:non_prod"],
@@ -249,5 +288,18 @@ filegroup(
     srcs = ["annotations.swig"],
     visibility = [
         "//visibility:public",
+    ],
+)
+
+bazel_to_builds(
+    name = "generate_builds",
+    cmake = "CMakeLists.txt",
+    gn = "BUILD.gn",
+    targets = [
+        ":annotations",
+        ":annotations_internal",
+        ":bridge_cpp",
+        ":bridge_rust",
+        ":lifetime_annotations",
     ],
 )

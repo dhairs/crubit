@@ -19,7 +19,7 @@ use std::hash::Hash;
 ///   cycle).
 ///
 /// If there are multiple possible topological orders, then best effort is made
-/// to return the `ordered` notes in the `preferred_order` (this is not always
+/// to return the `ordered` nodes in the `preferred_order` (this is not always
 /// possible given the constraints specified by `deps`).  `failed` nodes are
 /// returned sorted in the `preferred_order`.
 ///
@@ -128,20 +128,29 @@ where
 {
     // Translating `nodes` and `deps` into a `graph` that maps node ids into 1)
     // `count_of_predecessors` and 2) a set of `successor` ids.
-    let mut graph: HashMap<NodeId, GraphNode<NodeId>> =
-        nodes.into_iter().map(|id| (id, GraphNode::default())).collect();
+    let mut graph: HashMap<NodeId, GraphNode<NodeId>> = nodes
+        .into_iter()
+        .enumerate()
+        .map(|(index, id)| (id, GraphNode { input_index: index, ..Default::default() }))
+        .collect();
     for Dependency { predecessor, successor } in deps.into_iter() {
         graph
             .get_mut(&successor)
-            .unwrap_or_else(|| panic!(
-                "`Dependency::successor` should refer to a NodeId in the `nodes` parameter. \
-                 predecessor = {predecessor:?}; successor = {successor:?}"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "`Dependency::successor` should refer to a NodeId in the `nodes` parameter. \
+                 predecessor = {predecessor:?}; successor = {successor:?}"
+                )
+            })
             .count_of_predecessors += 1;
         graph
             .get_mut(&predecessor)
-            .unwrap_or_else(|| panic!(
-                "`Dependency::predecessor` should refer to a NodeId in the `nodes` parameter. \
-                 predecessor = {predecessor:?}; successor = {successor:?}"))
+            .unwrap_or_else(|| {
+                panic!(
+                    "`Dependency::predecessor` should refer to a NodeId in the `nodes` parameter. \
+                 predecessor = {predecessor:?}; successor = {successor:?}"
+                )
+            })
             .successors
             .push(successor);
     }
@@ -154,7 +163,11 @@ where
     let mut ready: BinaryHeap<HeapNode<'_, NodeId, CmpFn>> = graph
         .iter()
         .filter(|(_, graph_node)| graph_node.count_of_predecessors == 0)
-        .map(|(id, _)| HeapNode { id: id.clone(), cmp_fn: &preferred_order })
+        .map(|(id, graph_node)| HeapNode {
+            id: id.clone(),
+            cmp_fn: &preferred_order,
+            input_index: graph_node.input_index,
+        })
         .collect();
 
     // `ordered` contains the topologically ordered results.  (This is the `L` list
@@ -167,7 +180,11 @@ where
             assert!(succ.count_of_predecessors > 0);
             succ.count_of_predecessors -= 1;
             if succ.count_of_predecessors == 0 {
-                ready.push(HeapNode { id: succ_id, cmp_fn: &preferred_order });
+                ready.push(HeapNode {
+                    id: succ_id,
+                    cmp_fn: &preferred_order,
+                    input_index: succ.input_index,
+                });
             }
         }
         ordered.push(removed_id);
@@ -185,6 +202,7 @@ where
 /// Topological ordering dependency between two graph nodes.  The `predecessor`
 /// has to appear before the `successor` in `TopoSortResult::ordered`.  See the
 /// `toposort` function for more details.
+#[derive(Debug)]
 pub struct Dependency<NodeId> {
     pub predecessor: NodeId,
     pub successor: NodeId,
@@ -204,6 +222,7 @@ pub struct TopoSortResult<NodeId> {
 struct GraphNode<NodeId> {
     count_of_predecessors: usize,
     successors: Vec<NodeId>,
+    input_index: usize,
 }
 
 // TODO(https://github.com/rust-lang/rust/issues/26925): It should be possible to
@@ -212,7 +231,7 @@ struct GraphNode<NodeId> {
 // `NodeId`s.
 impl<NodeId> Default for GraphNode<NodeId> {
     fn default() -> Self {
-        Self { count_of_predecessors: 0, successors: Vec::new() }
+        Self { count_of_predecessors: 0, successors: Vec::new(), input_index: 0 }
     }
 }
 
@@ -222,6 +241,7 @@ where
 {
     id: NodeId,
     cmp_fn: &'a CmpFn,
+    input_index: usize,
 }
 
 impl<'a, NodeId, CmpFn> Ord for HeapNode<'a, NodeId, CmpFn>
@@ -233,7 +253,12 @@ where
         // "removes the greatest item from the binary heap" and therefore to pop items
         // in the `cmp_fn`-described preferred order we need to call `reverse()`
         // below.
-        (self.cmp_fn)(&self.id, &other.id).reverse()
+        let ord = (self.cmp_fn)(&self.id, &other.id);
+        if ord == Ordering::Equal {
+            other.input_index.cmp(&self.input_index)
+        } else {
+            ord.reverse()
+        }
     }
 }
 
@@ -314,6 +339,17 @@ mod tests {
         let (ordered, failed) = toposort(&[1, 2, 3, 4, 5, 6, 7], &[(3, 5), (5, 6), (6, 5), (5, 7)]);
         assert_eq!(ordered, vec![1, 2, 3, 4]);
         assert_eq!(failed, vec![5, 6, 7]);
+    }
+
+    #[test]
+    fn test_toposort_preserves_input_order_with_equal_preference() {
+        let input = vec![1, 2, 3, 4, 5];
+        for _ in 0..100 {
+            let nodes = input.iter().copied();
+            let result = super::toposort(nodes, vec![], |_, _| std::cmp::Ordering::Equal);
+            assert_eq!(result.ordered, input, "The output should preserve the original input order when all elements have equal preference.");
+            assert_eq!(result.failed, vec![]);
+        }
     }
 
     #[test]

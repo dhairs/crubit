@@ -16,12 +16,14 @@
 #include "absl/log/check.h"
 #include "absl/log/die_if_null.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "lifetime_annotations/type_lifetimes.h"
 #include "rs_bindings_from_cc/bazel_types.h"
 #include "rs_bindings_from_cc/decl_importer.h"
 #include "rs_bindings_from_cc/importers/class_template.h"
 #include "rs_bindings_from_cc/importers/cxx_record.h"
 #include "rs_bindings_from_cc/importers/enum.h"
+#include "rs_bindings_from_cc/importers/enum_constant.h"
 #include "rs_bindings_from_cc/importers/existing_rust_type.h"
 #include "rs_bindings_from_cc/importers/friend.h"
 #include "rs_bindings_from_cc/importers/function.h"
@@ -56,6 +58,8 @@ class Importer final : public ImportContext {
         std::make_unique<ClassTemplateDeclImporter>(*this));
     decl_importers_.push_back(std::make_unique<CXXRecordDeclImporter>(*this));
     decl_importers_.push_back(std::make_unique<EnumDeclImporter>(*this));
+    decl_importers_.push_back(
+        std::make_unique<EnumConstantDeclImporter>(*this));
     decl_importers_.push_back(std::make_unique<VarDeclImporter>(*this));
     decl_importers_.push_back(std::make_unique<FriendDeclImporter>(*this));
     decl_importers_.push_back(std::make_unique<FunctionDeclImporter>(*this));
@@ -75,14 +79,8 @@ class Importer final : public ImportContext {
   IR::Item HardError(const clang::Decl& decl, FormattedError error) override;
   IR::Item ImportUnsupportedItem(const clang::Decl& decl,
                                  std::optional<UnsupportedItem::Path> path,
-                                 std::vector<FormattedError> error) override;
-  IR::Item ImportUnsupportedItem(const clang::Decl& decl,
-                                 std::optional<UnsupportedItem::Path> path,
-                                 FormattedError error) override;
-  IR::Item ImportUnsupportedItem(const clang::Decl& decl,
-                                 std::optional<UnsupportedItem::Path> path,
-                                 std::vector<FormattedError> error,
-                                 bool is_hard_error);
+                                 std::vector<FormattedError> errors,
+                                 bool is_hard_error) override;
   std::optional<IR::Item> ImportDecl(clang::Decl* decl) override;
   std::optional<IR::Item> GetImportedItem(
       const clang::Decl* decl) const override;
@@ -99,7 +97,7 @@ class Importer final : public ImportContext {
   // GetItemIdsInSourceOrder.
   struct DeclItems {
     std::vector<const clang::RawComment*> comments = {};
-    std::vector<std::pair<const clang::Decl*, ItemId>> canonical_children = {};
+    std::vector<std::pair<clang::Decl*, ItemId>> canonical_children = {};
   };
 
   // This is intended to only be used to abstract shared behavior between
@@ -116,16 +114,26 @@ class Importer final : public ImportContext {
   BazelLabel GetOwningTarget(const clang::Decl* decl) const override;
   bool IsFromCurrentTarget(const clang::Decl* decl) const override;
   bool IsFromProtoTarget(const clang::Decl& decl) const override;
+  bool IsCrubitEnabledForTarget(const BazelLabel& label) const override;
+  bool AreAssumedLifetimesEnabledForTarget(
+      const BazelLabel& label) const override;
+  bool IsUnsafeViewEnabledForTarget(const BazelLabel& label) const override;
+  absl::StatusOr<bool> DetectFormatter(
+      const clang::TypeDecl& decl) const override;
   absl::StatusOr<TranslatedUnqualifiedIdentifier> GetTranslatedName(
       const clang::NamedDecl* named_decl) const override;
   absl::StatusOr<TranslatedIdentifier> GetTranslatedIdentifier(
       const clang::NamedDecl* named_decl) const override;
   std::optional<std::string> GetComment(const clang::Decl* decl) const override;
-  std::string ConvertSourceLocation(clang::SourceLocation loc) const override;
-  absl::StatusOr<CcType> ConvertQualType(
+  std::string ConvertSourceLocation(
+      clang::SourceLocation loc,
+      clang::DeclarationNameInfo* name_info) const override;
+  CcType ConvertQualType(
       clang::QualType qual_type,
-      const clang::tidy::lifetimes::ValueLifetimes* lifetimes,
-      bool nullable = true) override;
+      const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable,
+      bool assume_lifetimes) override;
+
+  std::string GetUniqueName(const clang::Decl& decl) const override;
 
   void MarkAsSuccessfullyImported(const clang::NamedDecl* decl) override;
   bool HasBeenAlreadySuccessfullyImported(
@@ -136,6 +144,9 @@ class Importer final : public ImportContext {
     (void)GetDeclItem(CanonicalizeDecl(decl));
     return HasBeenAlreadySuccessfullyImported(decl);
   }
+
+  clang::TypedefNameDecl* GetTemplateSpecializationAlias(
+      clang::Decl* decl) const override;
 
  private:
   class SourceOrderKey;
@@ -166,19 +177,32 @@ class Importer final : public ImportContext {
   std::vector<clang::Decl*> GetCanonicalChildren(
       const clang::DeclContext* decl_context) const;
   // Converts a type to a CcType.
+  // TODO(b/251045039): Return a `CcType`.
   absl::StatusOr<CcType> ConvertType(
       const clang::Type* type,
-      const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable);
+      const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable,
+      bool assume_lifetimes);
   // Converts a type, without processing attributes.
+  // TODO(b/251045039): Return a `CcType`.
   absl::StatusOr<CcType> ConvertUnattributedType(
       const clang::Type* type,
-      const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable);
-  absl::StatusOr<CcType> ConvertTypeDecl(clang::NamedDecl* decl);
+      const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable,
+      bool assume_lifetimes);
+  CcType ConvertTypeDecl(clang::NamedDecl* decl);
 
   // Converts `type` into a CcType, after first importing the Record behind
   // the template instantiation.
-  absl::StatusOr<CcType> ConvertTemplateSpecializationType(
+  CcType ConvertTemplateSpecializationType(
       const clang::TemplateSpecializationType* type);
+
+  bool IsFeatureEnabledForTarget(const BazelLabel& label,
+                                 absl::string_view feature) const;
+
+  absl::StatusOr<std::optional<bool>> GetCrubitOverrideDisplayAnnotation(
+      const clang::TypeDecl& decl) const;
+
+  absl::StatusOr<std::optional<bool>> DetectFormatterForType(
+      clang::CanQualType lookup, clang::CanQualType target) const;
 
   // The different decl importers. Note that order matters: the first importer
   // to successfully match a decl "wins", and no other importers are tried.

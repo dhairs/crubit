@@ -4,24 +4,23 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //examples/cpp/trivial_struct:example_lib
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
-/// Generated from: examples/cpp/trivial_struct/example.h;l=8
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=Position
 pub struct Position {
-    pub x: ::core::ffi::c_int,
-    pub y: ::core::ffi::c_int,
+    pub x: ::ffi_11::c_int,
+    pub y: ::ffi_11::c_int,
 }
 impl !Send for Position {}
 impl !Sync for Position {}
@@ -30,7 +29,6 @@ unsafe impl ::cxx::ExternType for Position {
     type Kind = ::cxx::kind::Trivial;
 }
 
-/// Generated from: examples/cpp/trivial_struct/example.h;l=8
 impl Default for Position {
     #[inline(always)]
     fn default() -> Self {

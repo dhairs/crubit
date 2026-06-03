@@ -2,6 +2,8 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+// IWYU pragma: private, include "support/annotations.h"
+
 #ifndef THIRD_PARTY_CRUBIT_SUPPORT_ANNOTATIONS_H_
 #define THIRD_PARTY_CRUBIT_SUPPORT_ANNOTATIONS_H_
 
@@ -55,7 +57,7 @@
 // `do_not_bind_allowlist` or bindings generation will fail with a hard error.
 #define CRUBIT_DO_NOT_BIND CRUBIT_INTERNAL_ANNOTATE("crubit_do_not_bind")
 
-// By default, <internal link> will infer Rust safety based on the types of the
+// By default, crubit.rs will infer Rust safety based on the types of the
 // function's parameters. This annotation can be used to override that
 // inference.
 #define CRUBIT_OVERRIDE_UNSAFE(function_is_unsafe) \
@@ -113,7 +115,7 @@
 // pub unsafe fn foo() -> i32;  // returns 42
 // ```
 //
-// By default, <internal link> will infer Rust safety based on the types of the
+// By default, crubit.rs will infer Rust safety based on the types of the
 // function's parameters. This annotation can be used to override that
 // inference.
 #define CRUBIT_UNSAFE CRUBIT_OVERRIDE_UNSAFE(true)
@@ -134,7 +136,7 @@
 // pub fn foo(*mut u64) -> u64;  // returns 42
 // ```
 //
-// By default, <internal link> will infer Rust safety based on the types of the
+// By default, crubit.rs will infer Rust safety based on the types of the
 // function's parameters. This annotation can be used to override that
 // inference.
 #define CRUBIT_UNSAFE_MARK_SAFE CRUBIT_OVERRIDE_UNSAFE(false)
@@ -190,86 +192,26 @@
   CRUBIT_INTERNAL_ANNOTATE("crubit_internal_unsafe_impl" __VA_OPT__(, ) \
                                __VA_ARGS__)
 
-// Declare a Rust type as the bridge type for binding generation.
+// Marks a type as bridging to a Rust type.
 //
-// This can be applied to a struct, class, or enum.
+// # Warning
 //
-// Let's walk through an example, starting with the BUILD file:
+// Composable bridging on user-defined types is still highly experimental.
 //
-// ```bzl
-// cc_library(
-//   name = "example",
-//   hdrs = ["example.h"],
-//   additional_rust_srcs_for_crubit_bindings = [":additional_example_src"],
-// )
+// # Usage
 //
-// additional_rust_srcs_for_crubit_bindings(
-//     name = "additional_example_src",
-//     srcs = ["additional_example_src.rs"],
-// )
+// * rust_name: The name of the Rust type.
+// * abi_rust: The Crubit ABI of the Rust type.
+// * abi_cpp: The Crubit ABI of the C++ type.
 //
-// rust_library(
-//     name = "user",
-//     srcs = ["user.rs"],
-//     cc_deps = [":example"],
-// )
-// ```
-//
-// There are two main targets: :example and :additional_example_src. If the Rust
-// side of the bridge type isn't provided by Rust std, then it must be provided
-// in the additional_rust_srcs_for_crubit_bindings. :user is simply a Rust
-// library that shows how a Rust library can consume the C++ bindings and its
-// bridge type.
-//
-// Here's the C++ bridge type with the annotation, as well as a function that
-// returns it:
+// From absl::StatusOr:
 //
 // ```c++
-// // example.h
-// struct CRUBIT_BRIDGE_VOID_CONVERTERS("MyRustStruct", "rust_to_cpp",
-// "cpp_to_rust")
-//   MyCppStruct {
-//     std::string name;
-// };
-// MyCppStruct foo();
+// template <typename T>
+// class
+// CRUBIT_BRIDGE("::status::absl::StatusOr", "::status::absl::StatusOrAbi",
+//               "::crubit::StatusOrAbi") StatusOr;
 // ```
-//
-// For this example, we'll make a native Rust struct that contains a Rust String
-// field, defined in additional_example_src.rs:
-//
-// ```rust
-// // additional_example_src.rs
-// pub struct MyRustStruct {
-//   pub name: String,
-// }
-// ```
-//
-// With the provided BUILD configuration above, we can now use the bridge type
-// and methods that use the bridge type in Rust.
-//
-// ```rust
-// // user.rs
-// pub fn print_foo() {
-//   let s: example::MyRustStruct = example::foo();
-//   println!("{}", s.name);
-// }
-// ```
-//
-// `ty` must be a path to a Rust type. If it starts with `::`, it will be
-// treated as a fully-qualified path, i.e. it can refer to types defined outside
-// of (but still visible to) the current build target. Otherwise, it will assume
-// the Rust type is defined in the Rust bindings by prefixing it with `crate::`
-// in all references, which requires defining the type in an
-// `additional_rust_srcs_for_crubit_bindings`.
-//
-// SAFETY:
-//   * `rust_to_cpp` must be a valid function name, and its signature must be
-//     `void rust_to_cpp (void* rust_struct, MyCppStruct* cpp_struct)`.
-//   * `cpp_to_rust` must be valid function name and its signature must be
-//     `void cpp_to_rust (MyCppStruct* cpp_struct, void* rust_struct)`.
-#define CRUBIT_BRIDGE_VOID_CONVERTERS(ty, ...) \
-  CRUBIT_INTERNAL_BRIDGE_SUPPORT(ty __VA_OPT__(, ) __VA_ARGS__)
-
 #define CRUBIT_BRIDGE(rust_name, abi_rust, abi_cpp)              \
   CRUBIT_INTERNAL_ANNOTATE("crubit_bridge_rust_name", rust_name) \
   CRUBIT_INTERNAL_ANNOTATE("crubit_bridge_abi_rust", abi_rust)   \
@@ -284,10 +226,11 @@
 // ```c++
 // // example.h
 // // SAFETY: `my_attribute` does not affect ABI.
-// struct CRUBIT_UNSAFE_IGNORE_ATTR(my_attribute) [[my_attribute]] MyStruct {};
+// struct CRUBIT_UNSAFE_IGNORE_ATTR("my_attr") [[my_attr]] MyStruct {};
 // ```
-#define CRUBIT_UNSAFE_IGNORE_ATTR(name) \
-  CRUBIT_INTERNAL_ANNOTATE("crubit_unsafe_ignore_attr", #name)
+#define CRUBIT_UNSAFE_IGNORE_ATTR(...)                                \
+  CRUBIT_INTERNAL_ANNOTATE("crubit_unsafe_ignore_attr" __VA_OPT__(, ) \
+                               __VA_ARGS__)
 
 // The CRUBIT_OWNED_POINTER AND CRUBIT_OWNED_POINTEE annotations work together
 // to map conventionally "owned" C++ pointer usages to a Rust type that provides
@@ -324,10 +267,90 @@
 // This will generate a Rust struct called `WrapperTypeName` that simply
 // contains a pointer to the underlying object. This type will be used in
 // positions that are annotated with `CRUBIT_OWNED_POINTER`.
+//
+// You can optionally specify a custom drop method name as a second argument:
+// `CRUBIT_OWNED_POINTEE("WrapperTypeName", "DropMethodName")`. If omitted, it
+// defaults to `DropImpl`.
 
 #define CRUBIT_OWNED_POINTER \
   CRUBIT_INTERNAL_ANNOTATE_TYPE("crubit_owned_pointer")
-#define CRUBIT_OWNED_POINTEE(name) \
-  CRUBIT_INTERNAL_ANNOTATE("crubit_owned_pointee", name)
+#define CRUBIT_OWNED_POINTEE(name, ...)            \
+  CRUBIT_INTERNAL_ANNOTATE("crubit_owned_pointee", \
+                           name __VA_OPT__(, ) __VA_ARGS__)
+
+// Overrides the `Display` binding detection for a type to true or false.
+//
+// If detected: binds to Rust's `Display` trait, preferring `AbslStringify` over
+// `std::ostream&` `operator<<` but requiring either.
+//
+// By default, infers a type `T`'s formatability based on one of:
+// * `template <typename Sink> void AbslStringify(Sink&, const T&)`
+// * `template <typename Sink> void AbslStringify(Sink&, T)`
+// * `std::ostream& operator<<(std::ostream&, const T&)`
+// * `std::ostream& operator<<(std::ostream&, T)`
+// * This annotation on `T`'s bases
+//
+// in any of the following:
+// * `T`'s namespace
+// * `T`'s friends
+// * `T`'s bases' namespace and friends
+//
+// and recurses on the bases of `T`. e.g., if `T` inherits from `B`, then
+// looks for both `AbslStringify(Sink&, T)` and `AbslStringify(Sink&, B)` in
+// `B`.
+//
+// However, default inference does *not* handle all cases, including:
+// * Other function or function template signatures e.g.,
+//   ```c++
+//   template <typename Sink, typename T>
+//   void AbslStringify(Sink&, const Foo<T>&);
+//
+//   template <typename T>
+//   struct Bar {
+//     template <
+//         typename U = T,
+//         typename = std::enable_if_t<absl::HasOstreamOperator<U>::value>>
+//     friend std::ostream& operator<<(std::ostream&, const Bar&);
+//   };
+//
+//   template <typename T>
+//   struct Baz {
+//     friend std::ostream& operator<<(std::ostream&, const Bar&)
+//     requires(absl::HasOstreamOperator<T>::value);
+//   };
+//
+//   struct Qux {
+//     template <typename T, typename Traits>
+//     friend std::basic_ostream<T, Traits>& operator<<(
+//         std::basic_ostream<T, Traits>&, const Qux&);
+//   };
+//   ```
+// * Formattable but non-public bases
+// * Deleted functions
+#define CRUBIT_OVERRIDE_DISPLAY(should_bind) \
+  CRUBIT_INTERNAL_ANNOTATE("crubit_override_display", should_bind)
+
+// Marks a type as thread-safe for Rust interop.
+//
+// Types annotated with `CRUBIT_THREAD_SAFE` will:
+// * Implement `Send + Sync` in Rust
+// * Have their internal representation wrapped in `UnsafeCell`, allowing
+//   non-const C++ methods to be called via shared references (`&self`)
+//
+// This annotation is appropriate for types that internally synchronize
+// access (e.g., types with mutexes, atomics, or other synchronization
+// primitives).
+//
+// Example:
+// ```c++
+// class CRUBIT_THREAD_SAFE ThreadSafeCounter {
+//   public:
+//     void Increment();      // Can be called via mut T*.
+//     int Get() const;       // Can also be called via &self
+//   private:
+//     std::atomic<int> count_;
+// };
+// ```
+#define CRUBIT_THREAD_SAFE CRUBIT_INTERNAL_ANNOTATE("crubit_thread_safe")
 
 #endif  // THIRD_PARTY_CRUBIT_SUPPORT_ANNOTATIONS_H_

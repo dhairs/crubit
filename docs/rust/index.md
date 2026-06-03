@@ -5,16 +5,17 @@ that entails, and additional subpages (available in the left-hand navigation)
 document specific aspects of the generated bindings.
 
 Tip: The code examples below are pulled straight from
-examples/rust/function/. The other examples in
-examples/rust/ are also useful. If you prefer just
-copy-pasting something, start there.
+
+<https://github.com/google/crubit/tree/main/examples/rust/function/>. The other examples
+in <https://github.com/google/crubit/tree/main/examples/rust/> are also useful. If you
+prefer just copy-pasting something, start there.
 
 ## How to use Crubit {#introduction}
 
 Crubit allows you to call some Rust interfaces from C++. It supports
-[functions](functions.md) (including methods), [structs](structs.md), and even
-[enums](enums.md) as "opaque" objects. Crubit does **not** support advanced
-features like generics or dynamic dispatch with `dyn`.
+[functions](functions.md) (including methods), [structs](structs.md),
+[traits](traits.md), and even [enums](enums.md) as "opaque" objects. Crubit does
+**not** support advanced features like generics or dynamic dispatch with `dyn`.
 
 The rest of this document goes over how to create a Rust library that can be
 called from C++, and how to actually use it from C++. The quick summary is:
@@ -32,24 +33,29 @@ called from C++, and how to actually use it from C++. The quick summary is:
     include in Cider, and select "Go to Definition".
 
     NOTE: In some cases the generated file in Cider may be out of date. If it
-    isn't refreshing, you can manually inspect the bindings using the workaround
-    command in b/391395849.
+    isn't refreshing, you can manually inspect the bindings using `bazel build
+    //path/to:my_cc_bindings_from_rust_target --config=crubit-genfiles`. This
+    will generate bindings and print the paths of generated files to stdout.
 
 ### Write a `rust_library` target {#rust_library}
 
 The first part of creating a library that can be used by Crubit is to write a
 `rust_library` target. For example:
 
-```live-snippet
-cs/file:examples/rust/function/example.rs content:^[^/].*
 ```
+{{ #include ../../examples/rust/function/example.rs }}
+```
+<!--  content:^[^/].* -->
+
 
 In the BUILD file, in addition to defining the `rust_library`, you should also
 define the `cc_bindings_from_rust` target to make it easier to use from C++:
 
-```live-snippet
-cs/file:examples/rust/function/BUILD symbol:example_crate|example_crate_cc_api
 ```
+{{ #include ../../examples/rust/function/BUILD }}
+```
+<!--  symbol:example_crate|example_crate_cc_api -->
+
 
 Example: If your Rust library is named `//path/to:example_crate`, then the C++
 header file is `"path/to/example_crate.h"`, and the C++ namespace is
@@ -62,13 +68,17 @@ bindings for a target, they must depend on the `cc_bindings_from_rust` rule.
 
 For example:
 
-```live-snippet
-cs/file:examples/rust/function/BUILD symbol:main
 ```
+{{ #include ../../examples/rust/function/BUILD }}
+```
+<!--  symbol:main -->
 
-```live-snippet
-cs/file:examples/rust/function/main.cc content:^[^/\n].*
+
 ```
+{{ #include ../../examples/rust/function/main.cc }}
+```
+<!--  content:^[^/\n].* -->
+
 
 NOTE: Other than for declaring the dependency, all other information about the
 generated bindings comes from the actual `rust_library` rule. For example, the
@@ -84,16 +94,20 @@ The crate name might make a poor namespace. In addition, typically, multiple C++
 headers and build targets share the same namespace. To customize the namespace
 name, use `cc_bindings_from_rust_library_config`:
 
-```live-snippet
-cs/file:examples/rust/library_config/BUILD symbol:custom_namespace|example_crate
 ```
+{{ #include ../../examples/rust/library_config/BUILD }}
+```
+<!--  symbol:custom_namespace|example_crate -->
+
 
 Now, instead of the crate name, the generated bindings will use the namespace
 name you provided:
 
-```live-snippet
-cs/file:examples/rust/library_config/main.cc content:^[^/\n].*
 ```
+{{ #include ../../examples/rust/library_config/main.cc }}
+```
+<!--  content:^[^/\n].* -->
+
 
 ### Look at the generated bindings {#examine}
 
@@ -116,7 +130,7 @@ There are two ways to look at the generated header file:
 ### Unsupported features
 
 Some features are either unsupported, or else only supported with experimental
-feature flags (<internal link>). In order to get bindings for a Rust
+feature flags (crubit.rs-features). In order to get bindings for a Rust
 interface, that interface must only use the subset of features currently
 supported.
 

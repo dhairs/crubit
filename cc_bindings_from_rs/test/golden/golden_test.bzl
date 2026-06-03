@@ -24,7 +24,7 @@ load(
 )
 load(
     "//common:crubit_wrapper_macros_oss.bzl",
-    "crubit_flavor_transition",
+    "crubit_golden_flavor_transition",
 )
 
 def _generate_bindings_impl(ctx):
@@ -42,7 +42,15 @@ _generate_bindings = rule(
         "rust_library": attr.label(
             providers = [CrateInfo],
             aspects = [cc_bindings_from_rust_aspect],
-            cfg = crubit_flavor_transition,
+            cfg = crubit_golden_flavor_transition,
+        ),
+        # Synthetic dependency to ensure even a coarse `bazel query` analysis finds a transitive
+        # dependency from Crubit tool sources to golden test bindings.
+        "_cc_bindings_from_rs_binary": attr.label(
+            default = "//cc_bindings_from_rs",
+            executable = True,
+            allow_single_file = True,
+            cfg = "exec",
         ),
     },
     implementation = _generate_bindings_impl,
@@ -75,15 +83,8 @@ def golden_test(
 
     bindings_name = basename + ".generated_bindings"
 
-    # Disable thunk name mangling to avoid breaking tests.
-    no_mangle_cli_flag = "no_thunk_name_mangling_" + rust_library
-    cc_bindings_from_rust_cli_flag(
-        name = no_mangle_cli_flag,
-        flags = "--no-thunk-name-mangling",
-    )
-
     # Turn on annotations if necessary.
-    # TODO(jeanpierreda): Move this (and the above cc_bindings_from_rust_cli_flag) out to a separate
+    # TODO(jeanpierreda): Move this out to a separate
     # target.
     kythe_annotations_flag = []
     if kythe_annotations:
@@ -111,7 +112,7 @@ def golden_test(
         args["aspect_hints"] = list(args["aspect_hints"])
     else:
         args["aspect_hints"] = []
-    args["aspect_hints"] += [":" + no_mangle_cli_flag, ":" + top_level_namespace]
+    args["aspect_hints"].append(":" + top_level_namespace)
     args["aspect_hints"] += kythe_annotations_flag
     rust_library_rule(
         **args

@@ -4,87 +4,58 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // rust_api_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_SUPPORT_FFI_11_TESTS_TYPE_IDENTITY_RUST_API_GOLDEN
 #define THIRD_PARTY_CRUBIT_SUPPORT_FFI_11_TESTS_TYPE_IDENTITY_RUST_API_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include <cstdint>
 
 #include "support/ffi_11/ffi_11.h"
 
 namespace rust_api {
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=5
 decltype(char(0)) c_char();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=60
 decltype(char16_t(0)) c_char16_t();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=64
 decltype(char32_t(0)) c_char32_t();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=56
 decltype(char8_t(0)) c_char8_t();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=44
 double c_double();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=41
 float c_float();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=21
-std::int32_t c_int();
+::std::int32_t c_int();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=27
-std::int64_t c_long();
+::std::int64_t c_long();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=34
 long long c_longlong();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=48
 decltype(nullptr) c_nullptr_t();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=11
-std::int8_t c_schar();
+::std::int8_t c_schar();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=15
-std::int16_t c_short();
+::std::int16_t c_short();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=8
-std::uint8_t c_uchar();
+::std::uint8_t c_uchar();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=24
-std::uint32_t c_uint();
+::std::uint32_t c_uint();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=30
-std::uint64_t c_ulong();
+::std::uint64_t c_ulong();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=37
 unsigned long long c_ulonglong();
 
-// Generated from:
-// support/ffi_11/tests/type_identity/rust_api.rs;l=18
-std::uint16_t c_ushort();
+::std::uint16_t c_ushort();
 
-// Error generating bindings for `c_wchar_t` defined at
+// Error generating bindings for function `rust_api_golden::c_wchar_t` defined
+// at
 // support/ffi_11/tests/type_identity/rust_api.rs;l=52:
 // Error formatting function return type `ffi_11::wchar_type::c_wchar_t`: Failed
 // to format type for the definition of `ffi_11::wchar_type::c_wchar_t`: Error
@@ -132,16 +103,16 @@ extern "C" float __crubit_thunk_c_ufloat();
 inline float c_float() { return __crubit_internal::__crubit_thunk_c_ufloat(); }
 
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_c_uint();
+extern "C" ::std::int32_t __crubit_thunk_c_uint();
 }
-inline std::int32_t c_int() {
+inline ::std::int32_t c_int() {
   return __crubit_internal::__crubit_thunk_c_uint();
 }
 
 namespace __crubit_internal {
-extern "C" std::int64_t __crubit_thunk_c_ulong();
+extern "C" ::std::int64_t __crubit_thunk_c_ulong();
 }
-inline std::int64_t c_long() {
+inline ::std::int64_t c_long() {
   return __crubit_internal::__crubit_thunk_c_ulong();
 }
 
@@ -160,37 +131,37 @@ inline decltype(nullptr) c_nullptr_t() {
 }
 
 namespace __crubit_internal {
-extern "C" std::int8_t __crubit_thunk_c_uschar();
+extern "C" ::std::int8_t __crubit_thunk_c_uschar();
 }
-inline std::int8_t c_schar() {
+inline ::std::int8_t c_schar() {
   return __crubit_internal::__crubit_thunk_c_uschar();
 }
 
 namespace __crubit_internal {
-extern "C" std::int16_t __crubit_thunk_c_ushort();
+extern "C" ::std::int16_t __crubit_thunk_c_ushort();
 }
-inline std::int16_t c_short() {
+inline ::std::int16_t c_short() {
   return __crubit_internal::__crubit_thunk_c_ushort();
 }
 
 namespace __crubit_internal {
-extern "C" std::uint8_t __crubit_thunk_c_uuchar();
+extern "C" ::std::uint8_t __crubit_thunk_c_uuchar();
 }
-inline std::uint8_t c_uchar() {
+inline ::std::uint8_t c_uchar() {
   return __crubit_internal::__crubit_thunk_c_uuchar();
 }
 
 namespace __crubit_internal {
-extern "C" std::uint32_t __crubit_thunk_c_uuint();
+extern "C" ::std::uint32_t __crubit_thunk_c_uuint();
 }
-inline std::uint32_t c_uint() {
+inline ::std::uint32_t c_uint() {
   return __crubit_internal::__crubit_thunk_c_uuint();
 }
 
 namespace __crubit_internal {
-extern "C" std::uint64_t __crubit_thunk_c_uulong();
+extern "C" ::std::uint64_t __crubit_thunk_c_uulong();
 }
-inline std::uint64_t c_ulong() {
+inline ::std::uint64_t c_ulong() {
   return __crubit_internal::__crubit_thunk_c_uulong();
 }
 
@@ -202,11 +173,13 @@ inline unsigned long long c_ulonglong() {
 }
 
 namespace __crubit_internal {
-extern "C" std::uint16_t __crubit_thunk_c_uushort();
+extern "C" ::std::uint16_t __crubit_thunk_c_uushort();
 }
-inline std::uint16_t c_ushort() {
+inline ::std::uint16_t c_ushort() {
   return __crubit_internal::__crubit_thunk_c_uushort();
 }
 
 }  // namespace rust_api
+
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_SUPPORT_FFI_11_TESTS_TYPE_IDENTITY_RUST_API_GOLDEN

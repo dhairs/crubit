@@ -10,6 +10,7 @@
 
 namespace {
 
+using enums::qr_error::QrError;
 using enums::repr_c::MyEnum;
 using enums::repr_c_clone_active_variant::CloneActiveVariant;
 using enums::repr_c_clone_active_variant::is_a;
@@ -17,6 +18,8 @@ using enums::repr_c_clone_active_variant::is_b;
 using enums::repr_c_clone_active_variant::is_c;
 using enums::repr_c_clone_counter::CloneCount;
 using enums::repr_c_drop::DropMe;
+using enums::repr_int::IntReprEnumWithNoPayload;
+using enums::repr_rust::RustReprEnum;
 
 TEST(EnumsTest, TestDefault) {
   MyEnum e;
@@ -42,6 +45,13 @@ TEST(EnumsTest, TestModification) {
   EXPECT_EQ(e.tag, MyEnum::Tag::B);
   EXPECT_EQ(e.B.h, true);
   EXPECT_EQ(e.B.i, false);
+}
+
+TEST(EnumsTest, TestConstruction) {
+  // TODO(b/489085607): Make `e` `constexpr` once `constexpr` constructors are
+  // supported even for types with drop glue.
+  MyEnum e = MyEnum::MakeF();
+  EXPECT_EQ(e.tag, MyEnum::Tag::F);
 }
 
 TEST(EnumsTest, TestDrop) {
@@ -96,6 +106,33 @@ TEST(EnumsTest, TestCloneActiveVariant) {
   // And back to A
   CloneActiveVariant a2 = c;
   EXPECT_TRUE(is_a(a2));
+}
+
+TEST(EnumsTest, TestRustReprEnumNoPayloadCtor) {
+  // `constexpr` below is load-bearing - it is used to verify that aspect of the
+  // generated bindings.
+  constexpr auto e1 = RustReprEnum::MakeVariant1();
+  EXPECT_EQ(e1.get_variant_number(), 1);
+
+  EXPECT_EQ(RustReprEnum::MakeVariant2().get_variant_number(), 2);
+  EXPECT_EQ(RustReprEnum::MakeVariant3().get_variant_number(), 3);
+}
+
+TEST(EnumsTest, TestRustReprEnumTuplePayloadCtor) {
+  // TODO(b/489085607): Make `e1` variable `constexpr` when possible.
+  RustReprEnum e1 = RustReprEnum::MakeTuplePayloadVariant(123, 456);
+  ASSERT_TRUE(e1.is_tuple_payload_variant());
+  EXPECT_EQ(e1.get_first_item_from_tuple_payload(), 123);
+}
+
+TEST(EnumsTest, TestIntReprEnumNoPayloadCtor) {
+  EXPECT_TRUE(IntReprEnumWithNoPayload::MakeNoPayload1().is_no_payload1());
+  EXPECT_TRUE(IntReprEnumWithNoPayload::MakeNoPayload2().is_no_payload2());
+}
+
+TEST(EnumsTest, TestQrError) {
+  auto e = QrError::MakeDataTooLong();
+  EXPECT_TRUE(e.is_data_too_long());
 }
 
 }  // namespace

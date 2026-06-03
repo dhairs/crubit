@@ -35,11 +35,6 @@ extern "C" void __rust_thunk___ZN14PrivatePointerC1Ev(
   crubit::construct_at(__this);
 }
 
-extern "C" int __rust_thunk___Z19DerefPrivatePointer14PrivatePointer(
-    class PrivatePointer* p) {
-  return DerefPrivatePointer(std::move(*p));
-}
-
 static_assert(CRUBIT_SIZEOF(struct TransitivePublicPointer) == 16);
 static_assert(alignof(struct TransitivePublicPointer) == 8);
 static_assert(CRUBIT_OFFSET_OF(pub, struct TransitivePublicPointer) == 0);
@@ -59,14 +54,21 @@ extern "C" void __rust_thunk___ZN5UnionC1Ev(union Union* __this) {
   crubit::construct_at(__this);
 }
 
-static_assert((int (*)(int*))&DerefPointer);
+static_assert((int (*)(int*)) & ::DerefPointer);
 
 extern "C" int __rust_thunk___Z18DerefPublicPointer13PublicPointer(
     struct PublicPointer* p) {
   return DerefPublicPointer(std::move(*p));
 }
 
-static_assert((int (*)(struct PublicPointer))&DerefPublicPointer);
+static_assert((int (*)(struct PublicPointer)) & ::DerefPublicPointer);
+
+extern "C" int __rust_thunk___Z19DerefPrivatePointer14PrivatePointer(
+    class PrivatePointer* p) {
+  return DerefPrivatePointer(std::move(*p));
+}
+
+static_assert((int (*)(class PrivatePointer)) & ::DerefPrivatePointer);
 
 extern "C" int
 __rust_thunk___Z28DerefTransitivePublicPointer23TransitivePublicPointer(
@@ -74,13 +76,13 @@ __rust_thunk___Z28DerefTransitivePublicPointer23TransitivePublicPointer(
   return DerefTransitivePublicPointer(std::move(*p));
 }
 
-static_assert(
-    (int (*)(struct TransitivePublicPointer))&DerefTransitivePublicPointer);
+static_assert((int (*)(struct TransitivePublicPointer)) &
+              ::DerefTransitivePublicPointer);
 
 extern "C" int __rust_thunk___Z9ReadUnion5Union(union Union* u) {
   return ReadUnion(std::move(*u));
 }
 
-static_assert((int (*)(union Union))&ReadUnion);
+static_assert((int (*)(union Union)) & ::ReadUnion);
 
 #pragma clang diagnostic pop

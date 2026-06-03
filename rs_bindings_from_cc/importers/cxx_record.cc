@@ -6,8 +6,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cstddef>
 #include <cstdint>
+#include <iterator>
 #include <memory>
 #include <optional>
 #include <string>
@@ -16,8 +18,10 @@
 #include <vector>
 
 #include "clang/Basic/SourceLocation.h"
+#include "absl/algorithm/container.h"
 #include "absl/base/nullability.h"
 #include "absl/container/flat_hash_set.h"
+#include "absl/functional/any_invocable.h"
 #include "absl/log/check.h"
 #include "absl/log/die_if_null.h"
 #include "absl/log/log.h"
@@ -269,36 +273,53 @@ std::optional<std::array<std::string, N>> GetKeyValues(
   return values;
 }
 
+std::string ToSnakeCase(absl::string_view input) {
+  std::string result;
+  for (size_t i = 0; i < input.size(); ++i) {
+    if (std::isupper(input[i])) {
+      if (i > 0 && input[i - 1] != '_') {
+        result += '_';
+      }
+      result += std::tolower(input[i]);
+    } else {
+      result += std::tolower(input[i]);
+    }
+  }
+  return result;
+}
+
+std::string GetProto2MessageRustName(ImportContext& ictx,
+                                     const clang::RecordDecl& record_decl) {
+  const clang::DeclContext* dc = record_decl.getDeclContext();
+  return internal::GetProto2MessageRustNameImpl(
+      record_decl.getNameAsString(), [&ictx, dc](absl::string_view prefix) {
+        clang::IdentifierInfo& ii = ictx.ctx_.Idents.get(prefix);
+        for (clang::NamedDecl* decl : dc->lookup(&ii)) {
+          if (auto* outer_record =
+                  clang::dyn_cast<clang::CXXRecordDecl>(decl)) {
+            if (crubit::IsProto2Message(*outer_record)) {
+              return true;
+            }
+          }
+        }
+        return false;
+      });
+}
+
 // Returns the bridge type annotation for the given `record_decl` if it exists.
 std::optional<BridgeType> GetBridgeTypeAnnotation(
     ImportContext& ictx, const clang::RecordDecl& record_decl) {
-  auto void_converter_values = GetKeyValues<3>(
-      record_decl,
-      {"crubit_bridge_type", "crubit_bridge_type_rust_to_cpp_converter",
-       "crubit_bridge_type_cpp_to_rust_converter"});
   auto crubit_abi_values = GetKeyValues<3>(
       record_decl, {"crubit_bridge_rust_name", "crubit_bridge_abi_rust",
                     "crubit_bridge_abi_cpp"});
-  CHECK(1 >= void_converter_values.has_value() + crubit_abi_values.has_value())
-      << "CRUBIT_BRIDGE_VOID_CONVERTERS, CRUBIT_BRIDGE, and are mutually "
-         "exclusive, and cannot be used on the same type.";
 
   if (crubit::IsProto2Message(record_decl)) {
     return BridgeType{BridgeType::ProtoMessageBridge{
-        .rust_name = record_decl.getNameAsString()}};
+        .rust_name = GetProto2MessageRustName(ictx, record_decl)}};
   }
 
-  if (void_converter_values.has_value()) {
-    auto [rust_name, rust_to_cpp_converter, cpp_to_rust_converter] =
-        *void_converter_values;
-    return BridgeType{BridgeType::BridgeVoidConverters{
-        .rust_name = std::move(rust_name),
-        .rust_to_cpp_converter = std::move(rust_to_cpp_converter),
-        .cpp_to_rust_converter = std::move(cpp_to_rust_converter),
-    }};
-  }
   if (crubit_abi_values.has_value()) {
-    std::vector<TemplateArg> template_args;
+    std::vector<CcType> template_args;
     // If this is a template specialization, need to iterate through the
     // template args
     if (const clang::ClassTemplateSpecializationDecl* specialization_decl =
@@ -307,9 +328,13 @@ std::optional<BridgeType> GetBridgeTypeAnnotation(
       for (const clang::TemplateArgument& template_arg :
            specialization_decl->getTemplateArgs().asArray()) {
         if (template_arg.getKind() == clang::TemplateArgument::ArgKind::Type) {
+          // TODO(b/454627672): is record_decl the right decl to check for
+          // assumed_lifetimes?
           template_args.emplace_back(
-              TemplateArg{ictx.ConvertQualType(template_arg.getAsType(),
-                                               /*lifetimes=*/nullptr)});
+              ictx.ConvertQualType(template_arg.getAsType(),
+                                   /*lifetimes=*/nullptr, /*nullable=*/true,
+                                   ictx.AreAssumedLifetimesEnabledForTarget(
+                                       ictx.GetOwningTarget(&record_decl))));
         }
       }
     }
@@ -340,7 +365,7 @@ absl::Status AddTraitDerives(const clang::Decl& decl, TraitDerives& result) {
                             GetExprAsStringLiteral(*arg, ast_context));
     absl::string_view trait;
     TraitImplPolarity polarity;
-    if (derived_trait.starts_with("!")) {
+    if (derived_trait.starts_with('!')) {
       trait = derived_trait.substr(1);
       polarity = TraitImplPolarity::kNegative;
     } else {
@@ -435,18 +460,6 @@ absl::StatusOr<TraitDerives> GetTraitDerives(const clang::Decl& decl) {
   return result;
 }
 
-absl::StatusOr<bool> IsUnsafeType(const clang::Decl& decl) {
-  CRUBIT_ASSIGN_OR_RETURN(std::optional<AnnotateArgs> args,
-                          GetAnnotateAttrArgs(decl, "crubit_override_unsafe"));
-  if (!args.has_value()) return false;
-  if (args->size() != 1) {
-    return absl::InvalidArgumentError(
-        "`crubit_override_unsafe` annotation must have exactly one argument");
-  }
-
-  return GetExprAsBool(*args->front(), decl.getASTContext());
-}
-
 std::optional<Identifier> StringRefToOptionalIdentifier(llvm::StringRef name) {
   if (name.empty()) {
     return std::nullopt;
@@ -489,23 +502,29 @@ bool MayOverloadOperatorDelete(clang::CXXRecordDecl& record_decl) {
   return OverloadsOperatorDelete(record_decl);
 }
 
-// Similar to `DeclContext::isStdNamespace`, but for any top-level namespace.
-bool IsTopLevelNamespace(std::string_view top_level_namespace,
-                         const clang::DeclContext* context) {
-  if (!context->isNamespace()) return false;
+// Returns the name of this DeclContext if it is a top-level namespace,
+// otherwise std::nullopt.
+std::optional<llvm::StringRef> AsTopLevelNamespace(
+    const clang::DeclContext* context) {
+  if (!context->isNamespace()) {
+    return std::nullopt;
+  }
 
   const auto* namespace_decl = clang::cast<clang::NamespaceDecl>(context);
   if (namespace_decl->isInline()) {
-    return IsTopLevelNamespace(top_level_namespace,
-                               namespace_decl->getParent());
+    return AsTopLevelNamespace(namespace_decl->getParent());
   }
 
-  if (!context->getParent()->getRedeclContext()->isTranslationUnit())
-    return false;
+  if (!context->getParent()->getRedeclContext()->isTranslationUnit()) {
+    return std::nullopt;
+  }
 
   const clang::IdentifierInfo* identifier_info =
       namespace_decl->getIdentifier();
-  return identifier_info && identifier_info->isStr(top_level_namespace);
+  if (!identifier_info) {
+    return std::nullopt;
+  }
+  return identifier_info->getName();
 }
 
 // Checks that a ClassTemplateSpecializationDecl has template arguments of the
@@ -578,7 +597,9 @@ absl::StatusOr<TemplateSpecialization::Kind> GetTemplateSpecializationKind(
   const clang::CXXRecordDecl* templated_decl =
       specialization_decl->getSpecializedTemplate()->getTemplatedDecl();
 
-  if (templated_decl->getDeclContext()->isStdNamespace()) {
+  std::optional<llvm::StringRef> top_level_namespace =
+      AsTopLevelNamespace(templated_decl->getDeclContext());
+  if (top_level_namespace == "std") {
     if (templated_decl->getName() == "basic_string_view") {
       CRUBIT_ASSIGN_OR_RETURN(clang::QualType t,
                               ParameterizedByTAndStdTraitT(
@@ -594,37 +615,197 @@ absl::StatusOr<TemplateSpecialization::Kind> GetTemplateSpecializationKind(
                               ParameterizedByTAndStdTraitT(
                                   ictx, specialization_decl, "default_delete"));
       return TemplateSpecialization::StdUniquePtr(
-          TemplateArg(ictx.ConvertQualType(t, /*lifetimes=*/nullptr)));
+          // TODO(b/454627672): is specialization_decl the right decl to check
+          // for assumed_lifetimes?
+          ictx.ConvertQualType(t, /*lifetimes=*/nullptr, /*nullable=*/true,
+                               ictx.AreAssumedLifetimesEnabledForTarget(
+                                   ictx.GetOwningTarget(specialization_decl))));
     } else if (templated_decl->getName() == "vector") {
       CRUBIT_ASSIGN_OR_RETURN(
           clang::QualType t,
           ParameterizedByTAndStdTraitT(ictx, specialization_decl, "allocator"));
+      // TODO(b/454627672): is specialization_decl the right decl to check for
+      // assumed_lifetimes?
       return TemplateSpecialization::StdVector(
-          TemplateArg(ictx.ConvertQualType(t, /*lifetimes=*/nullptr)));
+          ictx.ConvertQualType(t, /*lifetimes=*/nullptr, /*nullable=*/true,
+                               ictx.AreAssumedLifetimesEnabledForTarget(
+                                   ictx.GetOwningTarget(specialization_decl))));
     }
-  } else if (IsTopLevelNamespace("absl", templated_decl->getDeclContext())) {
+  } else if (top_level_namespace == "absl") {
     if (templated_decl->getName() == "Span") {
       LOG_IF(FATAL, specialization_decl->getTemplateArgs().size() != 1)
           << "absl::Span should have one template arg";
       clang::QualType t = specialization_decl->getTemplateArgs()[0].getAsType();
+      // TODO(b/454627672): is specialization_decl the right decl to check for
+      // assumed_lifetimes?
       return TemplateSpecialization::AbslSpan(
-          TemplateArg(ictx.ConvertQualType(t,
-                                           /*lifetimes=*/nullptr)));
+          ictx.ConvertQualType(t,
+                               /*lifetimes=*/nullptr, /*nullable=*/true,
+                               ictx.AreAssumedLifetimesEnabledForTarget(
+                                   ictx.GetOwningTarget(specialization_decl))));
     }
-  } else if (IsTopLevelNamespace("c9", templated_decl->getDeclContext())) {
+  } else if (top_level_namespace == "c9") {
     if (templated_decl->getName() == "Co") {
-      LOG_IF(FATAL, specialization_decl->getTemplateArgs().size() != 1)
-          << "c9::Co should have one template arg";
-      return TemplateSpecialization::C9Co(TemplateArg(ictx.ConvertQualType(
-          specialization_decl->getTemplateArgs()[0].getAsType(),
-          /*lifetimes=*/nullptr)));
+      if (specialization_decl->getTemplateArgs().size() != 1) {
+        return absl::InvalidArgumentError(
+            "c9::Co should have one template arg");
+      }
+      // TODO(b/454627672): is specialization_decl the right decl to check for
+      // assumed_lifetimes?
+      clang::QualType t = specialization_decl->getTemplateArgs()[0].getAsType();
+      // Check that t is completable, or void (which is always incomplete).
+      if (!t->isVoidType() &&
+          !ictx.sema_.isCompleteType(specialization_decl->getLocation(), t)) {
+        return absl::InvalidArgumentError(absl::StrCat(
+            "c9::Co return type is incomplete: ", t.getAsString()));
+      }
+      return TemplateSpecialization::C9Co(
+          ictx.ConvertQualType(t,
+                               /*lifetimes=*/nullptr, /*nullable=*/true,
+                               ictx.AreAssumedLifetimesEnabledForTarget(
+                                   ictx.GetOwningTarget(specialization_decl))));
     }
   }
 
   return TemplateSpecialization::NonSpecial();
 }
 
+// Returns the `DynCallable` information for the given `specialization_decl`.
+//
+// If the given `specialization_decl` is not a `rs_std::DynCallable`, returns
+// `std::nullopt`. If it is a `rs_std::DynCallable` but has other errors,
+// returns an error.
+std::optional<absl::StatusOr<BridgeType>> ExtractCallable(
+    ImportContext& ictx,
+    const clang::ClassTemplateSpecializationDecl& specialization_decl) {
+  const clang::CXXRecordDecl* templated_decl =
+      specialization_decl.getSpecializedTemplate()->getTemplatedDecl();
+
+  auto top_level_namespace =
+      AsTopLevelNamespace(templated_decl->getDeclContext());
+  BridgeType::Callable::BackingType backing_type;
+  if (top_level_namespace == "rs_std" &&
+      templated_decl->getName() == "DynCallable") {
+    backing_type = BridgeType::Callable::BackingType::kDynCallable;
+  } else if (top_level_namespace == "absl" &&
+             templated_decl->getName() == "AnyInvocable") {
+    backing_type = BridgeType::Callable::BackingType::kAnyInvocable;
+  } else {
+    return std::nullopt;
+  }
+
+  if (specialization_decl.getTemplateArgs().size() != 1) {
+    return absl::InvalidArgumentError(
+        "Callable template specialization must have exactly one template "
+        "argument");
+  }
+  const clang::FunctionProtoType* sig_fn_type =
+      specialization_decl.getTemplateArgs()
+          .get(0)
+          .getAsType()
+          .getTypePtr()
+          ->getAs<clang::FunctionProtoType>();
+
+  if (sig_fn_type == nullptr) {
+    return absl::InvalidArgumentError(
+        "Failed to get function signature for DynCallable");
+  }
+
+  // Extract the function kind based on the qualifiers.
+  BridgeType::Callable::FnTrait fn_trait;
+  if (sig_fn_type->getRefQualifier() == clang::RQ_RValue) {
+    // Regardless of whether it's && or const &&, it's a FnOnce.
+    fn_trait = BridgeType::Callable::FnTrait::kFnOnce;
+  } else if (sig_fn_type->getMethodQuals().hasConst()) {
+    fn_trait = BridgeType::Callable::FnTrait::kFn;
+  } else {
+    fn_trait = BridgeType::Callable::FnTrait::kFnMut;
+  }
+
+  // Convert the return type, ensuring that it is complete first.
+  if (sig_fn_type->getReturnType()->isIncompleteType()) {
+    // void is always considered incomplete, but is valid.
+    bool ok = sig_fn_type->getReturnType()->isVoidType() ||
+              ictx.sema_.isCompleteType(specialization_decl.getLocation(),
+                                        sig_fn_type->getReturnType());
+    if (!ok) {
+      return absl::InvalidArgumentError(
+          absl::StrCat("Return type of callable is incomplete: ",
+                       sig_fn_type->getReturnType().getAsString()));
+    }
+  }
+  // TODO(b/454627672): is templated_decl the right decl to check for
+  // assumed_lifetimes?
+  CcType return_type =
+      ictx.ConvertQualType(sig_fn_type->getReturnType(),
+                           /*lifetimes=*/nullptr,
+                           /*nullable=*/true,
+                           ictx.AreAssumedLifetimesEnabledForTarget(
+                               ictx.GetOwningTarget(templated_decl)));
+
+  std::vector<CcType> param_types;
+  // Convert the parameter types, ensuring that they are complete first.
+  param_types.reserve(sig_fn_type->getNumParams());
+  for (clang::QualType param_type : sig_fn_type->getParamTypes()) {
+    if (param_type->isIncompleteType()) {
+      bool ok = ictx.sema_.isCompleteType(specialization_decl.getLocation(),
+                                          param_type);
+      if (!ok) {
+        return absl::InvalidArgumentError(
+            absl::StrCat("Parameter type of callable is incomplete: ",
+                         param_type.getAsString()));
+      }
+    }
+    // TODO(b/454627672): is specialization_decl the right decl to check for
+    // assumed_lifetimes?
+    CcType param_cc_type =
+        ictx.ConvertQualType(param_type, /*lifetimes=*/nullptr,
+                             /*nullable=*/true,
+                             ictx.AreAssumedLifetimesEnabledForTarget(
+                                 ictx.GetOwningTarget(&specialization_decl)));
+    param_types.push_back(std::move(param_cc_type));
+  }
+
+  return BridgeType(BridgeType::Callable{
+      .backing_type = backing_type,
+      .fn_trait = fn_trait,
+      .return_type = std::make_shared<CcType>(std::move(return_type)),
+      .param_types = std::move(param_types),
+  });
+}
+
 }  // namespace
+
+absl::StatusOr<SafetyAnnotation> CXXRecordDeclImporter::GetSafetyAnnotation(
+    const clang::Decl& decl) {
+  CRUBIT_ASSIGN_OR_RETURN(std::optional<AnnotateArgs> args,
+                          GetAnnotateAttrArgs(decl, "crubit_override_unsafe"));
+  if (args.has_value()) {
+    if (args->size() != 1) {
+      return absl::InvalidArgumentError(
+          "`crubit_override_unsafe` annotation must have exactly one argument");
+    }
+
+    absl::StatusOr<bool> is_unsafe =
+        GetExprAsBool(*args->front(), decl.getASTContext());
+    if (!is_unsafe.ok()) {
+      return absl::InvalidArgumentError(
+          "`crubit_override_unsafe` annotation must have a bool argument");
+    }
+    if (*is_unsafe) {
+      return SafetyAnnotation::kUnsafe;
+    } else {
+      return SafetyAnnotation::kDisableUnsafe;
+    }
+  }
+
+  if (decl.hasAttr<clang::PointerAttr>() &&
+      ictx_.IsUnsafeViewEnabledForTarget(ictx_.GetOwningTarget(&decl))) {
+    return SafetyAnnotation::kUnsafe;
+  }
+
+  return SafetyAnnotation::kUnannotated;
+}
 
 std::optional<Identifier> CXXRecordDeclImporter::GetTranslatedFieldName(
     const clang::FieldDecl* field_decl) {
@@ -650,15 +831,15 @@ std::optional<Identifier> CXXRecordDeclImporter::GetTranslatedFieldName(
 
 bool IsKnownAttr(const clang::Attr& attr) {
   return clang::isa<clang::AlignedAttr>(attr) ||
-         clang::isa<clang::CoroLifetimeBoundAttr>(attr) ||
-         clang::isa<clang::CoroReturnTypeAttr>(attr) ||
          clang::isa<clang::FinalAttr>(attr) ||
          clang::isa<clang::OwnerAttr>(attr) ||
          clang::isa<clang::PointerAttr>(attr) ||
          clang::isa<clang::PreferredNameAttr>(attr) ||
          clang::isa<clang::TrivialABIAttr>(attr) ||
-         clang::isa<clang::WarnUnusedResultAttr>(attr) ||
-         clang::isa<clang::TypeNullableAttr>(attr);
+         clang::isa<clang::TypeNullableAttr>(attr) ||
+         clang::isa<clang::ScopedLockableAttr>(attr) ||
+         clang::isa<clang::CapabilityAttr>(attr) ||
+         clang::isa<clang::ReentrantCapabilityAttr>(attr);
 }
 
 std::optional<IR::Item> CXXRecordDeclImporter::Import(
@@ -683,8 +864,8 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
   if (clang::isa<clang::ClassTemplatePartialSpecializationDecl>(record_decl)) {
     return ictx_.ImportUnsupportedItem(
         *record_decl, std::nullopt,
-        FormattedError::Static(
-            "Partially-specialized class templates are not supported"));
+        {FormattedError::Static(
+            "Partially-specialized class templates are not supported")});
   }
 
   if (record_decl->isInvalidDecl()) {
@@ -692,6 +873,8 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
   }
 
   std::optional<IR::Item> attr_error_item;
+  std::optional<std::string> nodiscard;
+  std::optional<std::string> deprecated;
   absl::StatusOr<std::optional<std::string>> unknown_attr =
       CollectUnknownAttrs(*record_decl, [&](const clang::Attr& attr) {
         if (IsKnownAttr(attr)) {
@@ -703,9 +886,18 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
               clang::VisibilityAttr::VisibilityType::Hidden) {
             attr_error_item = ictx_.ImportUnsupportedItem(
                 *record_decl, std::nullopt,
-                FormattedError::Static("Records from the standard library with "
-                                       "hidden visibility are not supported"));
+                {FormattedError::Static(
+                    "Records from the standard library with "
+                    "hidden visibility are not supported")});
           }
+          return true;
+        } else if (auto* unused_attr =
+                       clang::dyn_cast<clang::WarnUnusedResultAttr>(&attr)) {
+          nodiscard.emplace(unused_attr->getMessage());
+          return true;
+        } else if (auto* deprecated_attr =
+                       clang::dyn_cast<clang::DeprecatedAttr>(&attr)) {
+          deprecated.emplace(deprecated_attr->getMessage());
           return true;
         }
         return false;
@@ -713,7 +905,7 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
   if (!unknown_attr.ok()) {
     return ictx_.ImportUnsupportedItem(
         *record_decl, std::nullopt,
-        FormattedError::FromStatus(std::move(unknown_attr.status())));
+        {FormattedError::FromStatus(std::move(unknown_attr).status())});
   }
   if (attr_error_item.has_value()) {
     return attr_error_item;
@@ -727,15 +919,62 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
   std::optional<BridgeType> bridge_type =
       GetBridgeTypeAnnotation(ictx_, *record_decl);
 
-  absl::StatusOr<std::optional<std::string>> owned_ptr_type =
-      GetAnnotationWithStringArg(*record_decl, "crubit_owned_pointee");
-  if (!owned_ptr_type.ok()) {
+  absl::StatusOr<std::optional<std::vector<std::string>>> args =
+      GetAnnotationWithStringArgs(*record_decl, "crubit_owned_pointee");
+  if (!args.ok()) {
     return ictx_.ImportUnsupportedItem(
         *record_decl, std::nullopt,
-        FormattedError::FromStatus(owned_ptr_type.status()));
+        {FormattedError::FromStatus(std::move(args).status())});
+  }
+
+  std::optional<OwnedPtrConfig> owned_ptr_config;
+
+  if (args->has_value()) {
+    const auto& args_vec = **args;
+    if (args_vec.empty() || args_vec.size() > 2) {
+      return ictx_.ImportUnsupportedItem(
+          *record_decl, std::nullopt,
+          {FormattedError::Static(
+              "crubit_owned_pointee takes 1 or 2 arguments")});
+    }
+
+    std::string owned_ptr_type = args_vec[0];
+    std::string drop_impl = "DropImpl";
+
+    if (args_vec.size() == 2) {
+      drop_impl = args_vec[1];
+    }
+
+    owned_ptr_config = OwnedPtrConfig{
+        .owned_ptr_type = std::move(owned_ptr_type),
+        .drop_impl = std::move(drop_impl),
+    };
   }
 
   BazelLabel owning_target = ictx_.GetOwningTarget(record_decl);
+  std::optional<ItemId> enclosing_item_id = std::nullopt;
+
+  // Reports an unsupported type with the given error.
+  //
+  // This is preferred to invoking `ImportUnsupportedItem` directly because it
+  // ensures that the path is set correctly. Note that this cannot be used above
+  // because the enclosing item ID and translated name are not yet available.
+  auto unsupported = [this, &record_decl, &rs_name,
+                      &enclosing_item_id](FormattedError error) {
+    return ictx_.ImportUnsupportedItem(
+        *record_decl,
+        UnsupportedItem::Path{
+            .ident = Identifier(rs_name),
+            .enclosing_item_id = std::move(enclosing_item_id)},
+        {std::move(error)});
+  };
+
+  absl::StatusOr<RecordType> record_type = TranslateRecordType(*record_decl);
+  if (!record_type.ok()) {
+    return unsupported(
+        FormattedError::FromStatus(std::move(record_type).status()));
+  }
+  bool is_canonical_template_alias = false;
   if (auto* specialization_decl =
           clang::dyn_cast<clang::ClassTemplateSpecializationDecl>(
               record_decl)) {
@@ -748,7 +987,7 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
     if (!status_or_cc_name.ok()) {
       return ictx_.ImportUnsupportedItem(
           *record_decl, std::nullopt,
-          FormattedError::FromStatus(std::move(status_or_cc_name).status()));
+          {FormattedError::FromStatus(std::move(status_or_cc_name).status())});
     }
     cc_name = *std::move(status_or_cc_name);
 
@@ -759,7 +998,7 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
     if (!status_or_ts_kind.ok()) {
       return ictx_.ImportUnsupportedItem(
           *record_decl, std::nullopt,
-          FormattedError::FromStatus(std::move(status_or_ts_kind).status()));
+          {FormattedError::FromStatus(std::move(status_or_ts_kind).status())});
     }
     ts.kind = *std::move(status_or_ts_kind);
 
@@ -793,23 +1032,49 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
       decl = instantiation_source
                  .dyn_cast<clang::ClassTemplatePartialSpecializationDecl*>();
     }
+    if (!ictx_.invocation_.should_instantiate_template_from_path(
+            ictx_.sema_.getSourceManager(), decl->getLocation())) {
+      return ictx_.ImportUnsupportedItem(
+          *record_decl, std::nullopt,
+          {FormattedError::PrefixedStrCat(
+              "Class template instantiation forbidden by blocklist",
+              record_decl->getQualifiedNameAsString())});
+    }
     ts.defining_target = ictx_.GetOwningTarget(decl);
-    // TODO(okabayashi): File a bug for generalizing "canonical insts".
-    // When a template like `std::string_view` is instantiated, it will be
-    // owned by whatever target it was instantiated in. The C++ compiler is
-    // then responsible for unifying identical instantiations. However, this
-    // is a pain for Crubit because we aren't able to generally unify these.
-    // In the case of `std::string_view`, however, we know that there's an
-    // instantiation in the `cc_std` target, so I've chosen that as the
-    // canonical instantiation, and am mapping all other instantiations to
-    // that instantiation.
-    // A problem with this is it's not _actually_ the same ItemId, and it
-    // really should be. This ensures that when we refer to this Item, it's
-    // spelled `cc_std::__CcTemplateInst...`. But a major downside is that we
-    // still generate this template inst struct...
-    if (std::holds_alternative<TemplateSpecialization::StdStringView>(
-            ts.kind)) {
-      owning_target = ts.defining_target;
+    if (clang::TypedefNameDecl* alias_decl =
+            ictx_.GetTemplateSpecializationAlias(specialization_decl)) {
+      absl::StatusOr<TranslatedIdentifier> alias_name =
+          ictx_.GetTranslatedIdentifier(alias_decl);
+      if (!alias_name.ok()) {
+        return ictx_.ImportUnsupportedItem(
+            *record_decl, std::nullopt,
+            {FormattedError::PrefixedStrCat("preferred_name is not supported",
+                                            alias_name.status().message())});
+      }
+      owning_target = ictx_.GetOwningTarget(alias_decl);
+      rs_name = alias_name->rs_identifier().Ident();
+      cc_name = alias_name->cc_identifier.Ident();
+      is_canonical_template_alias = true;
+      absl::StatusOr<std::optional<ItemId>> alias_enclosing_item_id =
+          ictx_.GetEnclosingItemId(alias_decl);
+      if (!alias_enclosing_item_id.ok()) {
+        return ictx_.ImportUnsupportedItem(
+            *record_decl, std::nullopt,
+            {FormattedError::FromStatus(
+                std::move(alias_enclosing_item_id).status())});
+      }
+      enclosing_item_id = *std::move(alias_enclosing_item_id);
+    }
+
+    if (std::optional<absl::StatusOr<BridgeType>> extracted_callable =
+            ExtractCallable(ictx_, *specialization_decl)) {
+      if (!extracted_callable->ok()) {
+        return ictx_.ImportUnsupportedItem(
+            *record_decl, std::nullopt,
+            {FormattedError::FromStatus(
+                std::move(extracted_callable)->status())});
+      }
+      bridge_type = **std::move(extracted_callable);
     }
 
     if (!bridge_type.has_value()) {
@@ -818,8 +1083,8 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
       if (!builtin_bridge_type.ok()) {
         return ictx_.ImportUnsupportedItem(
             *record_decl, std::nullopt,
-            FormattedError::FromStatus(
-                std::move(builtin_bridge_type).status()));
+            {FormattedError::FromStatus(
+                std::move(builtin_bridge_type).status())});
       }
       bridge_type = *std::move(builtin_bridge_type);
     }
@@ -837,40 +1102,29 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
 
     absl::StatusOr<TranslatedIdentifier> record_name =
         ictx_.GetTranslatedIdentifier(named_decl);
-    if (record_name.ok()) {
-      rs_name = (*record_name).rs_identifier().Ident();
-      cc_name = (*record_name).cc_identifier.Ident();
-      doc_comment = ictx_.GetComment(record_decl);
-      source_loc = record_decl->getBeginLoc();
-    } else {
+    if (!record_name.ok()) {
       return ictx_.ImportUnsupportedItem(
           *record_decl, std::nullopt,
-          FormattedError::PrefixedStrCat("Record name is not supported",
-                                         record_name.status().message()));
+          {FormattedError::PrefixedStrCat("Record name is not supported",
+                                          record_name.status().message())});
     }
+    rs_name = record_name->rs_identifier().Ident();
+    cc_name = record_name->cc_identifier.Ident();
+    doc_comment = ictx_.GetComment(record_decl);
+    source_loc = record_decl->getBeginLoc();
   }
 
-  auto enclosing_item_id = ictx_.GetEnclosingItemId(record_decl);
-  if (!enclosing_item_id.ok()) {
-    return ictx_.ImportUnsupportedItem(
-        *record_decl, std::nullopt,
-        FormattedError::FromStatus(std::move(enclosing_item_id.status())));
+  if (!enclosing_item_id.has_value()) {
+    absl::StatusOr<std::optional<ItemId>> real_enclosing_item_id =
+        ictx_.GetEnclosingItemId(record_decl);
+    if (!real_enclosing_item_id.ok()) {
+      return ictx_.ImportUnsupportedItem(
+          *record_decl, std::nullopt,
+          {FormattedError::FromStatus(
+              std::move(real_enclosing_item_id).status())});
+    }
+    enclosing_item_id = *std::move(real_enclosing_item_id);
   }
-
-  // Reports an unsupported type with the given error.
-  //
-  // This is preferred to invoking `ImportUnsupportedItem` directly because it
-  // ensures that the path is set correctly. Note that this cannot be used above
-  // because the enclosing item ID and translated name are not yet available.
-  auto unsupported = [this, &record_decl, &rs_name,
-                      &enclosing_item_id](FormattedError error) {
-    return ictx_.ImportUnsupportedItem(
-        *record_decl,
-        UnsupportedItem::Path{.ident = Identifier(rs_name),
-                              .enclosing_item_id = *enclosing_item_id},
-        error);
-  };
-
   if (record_decl->isDependentContext()) {
     // We can't pass this to getASTRecordLayout() or it'll segfault.
     // TODO(jeanpierreda): investigate what we can do to support dependent records?
@@ -879,12 +1133,6 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
     // this.
     return unsupported(
         FormattedError::Static("Dependent records are not supported"));
-  }
-
-  absl::StatusOr<RecordType> record_type = TranslateRecordType(*record_decl);
-  if (!record_type.ok()) {
-    return unsupported(
-        FormattedError::FromStatus(std::move(record_type.status())));
   }
 
   if (record_decl->hasAttr<clang::PackedAttr>() ||
@@ -900,11 +1148,12 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
   if (!record_decl->isCompleteDefinition()) {
     return IncompleteRecord{.cc_name = Identifier(cc_name),
                             .rs_name = Identifier(rs_name),
+                            .unique_name = ictx_.GetUniqueName(*record_decl),
                             .id = ictx_.GenerateItemId(record_decl),
-                            .owning_target = ictx_.GetOwningTarget(record_decl),
-                            .unknown_attr = std::move(*unknown_attr),
-                            .record_type = *record_type,
-                            .enclosing_item_id = *std::move(enclosing_item_id)};
+                            .owning_target = std::move(owning_target),
+                            .unknown_attr = *std::move(unknown_attr),
+                            .record_type = *std::move(record_type),
+                            .enclosing_item_id = std::move(enclosing_item_id)};
   }
 
   ictx_.sema_.ForceDeclarationOfImplicitMembers(record_decl);
@@ -919,15 +1168,16 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
   bool is_effectively_final =
       record_decl->isEffectivelyFinal() || record_decl->isUnion();
 
-  std::optional<std::string> nodiscard;
-  if (const auto* attr = record_decl->getAttr<clang::WarnUnusedResultAttr>();
-      attr != nullptr) {
-    nodiscard.emplace(attr->getMessage());
-  }
-
   auto item_ids = ictx_.GetItemIdsInSourceOrder(record_decl);
   const clang::TypedefNameDecl* anon_typedef =
       record_decl->getTypedefNameForAnonDecl();
+
+  absl::StatusOr<bool> is_thread_safe =
+      HasAnnotationWithoutArgs(*record_decl, "crubit_thread_safe");
+  if (!is_thread_safe.ok()) {
+    return unsupported(
+        FormattedError::FromStatus(std::move(is_thread_safe).status()));
+  }
 
   absl::StatusOr<TraitDerives> trait_derives = GetTraitDerives(*record_decl);
   if (!trait_derives.ok()) {
@@ -935,15 +1185,46 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
         FormattedError::FromStatus(std::move(trait_derives).status()));
   }
 
-  absl::StatusOr<bool> is_unsafe_type = IsUnsafeType(*record_decl);
-  if (!is_unsafe_type.ok()) {
+  if (*is_thread_safe) {
+    trait_derives->send = true;
+    trait_derives->sync = true;
+  }
+
+  absl::StatusOr<SafetyAnnotation> safety_annotation =
+      GetSafetyAnnotation(*record_decl);
+  if (!safety_annotation.ok()) {
     return unsupported(
-        FormattedError::FromStatus(std::move(is_unsafe_type).status()));
+        FormattedError::FromStatus(std::move(safety_annotation).status()));
+  }
+
+  std::vector<std::string> lifetime_inputs;
+  if (ictx_.AreAssumedLifetimesEnabledForTarget(
+          ictx_.GetOwningTarget(record_decl))) {
+    auto lifetime_inputs_or_err =
+        CollectLifetimeInputs(ictx_.sema_.getASTContext(), record_decl);
+    if (!lifetime_inputs_or_err.ok()) {
+      return unsupported(FormattedError::FromStatus(
+          std::move(lifetime_inputs_or_err).status()));
+    } else {
+      lifetime_inputs.reserve(lifetime_inputs_or_err->size());
+      absl::c_transform(*lifetime_inputs_or_err,
+                        std::back_inserter(lifetime_inputs),
+                        [](absl::string_view lifetime_view) {
+                          return std::string(lifetime_view);
+                        });
+    }
+  }
+
+  absl::StatusOr<bool> detected_formatter = ictx_.DetectFormatter(*record_decl);
+  if (!detected_formatter.ok()) {
+    return unsupported(
+        FormattedError::FromStatus(std::move(detected_formatter).status()));
   }
 
   auto record = Record{
       .rs_name = Identifier(rs_name),
       .cc_name = Identifier(cc_name),
+      .unique_name = ictx_.GetUniqueName(*record_decl),
       .mangled_cc_name = ictx_.GetMangledName(record_decl),
       .id = ictx_.GenerateItemId(record_decl),
       .owning_target = std::move(owning_target),
@@ -951,8 +1232,8 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
       .unknown_attr = std::move(*unknown_attr),
       .doc_comment = std::move(doc_comment),
       .bridge_type = std::move(bridge_type),
-      .owned_ptr_type = *std::move(owned_ptr_type),
-      .source_loc = ictx_.ConvertSourceLocation(source_loc),
+      .owned_ptr_config = std::move(owned_ptr_config),
+      .source_loc = ictx_.ConvertSourceLocation(source_loc, nullptr),
       .unambiguous_public_bases = GetUnambiguousPublicBases(*record_decl),
       .fields = ImportFields(record_decl),
       .size_align =
@@ -963,7 +1244,7 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
       .trait_derives = *std::move(trait_derives),
       .is_derived_class = is_derived_class,
       .override_alignment = override_alignment,
-      .is_unsafe_type = *is_unsafe_type,
+      .safety_annotation = *safety_annotation,
       .copy_constructor = GetCopyCtorSpecialMemberFunc(ictx_, *record_decl),
       .move_constructor = GetMoveCtorSpecialMemberFunc(ictx_, *record_decl),
       .destructor = GetDestructorSpecialMemberFunc(*record_decl),
@@ -973,12 +1254,17 @@ std::optional<IR::Item> CXXRecordDeclImporter::Import(
       .nodiscard = std::move(nodiscard),
       .record_type = *record_type,
       .is_aggregate = record_decl->isAggregate(),
-      .is_anon_record_with_typedef = anon_typedef != nullptr,
+      .is_canonical_alias =
+          anon_typedef != nullptr || is_canonical_template_alias,
       .is_explicit_class_template_instantiation_definition =
           is_explicit_class_template_instantiation_definition,
       .child_item_ids = std::move(item_ids),
-      .enclosing_item_id = *std::move(enclosing_item_id),
+      .enclosing_item_id = std::move(enclosing_item_id),
       .overloads_operator_delete = MayOverloadOperatorDelete(*record_decl),
+      .detected_formatter = *detected_formatter,
+      .is_thread_safe = *is_thread_safe,
+      .lifetime_inputs = std::move(lifetime_inputs),
+      .deprecated = std::move(deprecated),
   };
 
   // If the align attribute was attached to the typedef decl, we should
@@ -1030,25 +1316,30 @@ std::vector<Field> CXXRecordDeclImporter::ImportFields(
     }
 
     const clang::tidy::lifetimes::ValueLifetimes* no_lifetimes = nullptr;
-    absl::StatusOr<CcType> type;
-    switch (access) {
-      case clang::AS_public:
-        // TODO(mboehme): Once lifetime_annotations supports retrieving
-        // lifetimes in field types, pass these to ConvertQualType().
-        type = ictx_.ConvertQualType(field_decl->getType(), no_lifetimes);
-        break;
-      case clang::AS_protected:
-      case clang::AS_private:
-      case clang::AS_none:
-        // As a performance optimization (i.e. to keep the generated code
-        // small) we can emit private fields as opaque blobs of bytes.  This
-        // may avoid the need to include supporting types in the generated
-        // code (e.g. avoiding extra template instantiations).  See also
-        // b/226580208 and <internal link>.
-        type = absl::UnavailableError(
-            "Types of non-public C++ fields can be elided away");
-        break;
-    }
+    CcType type = [&]() {
+      switch (access) {
+        case clang::AS_public:
+          // TODO(mboehme): Once lifetime_annotations supports retrieving
+          // lifetimes in field types, pass these to ConvertQualType().
+          // TODO(b/454627672): is record_decl the right decl to check for
+          // assumed_lifetimes?
+          return ictx_.ConvertQualType(
+              field_decl->getType(), no_lifetimes,
+              /*nullable=*/true,
+              ictx_.AreAssumedLifetimesEnabledForTarget(
+                  ictx_.GetOwningTarget(record_decl)));
+        case clang::AS_protected:
+        case clang::AS_private:
+        case clang::AS_none:
+          // As a performance optimization (i.e. to keep the generated code
+          // small) we can emit private fields as opaque blobs of bytes.  This
+          // may avoid the need to include supporting types in the generated
+          // code (e.g. avoiding extra template instantiations).  See also
+          // b/226580208 and <internal link>.
+          return CcType(FormattedError::Static(
+              "Types of non-public C++ fields can be elided away"));
+      }
+    }();
 
     bool is_inheritable = false;
     auto* field_record = field_decl->getType()->getAsCXXRecordDecl();
@@ -1072,6 +1363,17 @@ std::vector<Field> CXXRecordDeclImporter::ImportFields(
       size = ictx_.ctx_.getTypeSize(field_decl->getType());
     }
 
+    std::optional<std::string> deprecated;
+    absl::StatusOr<std::optional<std::string>> unknown_attr =
+        CollectUnknownAttrs(*field_decl, [&](const clang::Attr& attr) {
+          if (auto* deprecated_attr =
+                  clang::dyn_cast<clang::DeprecatedAttr>(&attr)) {
+            deprecated.emplace(deprecated_attr->getMessage());
+            return true;
+          }
+          return false;
+        });
+
     fields.push_back(
         {.rust_identifier = GetTranslatedFieldName(field_decl),
          .cpp_identifier = StringRefToOptionalIdentifier(field_decl->getName()),
@@ -1080,11 +1382,12 @@ std::vector<Field> CXXRecordDeclImporter::ImportFields(
          .access = TranslateAccessSpecifier(access),
          .offset = layout.getFieldOffset(field_decl->getFieldIndex()),
          .size = size,
-         .unknown_attr = CollectUnknownAttrs(*field_decl),
+         .unknown_attr = unknown_attr,
          .is_no_unique_address =
              field_decl->hasAttr<clang::NoUniqueAddressAttr>(),
          .is_bitfield = field_decl->isBitField(),
-         .is_inheritable = is_inheritable});
+         .is_inheritable = is_inheritable,
+         .deprecated = std::move(deprecated)});
   }
   return fields;
 }
@@ -1187,22 +1490,26 @@ CXXRecordDeclImporter::GetBuiltinBridgeType(
   }
 
   clang::StringRef name = cxx_record_decl->getName();
+  // TODO(b/454627672): is cxx_record_decl the right decl to check for
+  // assumed_lifetimes?
   auto cc_type_of_arg = [&](int index) {
     return ictx_.ConvertQualType(
         /*qual_type=*/decl->getTemplateArgs()[index].getAsType(),
-        /*lifetimes=*/nullptr);
+        /*lifetimes=*/nullptr, /*nullable=*/true,
+        ictx_.AreAssumedLifetimesEnabledForTarget(
+            ictx_.GetOwningTarget(cxx_record_decl)));
   };
 
   if (name == "optional") {
-    CRUBIT_ASSIGN_OR_RETURN(CcType inner, cc_type_of_arg(0));
+    CcType inner = cc_type_of_arg(0);
     return BridgeType{BridgeType::StdOptional{
         .inner_type = std::make_shared<CcType>(std::move(inner)),
     }};
   }
 
   if (name == "pair") {
-    CRUBIT_ASSIGN_OR_RETURN(CcType first, cc_type_of_arg(0));
-    CRUBIT_ASSIGN_OR_RETURN(CcType second, cc_type_of_arg(1));
+    CcType first = cc_type_of_arg(0);
+    CcType second = cc_type_of_arg(1);
     return BridgeType{BridgeType::StdPair{
         .first_type = std::make_shared<CcType>(std::move(first)),
         .second_type = std::make_shared<CcType>(std::move(second)),
@@ -1210,16 +1517,72 @@ CXXRecordDeclImporter::GetBuiltinBridgeType(
   }
 
   if (name == "basic_string") {
-    CRUBIT_ASSIGN_OR_RETURN(CcType char_type, cc_type_of_arg(0));
+    CcType char_type = cc_type_of_arg(0);
     if (const auto* primitive =
             std::get_if<CcType::Primitive>(&char_type.variant);
         primitive != nullptr && primitive->spelling == "char") {
       return BridgeType{BridgeType::StdString{}};
+    }
+    // HACK: restoring old behavior that hid a bug in our logic for std::wstring
+    // TODO(b/468093766): Fail in the ordinary Record handling logic, not here.
+    if (auto* error = std::get_if<FormattedError>(&char_type.variant)) {
+      return absl::InternalError(error->message());
     }
   }
   // Add builtin bridge types here as needed.
 
   return std::nullopt;
 }
+
+namespace internal {
+
+// Determines the Rust bridge path for a given Proto2 message declaration.
+// Protobuf messages can be nested, resulting in C++ names like `Outer_Inner`.
+// This function resolves the nesting by looking up the parent messages in the
+// C++ AST, and formats the resulting path as `outer::Inner` in Rust.
+std::string GetProto2MessageRustNameImpl(
+    absl::string_view message_name,
+    absl::AnyInvocable<bool(absl::string_view)> is_parent_proto) {
+  absl::string_view current = message_name;
+  std::vector<absl::string_view> path;
+
+  // Traverse nested protobuf messages by searching for '_' in the name and
+  // checking if the prefix corresponds to an enclosing protobuf message.
+  while (true) {
+    bool found = false;
+    // Search for '_' from right to left to handle multiple levels of nesting.
+    for (size_t last_underscore = current.rfind('_');
+         !found && last_underscore != absl::string_view::npos &&
+         last_underscore > 0;
+         last_underscore = current.rfind('_', last_underscore - 1)) {
+      absl::string_view prefix = current.substr(0, last_underscore);
+      if (is_parent_proto(prefix)) {
+        // Found the parent proto message. The suffix is the inner message
+        // name. Add it to our path and continue with the parent.
+        path.push_back(current.substr(last_underscore + 1));
+        current = prefix;
+        found = true;
+      }
+    }
+    // If no valid parent proto message was found by splitting at '_',
+    // the current string is the outermost message name. Add it and stop.
+    if (!found) {
+      path.push_back(current);
+      break;
+    }
+  }
+
+  std::string rust_name = std::string(path.back());
+  if (path.size() > 1) {
+    rust_name = ToSnakeCase(rust_name);
+    for (int i = path.size() - 2; i > 0; --i) {
+      absl::StrAppend(&rust_name, "::", ToSnakeCase(path[i]));
+    }
+    absl::StrAppend(&rust_name, "::", path.front());
+  }
+  return rust_name;
+}
+
+}  // namespace internal
 
 }  // namespace crubit

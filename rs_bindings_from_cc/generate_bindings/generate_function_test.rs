@@ -7,12 +7,17 @@ use code_gen_utils::make_rs_ident;
 use database::code_snippet::BindingsTokens;
 use database::rs_snippet::{format_generic_params, Lifetime};
 use generate_function_thunk::thunk_ident;
-use googletest::prelude::{assert_that, contains_substring, gtest, OrFail as _};
+use googletest::prelude::{assert_that, contains_substring, expect_that, gtest, not, OrFail as _};
+
 use ir::{Func, Item, UnqualifiedIdentifier};
 use ir_testing::{retrieve_func, with_lifetime_macros};
-use multiplatform_ir_testing::{ir_from_cc, ir_from_cc_dependency};
+use multiplatform_ir_testing::{
+    ir_from_assumed_lifetimes_cc, ir_from_cc, ir_from_cc_annotated, ir_from_cc_dependency,
+};
 use quote::quote;
-use test_generators::generate_bindings_tokens_for_test;
+use test_generators::{
+    generate_bindings_tokens_for_test, generate_bindings_tokens_for_test_with_annotations,
+};
 use token_stream_matchers::{
     assert_cc_matches, assert_cc_not_matches, assert_rs_matches, assert_rs_not_matches,
 };
@@ -25,7 +30,7 @@ fn test_simple_function() -> Result<()> {
         rs_api,
         quote! {
             #[inline(always)]
-            pub fn Add(a: ::core::ffi::c_int, b: ::core::ffi::c_int) -> ::core::ffi::c_int {
+            pub fn Add(a: ::ffi_11::c_int, b: ::ffi_11::c_int) -> ::ffi_11::c_int {
                 unsafe { crate::detail::__rust_thunk___Z3Addii(a, b) }
             }
         }
@@ -38,7 +43,7 @@ fn test_simple_function() -> Result<()> {
                 use super::*;
                 unsafe extern "C" {
                     #[link_name = "_Z3Addii"]
-                    pub(crate) unsafe fn __rust_thunk___Z3Addii(a: ::core::ffi::c_int, b: ::core::ffi::c_int) -> ::core::ffi::c_int;
+                    pub(crate) unsafe fn __rust_thunk___Z3Addii(a: ::ffi_11::c_int, b: ::ffi_11::c_int) -> ::ffi_11::c_int;
                 }
             }
         }
@@ -57,7 +62,7 @@ fn test_inline_function() -> Result<()> {
         rs_api,
         quote! {
             #[inline(always)]
-            pub fn Add(a: ::core::ffi::c_int, b: ::core::ffi::c_int) -> ::core::ffi::c_int {
+            pub fn Add(a: ::ffi_11::c_int, b: ::ffi_11::c_int) -> ::ffi_11::c_int {
                 unsafe { crate::detail::__rust_thunk___Z3Addii(a, b) }
             }
         }
@@ -69,7 +74,7 @@ fn test_inline_function() -> Result<()> {
                 #[allow(unused_imports)]
                 use super::*;
                 unsafe extern "C" {
-                    pub(crate) unsafe fn __rust_thunk___Z3Addii(a: ::core::ffi::c_int, b: ::core::ffi::c_int) -> ::core::ffi::c_int;
+                    pub(crate) unsafe fn __rust_thunk___Z3Addii(a: ::ffi_11::c_int, b: ::ffi_11::c_int) -> ::ffi_11::c_int;
                 }
             }
         }
@@ -100,12 +105,12 @@ fn test_simple_function_with_types_from_other_target() -> Result<()> {
             #[inline(always)]
             pub fn DoSomething(mut param: ::dependency::ParamStruct) -> ::dependency::ReturnStruct {
                 unsafe {
-                    let mut __return = ::core::mem::MaybeUninit::<::dependency::ReturnStruct>::uninit();
+                    let mut __crubit_return = ::core::mem::MaybeUninit::<::dependency::ReturnStruct>::uninit();
                     crate::detail::__rust_thunk___Z11DoSomething11ParamStruct(
-                       &raw mut __return as *mut ::core::ffi::c_void,
+                       &raw mut __crubit_return as *mut ::core::ffi::c_void,
                        &mut param
                     );
-                    __return.assume_init()
+                    __crubit_return.assume_init()
                 }
             }
         }
@@ -232,8 +237,8 @@ fn test_ptr_func() -> Result<()> {
         rs_api,
         quote! {
             #[inline(always)]
-            pub unsafe fn Deref(p: *const *mut ::core::ffi::c_int) -> *mut ::core::ffi::c_int {
-                crate::detail::__rust_thunk___Z5DerefPKPi(p)
+            pub unsafe fn Deref(p: *const *mut ::ffi_11::c_int) -> *mut ::ffi_11::c_int {
+                unsafe { crate::detail::__rust_thunk___Z5DerefPKPi(p) }
             }
         }
     );
@@ -244,7 +249,7 @@ fn test_ptr_func() -> Result<()> {
                 #[allow(unused_imports)]
                 use super::*;
                 unsafe extern "C" {
-                    pub(crate) unsafe fn __rust_thunk___Z5DerefPKPi(p: *const *mut ::core::ffi::c_int) -> *mut ::core::ffi::c_int;
+                    pub(crate) unsafe fn __rust_thunk___Z5DerefPKPi(p: *const *mut ::ffi_11::c_int) -> *mut ::ffi_11::c_int;
                 }
             }
         }
@@ -275,8 +280,8 @@ fn test_const_char_ptr_func() -> Result<()> {
         rs_api,
         quote! {
             #[inline(always)]
-            pub unsafe fn f(str: *const ::core::ffi::c_schar) {
-                crate::detail::__rust_thunk___Z1fPKa(str)
+            pub unsafe fn f(str: *const ::ffi_11::c_schar) {
+                unsafe { crate::detail::__rust_thunk___Z1fPKa(str) }
             }
         }
     );
@@ -284,7 +289,7 @@ fn test_const_char_ptr_func() -> Result<()> {
         rs_api,
         quote! {
             extern "C" {
-                pub(crate) unsafe fn __rust_thunk___Z1fPKa(str: *const ::core::ffi::c_schar);
+                pub(crate) unsafe fn __rust_thunk___Z1fPKa(str: *const ::ffi_11::c_schar);
             }
         }
     );
@@ -346,6 +351,31 @@ fn test_doc_comment_func() -> Result<()> {
     Ok(())
 }
 
+#[gtest]
+fn test_doc_comment_func_with_annotations() -> Result<()> {
+    let ir = ir_from_cc_annotated(
+        "
+    // Doc Comment
+    // with two lines
+    int func();",
+    )?;
+
+    let rs_api = generate_bindings_tokens_for_test_with_annotations(ir)?.rs_api;
+    assert_rs_matches!(
+        rs_api,
+        // leading space is intentional so there is a space between /// and the text of the
+        // comment
+        quote! {
+            __CAPTURE_TAG__ "ir_from_cc_virtual_header.h" "87" "91"
+            #[doc = " Doc Comment\n with two lines\n \n Generated from: ir_from_cc_virtual_header.h;l=6[87,91]"]
+            #[inline(always)]
+            pub fn __CAPTURE_BEGIN__ func __CAPTURE_END__
+        }
+    );
+
+    Ok(())
+}
+
 /// Trivial types (at least those that are mapped to Copy rust types) do not
 /// get a Drop impl.
 #[gtest]
@@ -359,7 +389,7 @@ fn test_impl_drop_trivial() -> Result<()> {
     let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
     assert_rs_not_matches!(rs_api, quote! {impl Drop});
     assert_rs_not_matches!(rs_api, quote! {impl ::ctor::PinnedDrop});
-    assert_rs_matches!(rs_api, quote! {pub x: ::core::ffi::c_int});
+    assert_rs_matches!(rs_api, quote! {pub x: ::ffi_11::c_int});
     assert_cc_not_matches!(rs_api_impl, quote! { std::destroy_at });
     Ok(())
 }
@@ -367,7 +397,7 @@ fn test_impl_drop_trivial() -> Result<()> {
 #[gtest]
 fn test_impl_default_explicitly_defaulted_constructor() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct DefaultedConstructor final {
             DefaultedConstructor() = default;
         };"#,
@@ -409,7 +439,7 @@ fn test_impl_clone_that_propagates_lifetime() -> Result<()> {
     // annotating the whole C++ struct with a lifetime, so maybe the
     // example below is not fully realistic/accurate...).
     let ir = ir_from_cc(&with_lifetime_macros(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct Foo final {
             Foo(const int& $a i) $a;
         };"#,
@@ -443,20 +473,13 @@ fn test_impl_clone_that_propagates_lifetime() -> Result<()> {
     // After this CL, this scenario will result in an explicit error.
     let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
     assert_rs_not_matches!(rs_api, quote! {impl From});
-    assert_rs_matches!(rs_api, {
-        let txt = "Generated from: ir_from_cc_virtual_header.h;l=34\n\
-                       Error while generating bindings for constructor 'Foo::Foo':\n\
-                       The lifetime of `__this` is \
-                           unexpectedly also used by another parameter: &'a::core::ffi::c_int";
-        quote! { __COMMENT__ #txt }
-    });
     Ok(())
 }
 
 #[gtest]
 fn test_impl_default_non_trivial_struct() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct NonTrivialStructWithConstructors final {
             NonTrivialStructWithConstructors();
             ~NonTrivialStructWithConstructors();  // Non-trivial
@@ -466,72 +489,64 @@ fn test_impl_default_non_trivial_struct() -> Result<()> {
     assert_rs_not_matches!(rs_api, quote! {impl Default});
     Ok(())
 }
-
 #[gtest]
-fn test_impl_from_for_1_arg_constructor() -> Result<()> {
-    for explicit_qualifier in ["", "explicit"] {
-        let ir = ir_from_cc(&format!(
-            r#"#pragma clang lifetime_elision
-            struct SomeStruct final {{
-                {explicit_qualifier} SomeStruct(int i);  // implicit - no `explicit` keyword
-            }};"#,
-        ))?;
-        let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
-        assert_rs_matches!(
-            rs_api,
-            quote! {
-                impl From<::core::ffi::c_int> for SomeStruct {
-                    #[inline(always)]
-                    fn from(i: ::core::ffi::c_int) -> Self {
-                        let mut tmp = ::core::mem::MaybeUninit::<Self>::zeroed();
-                        unsafe {
-                            crate::detail::__rust_thunk___ZN10SomeStructC1Ei(&raw mut tmp as *mut _, i);
-                            tmp.assume_init()
-                        }
-                    }
+fn test_impl_cc_index_for_member_function() -> Result<()> {
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
+        struct SomeStruct final {
+            inline const int& operator[](unsigned int index) const {
+                return items[index];
+            }
+            int items[10];
+        };"#,
+    )?;
+    let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            impl ::operator::CcIndex<::ffi_11::c_uint> for SomeStruct {
+                type Output<'ctnr> = &'ctnr ::ffi_11::c_int;
+                #[inline(always)]
+                fn cc_index<'ctnr>(&'ctnr self, index: ::ffi_11::c_uint) -> Self::Output<'ctnr> {
+                    unsafe { crate::detail::__rust_thunk___ZNK10SomeStructixEj(self, index) }
                 }
             }
-        );
-    }
+        }
+    );
     Ok(())
 }
 
 #[gtest]
-fn test_impl_from_for_implicit_conversion_from_reference() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
-        struct SomeOtherStruct final { int i; };
-        struct StructUnderTest final {
-            StructUnderTest(const SomeOtherStruct& other);  // implicit - no `explicit` keyword
+fn test_impl_cc_index_mut_for_member_function() -> Result<()> {
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
+        struct SomeStruct final {
+            inline int& operator[](unsigned int index) {
+                return items[index];
+            }
+            int items[10];
         };"#,
     )?;
     let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
-    // This is a regression test for b/223800038: We want to ensure that the
-    // code says `impl<'b>` (instead of incorrectly declaring that lifetime
-    // in `fn from<'b>`).
     assert_rs_matches!(
         rs_api,
         quote! {
-            impl<'b> From<&'b crate::SomeOtherStruct> for StructUnderTest {
+            impl ::operator::CcIndexMut<::ffi_11::c_uint> for SomeStruct {
+                type Output<'ctnr> = &'ctnr mut ::ffi_11::c_int;
                 #[inline(always)]
-                fn from(other: &'b crate::SomeOtherStruct) -> Self {
-                    let mut tmp = ::core::mem::MaybeUninit::<Self>::zeroed();
-                    unsafe {
-                        crate::detail::__rust_thunk___ZN15StructUnderTestC1ERK15SomeOtherStruct(
-                            &raw mut tmp as *mut _, other);
-                        tmp.assume_init()
-                    }
+                fn cc_index_mut<'ctnr>(self: ::core::pin::Pin<&'ctnr mut Self>, index: ::ffi_11::c_uint) -> Self::Output<'ctnr> {
+                    unsafe { crate::detail::__rust_thunk___ZN10SomeStructixEj(self.get_unchecked_mut(), index) }
                 }
             }
-        },
+        }
     );
     Ok(())
 }
 
 #[gtest]
 fn test_impl_eq_for_member_function() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         struct SomeStruct final {
             inline bool operator==(const SomeStruct& other) const {
                 return i == other.i;
@@ -545,7 +560,7 @@ fn test_impl_eq_for_member_function() -> Result<()> {
         quote! {
             impl PartialEq for SomeStruct {
                 #[inline(always)]
-                fn eq<'a, 'b>(&'a self, other: &'b Self) -> bool {
+                fn eq<'__this, 'other>(&'__this self, other: &'other Self) -> bool {
                     unsafe { crate::detail::__rust_thunk___ZNK10SomeStructeqERKS_(self, other) }
                 }
             }
@@ -565,8 +580,8 @@ fn test_impl_eq_for_member_function() -> Result<()> {
 
 #[gtest]
 fn test_impl_eq_for_free_function() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         namespace ns {
             struct SomeStruct final { int i; };
         }
@@ -581,7 +596,7 @@ fn test_impl_eq_for_free_function() -> Result<()> {
         quote! {
             impl PartialEq for crate::ns::SomeStruct {
                 #[inline(always)]
-                fn eq<'a, 'b>(&'a self, rhs: &'b Self) -> bool {
+                fn eq<'lhs, 'rhs>(&'lhs self, rhs: &'rhs Self) -> bool {
                     unsafe { crate::detail::__rust_thunk___ZeqRKN2ns10SomeStructES2_(self, rhs) }
                 }
             }
@@ -592,8 +607,8 @@ fn test_impl_eq_for_free_function() -> Result<()> {
 
 #[gtest]
 fn test_impl_eq_ne_for_member_function() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         struct SomeStruct final {
             inline bool operator==(const SomeStruct& other) const {
                 return i == other.i;
@@ -610,7 +625,7 @@ fn test_impl_eq_ne_for_member_function() -> Result<()> {
         quote! {
             impl PartialEq for SomeStruct {
                 #[inline(always)]
-                fn eq<'a, 'b>(&'a self, other: &'b Self) -> bool {
+                fn eq<'__this, 'other>(&'__this self, other: &'other Self) -> bool {
                     unsafe { crate::detail::__rust_thunk___ZNK10SomeStructeqERKS_(self, other) }
                 }
             }
@@ -630,8 +645,8 @@ fn test_impl_eq_ne_for_member_function() -> Result<()> {
 
 #[gtest]
 fn test_impl_eq_ne_for_free_function() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         namespace ns {
             struct SomeStruct final { int i; };
         }
@@ -649,7 +664,7 @@ fn test_impl_eq_ne_for_free_function() -> Result<()> {
         quote! {
             impl PartialEq for crate::ns::SomeStruct {
                 #[inline(always)]
-                fn eq<'a, 'b>(&'a self, rhs: &'b Self) -> bool {
+                fn eq<'lhs, 'rhs>(&'lhs self, rhs: &'rhs Self) -> bool {
                     unsafe { crate::detail::__rust_thunk___ZeqRKN2ns10SomeStructES2_(self, rhs) }
                 }
 
@@ -661,8 +676,8 @@ fn test_impl_eq_ne_for_free_function() -> Result<()> {
 
 #[gtest]
 fn test_impl_ne_for_member_function() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         struct SomeStruct final {
             inline bool operator!=(const SomeStruct& other) const {
                 return i != other.i;
@@ -676,7 +691,7 @@ fn test_impl_ne_for_member_function() -> Result<()> {
         quote! {
             impl PartialEq for SomeStruct {
                 #[inline(always)]
-                fn eq<'a, 'b>(&'a self, other: &'b Self) -> bool {
+                fn eq<'__this, 'other>(&'__this self, other: &'other Self) -> bool {
                     unsafe { !crate::detail::__rust_thunk___ZNK10SomeStructneERKS_(self, other) }
                 }
             }
@@ -696,8 +711,8 @@ fn test_impl_ne_for_member_function() -> Result<()> {
 
 #[gtest]
 fn test_impl_ne_for_free_function() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         namespace ns {
             struct SomeStruct final { int i; };
         }
@@ -712,7 +727,7 @@ fn test_impl_ne_for_free_function() -> Result<()> {
         quote! {
             impl PartialEq for crate::ns::SomeStruct {
                 #[inline(always)]
-                fn eq<'a, 'b>(&'a self, rhs: &'b Self) -> bool {
+                fn eq<'lhs, 'rhs>(&'lhs self, rhs: &'rhs Self) -> bool {
                     unsafe { !crate::detail::__rust_thunk___ZneRKN2ns10SomeStructES2_(self, rhs) }
                 }
             }
@@ -723,8 +738,8 @@ fn test_impl_ne_for_free_function() -> Result<()> {
 
 #[gtest]
 fn test_impl_eq_for_free_function_different_types() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         struct SomeStruct final { int i; };
         struct SomeOtherStruct final { int i; };
         bool operator==(const SomeStruct& lhs, const SomeOtherStruct& rhs) {
@@ -737,7 +752,7 @@ fn test_impl_eq_for_free_function_different_types() -> Result<()> {
         quote! {
             impl PartialEq<crate::SomeOtherStruct> for crate::SomeStruct {
                 #[inline(always)]
-                fn eq<'a, 'b>(&'a self, rhs: &'b crate::SomeOtherStruct) -> bool {
+                fn eq<'lhs, 'rhs>(&'lhs self, rhs: &'rhs crate::SomeOtherStruct) -> bool {
                     unsafe { crate::detail::__rust_thunk___ZeqRK10SomeStructRK15SomeOtherStruct(self, rhs) }
                 }
             }
@@ -749,7 +764,7 @@ fn test_impl_eq_for_free_function_different_types() -> Result<()> {
 #[gtest]
 fn test_impl_eq_for_free_function_by_value() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct SomeStruct final { int i; };
         bool operator==(SomeStruct lhs, SomeStruct rhs) {
             return lhs.i == rhs.i;
@@ -774,8 +789,8 @@ fn test_impl_eq_for_free_function_by_value() -> Result<()> {
 
 #[gtest]
 fn test_impl_ne_for_free_function_different_types() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
         struct SomeStruct final { int i; };
         struct SomeOtherStruct final { int i; };
         bool operator!=(const SomeStruct& lhs, const SomeOtherStruct& rhs) {
@@ -788,7 +803,7 @@ fn test_impl_ne_for_free_function_different_types() -> Result<()> {
         quote! {
             impl PartialEq<crate::SomeOtherStruct> for crate::SomeStruct {
                 #[inline(always)]
-                fn eq<'a, 'b>(&'a self, rhs: &'b crate::SomeOtherStruct) -> bool {
+                fn eq<'lhs, 'rhs>(&'lhs self, rhs: &'rhs crate::SomeOtherStruct) -> bool {
                     unsafe { !crate::detail::__rust_thunk___ZneRK10SomeStructRK15SomeOtherStruct(self, rhs) }
                 }
             }
@@ -800,7 +815,7 @@ fn test_impl_ne_for_free_function_different_types() -> Result<()> {
 #[gtest]
 fn test_impl_ne_for_free_function_by_value() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct SomeStruct final { int i; };
         bool operator!=(SomeStruct lhs, SomeStruct rhs) {
             return lhs.i != rhs.i;
@@ -854,7 +869,7 @@ fn test_impl_eq_ne_for_free_function_different_types() -> Result<()> {
 #[gtest]
 fn test_impl_eq_ne_for_free_function_by_value() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct SomeStruct final { int i; };
         bool operator==(SomeStruct lhs, SomeStruct rhs) {
             return lhs.i == rhs.i;
@@ -976,7 +991,7 @@ fn test_impl_lt_for_free_function() -> Result<()> {
 #[gtest]
 fn test_impl_lt_for_free_function_by_value() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct SomeStruct final { int i; };
         bool operator==(SomeStruct lhs, SomeStruct rhs) {
             return lhs.i == rhs.i;
@@ -1098,20 +1113,23 @@ fn test_assign_nonreference_return() -> Result<()> {
 #[gtest]
 fn test_impl_eq_non_const_member_function() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct SomeStruct final {
             bool operator==(const SomeStruct& other) /* no `const` here */;
         };"#,
     )?;
     let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
-    assert_rs_not_matches!(rs_api, quote! {impl PartialEq});
+    expect_that!(
+        rs_api.to_string(),
+        contains_substring("Expected first operator== param reference to be immutable"),
+    );
     Ok(())
 }
 
 #[gtest]
 fn test_impl_lt_different_operands() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct SomeStruct1 final {
             int i;
         };
@@ -1133,7 +1151,7 @@ fn test_impl_lt_different_operands() -> Result<()> {
 #[gtest]
 fn test_impl_lt_non_const_member_function() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct SomeStruct final {
             inline bool operator==(const SomeStruct& other) const {
                 return i == other.i;
@@ -1143,16 +1161,19 @@ fn test_impl_lt_non_const_member_function() -> Result<()> {
         };"#,
     )?;
     let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
-    assert_rs_not_matches!(rs_api, quote! {impl PartialOrd});
+    expect_that!(
+        rs_api.to_string(),
+        contains_substring("Expected first operator< param reference to be immutable")
+    );
     Ok(())
 }
 
 #[gtest]
 fn test_impl_lt_rhs_by_value() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct SomeStruct final {
-            inline bool operator==(const SomeStruct& other) const {
+            inline bool operator==(SomeStruct other) const {
                 return i == other.i;
             }
             int i;
@@ -1160,14 +1181,14 @@ fn test_impl_lt_rhs_by_value() -> Result<()> {
         };"#,
     )?;
     let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
-    assert_rs_not_matches!(rs_api, quote! {impl PartialOrd});
+    expect_that!(rs_api.to_string(), not(contains_substring("error")));
     Ok(())
 }
 
 #[gtest]
 fn test_impl_lt_missing_eq_impl() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct SomeStruct final {
             inline bool operator<(const SomeStruct& other) const {
                 return i < other.i;
@@ -1176,7 +1197,7 @@ fn test_impl_lt_missing_eq_impl() -> Result<()> {
         };"#,
     )?;
     let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
-    assert_rs_not_matches!(rs_api, quote! {impl PartialOrd});
+    expect_that!(rs_api.to_string(), contains_substring("operator< where operator== is missing"),);
     Ok(())
 }
 
@@ -1214,14 +1235,14 @@ fn test_elided_lifetimes() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
-            pub fn f<'a, 'b>(&'a mut self, i: &'b mut ::core::ffi::c_int) -> &'a mut ::core::ffi::c_int { ... }
+            pub fn f<'a, 'b>(&'a mut self, i: &'b mut ::ffi_11::c_int) -> &'a mut ::ffi_11::c_int { ... }
         }
     );
     assert_rs_matches!(
         rs_api,
         quote! {
-            pub(crate) unsafe fn __rust_thunk___ZN1S1fERi<'a, 'b>(__this: &'a mut crate::S, i: &'b mut ::core::ffi::c_int)
-                -> &'a mut ::core::ffi::c_int;
+            pub(crate) unsafe fn __rust_thunk___ZN1S1fERi<'a, 'b>(__this: &'a mut crate::S, i: &'b mut ::ffi_11::c_int)
+                -> &'a mut ::ffi_11::c_int;
         }
     );
     Ok(())
@@ -1238,14 +1259,14 @@ fn test_annotated_lifetimes() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
-            pub fn f<'a>(i1: &'a mut ::core::ffi::c_int, i2: &'a mut ::core::ffi::c_int) -> &'a mut ::core::ffi::c_int { ... }
+            pub fn f<'a>(i1: &'a mut ::ffi_11::c_int, i2: &'a mut ::ffi_11::c_int) -> &'a mut ::ffi_11::c_int { ... }
         }
     );
     assert_rs_matches!(
         rs_api,
         quote! {
-            pub(crate) unsafe fn __rust_thunk___Z1fRiS_<'a>(i1: &'a mut ::core::ffi::c_int, i2: &'a mut ::core::ffi::c_int)
-                -> &'a mut ::core::ffi::c_int;
+            pub(crate) unsafe fn __rust_thunk___Z1fRiS_<'a>(i1: &'a mut ::ffi_11::c_int, i2: &'a mut ::ffi_11::c_int)
+                -> &'a mut ::ffi_11::c_int;
         }
     );
     Ok(())
@@ -1297,21 +1318,8 @@ fn test_overloaded_functions() -> Result<()> {
     let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
 
     // Cannot overload free functions.
-    assert_cc_matches!(rs_api, {
-        let txt = "Generated from: ir_from_cc_virtual_header.h;l=4\n\
-                       Error while generating bindings for function 'f':\n\
-                       Cannot generate bindings for overloaded function";
-        quote! { __COMMENT__ #txt }
-    });
     assert_rs_not_matches!(rs_api, quote! {pub fn f()});
-    assert_rs_not_matches!(rs_api, quote! {pub fn f(i: ::core::ffi::c_int)});
-
-    assert_cc_matches!(rs_api, {
-        let txt = "Generated from: ir_from_cc_virtual_header.h;l=7\n\
-                       Error while generating bindings for function 'S1::f':\n\
-                       Cannot generate bindings for overloaded function";
-        quote! { __COMMENT__ #txt }
-    });
+    assert_rs_not_matches!(rs_api, quote! {pub fn f(i: ::ffi_11::c_int)});
     assert_rs_not_matches!(rs_api, quote! {pub fn f(... S1 ...)});
 
     // And thunks aren't generated for either.
@@ -1322,7 +1330,7 @@ fn test_overloaded_functions() -> Result<()> {
     assert_rs_matches!(rs_api, quote! {pub fn f<'a>(&'a mut self)});
 
     // We can also import overloaded single-parameter constructors.
-    assert_rs_matches!(rs_api, quote! {impl From<::core::ffi::c_int> for S3});
+    assert_rs_matches!(rs_api, quote! {impl From<::ffi_11::c_int> for S3});
     assert_rs_matches!(rs_api, quote! {impl From<f64> for S3});
 
     // And we can import functions that have the same name + signature, but that are
@@ -1436,7 +1444,7 @@ fn test_nonunpin_drop() -> Result<()> {
 #[gtest]
 fn test_nonunpin_0_arg_constructor() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         // This type must be `!Unpin`.
         struct HasConstructor {
             explicit HasConstructor() {}
@@ -1449,15 +1457,15 @@ fn test_nonunpin_0_arg_constructor() -> Result<()> {
         rs_api,
         quote! {
             impl ::ctor::CtorNew<()> for HasConstructor {
-                type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+                type CtorType = ::ctor::Ctor![Self];
                 type Error = ::ctor::Infallible;
 
                 #[inline(always)]
                 fn ctor_new(args: ()) -> Self::CtorType {
                     let () = args;
                     unsafe {
-                        ::ctor::FnCtor::new(move |dest: *mut Self| {
-                            crate::detail::__rust_thunk___ZN14HasConstructorC1Ev(dest as *mut ::core::ffi::c_void);
+                        ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
+                            crate::detail::__rust_thunk___ZN14HasConstructorC1Ev(__crubit_dest as *mut ::core::ffi::c_void);
                         })
                     }
                 }
@@ -1470,7 +1478,7 @@ fn test_nonunpin_0_arg_constructor() -> Result<()> {
 #[gtest]
 fn test_nonunpin_1_arg_constructor() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         // This type must be `!Unpin`.
         struct HasConstructor {
             explicit HasConstructor(unsigned char input) {}
@@ -1482,16 +1490,16 @@ fn test_nonunpin_1_arg_constructor() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
-            impl ::ctor::CtorNew<::core::ffi::c_uchar> for HasConstructor {
-                type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+            impl ::ctor::CtorNew<::ffi_11::c_uchar> for HasConstructor {
+                type CtorType = ::ctor::Ctor![Self];
                 type Error = ::ctor::Infallible;
 
                 #[inline (always)]
-                fn ctor_new(args: ::core::ffi::c_uchar) -> Self::CtorType {
+                fn ctor_new(args: ::ffi_11::c_uchar) -> Self::CtorType {
                     let mut input = args;
                     unsafe {
-                        ::ctor::FnCtor::new(move |dest: *mut Self| {
-                            crate::detail::__rust_thunk___ZN14HasConstructorC1Eh(dest as *mut ::core::ffi::c_void, input);
+                        ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
+                            crate::detail::__rust_thunk___ZN14HasConstructorC1Eh(__crubit_dest as *mut ::core::ffi::c_void, input);
                         })
                     }
                 }
@@ -1504,7 +1512,7 @@ fn test_nonunpin_1_arg_constructor() -> Result<()> {
 #[gtest]
 fn test_nonunpin_2_arg_constructor() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         // This type must be `!Unpin`.
         struct HasConstructor {
             explicit HasConstructor(unsigned char input1, signed char input2) {}
@@ -1516,16 +1524,16 @@ fn test_nonunpin_2_arg_constructor() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
-            impl ::ctor::CtorNew<(::core::ffi::c_uchar, ::core::ffi::c_schar)> for HasConstructor {
-                type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+            impl ::ctor::CtorNew<(::ffi_11::c_uchar, ::ffi_11::c_schar)> for HasConstructor {
+                type CtorType = ::ctor::Ctor![Self];
                 type Error = ::ctor::Infallible;
 
                 #[inline (always)]
-                fn ctor_new(args: (::core::ffi::c_uchar, ::core::ffi::c_schar)) -> Self::CtorType {
+                fn ctor_new(args: (::ffi_11::c_uchar, ::ffi_11::c_schar)) -> Self::CtorType {
                     let (mut input1, mut input2) = args;
                     unsafe {
-                        ::ctor::FnCtor::new(move |dest: *mut Self| {
-                            crate::detail::__rust_thunk___ZN14HasConstructorC1Eha(dest as *mut ::core::ffi::c_void, input1, input2);
+                        ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
+                            crate::detail::__rust_thunk___ZN14HasConstructorC1Eha(__crubit_dest as *mut ::core::ffi::c_void, input1, input2);
                         })
                     }
                 }
@@ -1542,13 +1550,13 @@ fn test_nonunpin_2_arg_constructor() -> Result<()> {
 fn test_nonunpin_by_value_params() -> Result<()> {
     let ir = ir_from_cc(
         r#"#pragma clang lifetime_elision
-        // This type must be `!Unpin`.
+// This type must be `!Unpin`.
         struct HasConstructor {
-            // int& x is here to create a 'b lifetime, which collides with a synthesized
-            // lifetime name. But that's OK! We handle collisions!
-            // (`a` would also work, but that's just because the left hand doesn't know what
-            // the right is doing: the `a` lifetime is present in some places, but eventually
-            // removed from the public interface.)
+// int& x is here to create a 'b lifetime, which collides with a synthesized
+// lifetime name. But that's OK! We handle collisions!
+// (`a` would also work, but that's just because the left hand doesn't know what
+// the right is doing: the `a` lifetime is present in some places, but eventually
+// removed from the public interface.)
             explicit HasConstructor(const int& x, HasConstructor y, HasConstructor b) {}
             ~HasConstructor();
         };"#,
@@ -1558,26 +1566,26 @@ fn test_nonunpin_by_value_params() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
-            impl <'b, 'y, 'b_2> ::ctor::CtorNew<(
-                &'b ::core::ffi::c_int,
+            impl <'b, 'b_2, 'y> ::ctor::CtorNew<(
+                &'b ::ffi_11::c_int,
                 ::ctor::RvalueReference<'y, Self>,
                 ::ctor::RvalueReference<'b_2, Self>)
             > for HasConstructor {
                 // The captures are why we need explicit lifetimes for the two rvalue reference
                 // parameters.
-                type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible> + use<'b, 'y, 'b_2>;
+                type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible> + use<'b, 'b_2, 'y>;
                 type Error = ::ctor::Infallible;
 
                 #[inline (always)]
                 fn ctor_new(args: (
-                    &'b ::core::ffi::c_int,
+                    &'b ::ffi_11::c_int,
                     ::ctor::RvalueReference<'y, Self>,
                     ::ctor::RvalueReference<'b_2, Self>)
                 ) -> Self::CtorType {
                     let (mut x, mut y, mut b) = args;
                     unsafe {
-                        ::ctor::FnCtor::new(move |dest: *mut Self| {
-                            crate::detail::__rust_thunk___ZN14HasConstructorC1ERKiS_S_(dest as *mut ::core::ffi::c_void, x, y, b);
+                        ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
+                            crate::detail::__rust_thunk___ZN14HasConstructorC1ERKiS_S_(__crubit_dest as *mut ::core::ffi::c_void, x, y, b);
                         })
                     }
                 }
@@ -1591,7 +1599,7 @@ fn test_nonunpin_by_value_params() -> Result<()> {
 fn test_nonunpin_return() -> Result<()> {
     let ir = ir_from_cc(
         r#"#pragma clang lifetime_elision
-        // This type must be `!Unpin`.
+// This type must be `!Unpin`.
         struct Nontrivial {~Nontrivial();};
 
         Nontrivial ReturnsByValue(const int& x, const int& y);
@@ -1601,11 +1609,11 @@ fn test_nonunpin_return() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
-            pub fn ReturnsByValue<'a, 'b>(x: &'a ::core::ffi::c_int, y: &'b ::core::ffi::c_int)
+            pub fn ReturnsByValue<'a, 'b>(x: &'a ::ffi_11::c_int, y: &'b ::ffi_11::c_int)
             -> impl ::ctor::Ctor<Output=crate::Nontrivial, Error=::ctor::Infallible> + use<'a, 'b> {
                 unsafe {
-                    ::ctor::FnCtor::new(move |dest: *mut crate::Nontrivial| {
-                        crate::detail::__rust_thunk___Z14ReturnsByValueRKiS0_(dest as *mut ::core::ffi::c_void, x, y);
+                    ::ctor::FnCtor::new(move |__crubit_dest: *mut crate::Nontrivial| {
+                        crate::detail::__rust_thunk___Z14ReturnsByValueRKiS0_(__crubit_dest as *mut ::core::ffi::c_void, x, y);
                     })
                 }
 
@@ -1629,7 +1637,7 @@ fn test_nonunpin_return() -> Result<()> {
 fn test_nonunpin_const_return() -> Result<()> {
     let ir = ir_from_cc(
         r#"#pragma clang lifetime_elision
-        // This type must be `!Unpin`.
+// This type must be `!Unpin`.
         struct Nontrivial {~Nontrivial();};
 
         const Nontrivial ReturnsByValue(const int& x, const int& y);
@@ -1639,11 +1647,11 @@ fn test_nonunpin_const_return() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
-            pub fn ReturnsByValue<'a, 'b>(x: &'a ::core::ffi::c_int, y: &'b ::core::ffi::c_int)
+            pub fn ReturnsByValue<'a, 'b>(x: &'a ::ffi_11::c_int, y: &'b ::ffi_11::c_int)
             -> impl ::ctor::Ctor<Output=crate::Nontrivial, Error=::ctor::Infallible> + use<'a, 'b> {
                 unsafe {
-                    ::ctor::FnCtor::new(move |dest: *mut crate::Nontrivial| {
-                        crate::detail::__rust_thunk___Z14ReturnsByValueRKiS0_(dest as *mut ::core::ffi::c_void, x, y);
+                    ::ctor::FnCtor::new(move |__crubit_dest: *mut crate::Nontrivial| {
+                        crate::detail::__rust_thunk___Z14ReturnsByValueRKiS0_(__crubit_dest as *mut ::core::ffi::c_void, x, y);
                     })
                 }
 
@@ -1666,7 +1674,7 @@ fn test_nonunpin_const_return() -> Result<()> {
 #[gtest]
 fn test_unpin_by_value_param() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct Trivial final {
           int trivial_field;
         };
@@ -1704,7 +1712,7 @@ fn test_unpin_by_value_param() -> Result<()> {
 #[gtest]
 fn test_unpin_by_value_return() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         struct Trivial final {
           int trivial_field;
         };
@@ -1719,9 +1727,9 @@ fn test_unpin_by_value_return() -> Result<()> {
             #[inline(always)]
             pub fn foo() -> crate::Trivial {
                 unsafe {
-                    let mut __return = ::core::mem::MaybeUninit::<crate::Trivial>::uninit();
-                    crate::detail::__rust_thunk___Z3foov(&raw mut __return as *mut ::core::ffi::c_void);
-                    __return.assume_init()
+                    let mut __crubit_return = ::core::mem::MaybeUninit::<crate::Trivial>::uninit();
+                    crate::detail::__rust_thunk___Z3foov(&raw mut __crubit_return as *mut ::core::ffi::c_void);
+                    __crubit_return.assume_init()
                 }
             }
         }
@@ -1760,9 +1768,7 @@ fn test_unpin_rvalue_ref_qualified_method() -> Result<()> {
         quote! {
             #[inline(always)]
             pub fn rvalue_ref_qualified_method<'a>(self: ::ctor::RvalueReference<'a, Self>) {
-                unsafe {
-                    crate::detail::__rust_thunk___ZNO35TrivialWithRvalueRefQualifiedMethod27rvalue_ref_qualified_methodEv(self)
-                }
+                unsafe { self::trivial_with_rvalue_ref_qualified_method::rvalue_ref_qualified_method(self) }
             }
         }
     );
@@ -1792,9 +1798,7 @@ fn test_unpin_rvalue_ref_const_qualified_method() -> Result<()> {
         quote! {
             #[inline(always)]
             pub fn rvalue_ref_const_qualified_method<'a>(self: ::ctor::ConstRvalueReference<'a, Self>) {
-                unsafe {
-                    crate::detail::__rust_thunk___ZNKO40TrivialWithRvalueRefConstQualifiedMethod33rvalue_ref_const_qualified_methodEv(self)
-                }
+                unsafe { self::trivial_with_rvalue_ref_const_qualified_method::rvalue_ref_const_qualified_method(self) }
             }
         }
     );
@@ -1815,7 +1819,7 @@ fn test_unpin_rvalue_ref_const_qualified_method() -> Result<()> {
 fn test_nonunpin_return_assign() -> Result<()> {
     let ir = ir_from_cc(
         r#"#pragma clang lifetime_elision
-        // This type must be `!Unpin`.
+// This type must be `!Unpin`.
         struct Nontrivial {
             ~Nontrivial();
             Nontrivial operator=(const Nontrivial& other);
@@ -1831,9 +1835,9 @@ fn test_nonunpin_return_assign() -> Result<()> {
                 fn assign<'a>(self: ::core::pin::Pin<&'a mut Self>, other: &'b Self) {
                     unsafe {
                         let _ = ::ctor::emplace!(::ctor::FnCtor::new(
-                            move |dest: *mut Self| {
+                            move |__crubit_dest: *mut Self| {
                                 crate::detail::__rust_thunk___ZN10NontrivialaSERKS_(
-                                    dest as *mut ::core::ffi::c_void,
+                                    __crubit_dest as *mut ::core::ffi::c_void,
                                     self,
                                     other
                                 );
@@ -1862,7 +1866,7 @@ fn test_nonunpin_return_assign() -> Result<()> {
 #[gtest]
 fn test_nonunpin_param() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         // This type must be `!Unpin`.
         struct Nontrivial {
             Nontrivial(Nontrivial&&);
@@ -1876,7 +1880,7 @@ fn test_nonunpin_param() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
-            pub fn TakesByValue(x: impl ::ctor::Ctor<Output=crate::Nontrivial, Error=::ctor::Infallible>) {
+            pub fn TakesByValue(x: ::ctor::Ctor![crate::Nontrivial]) {
                 unsafe {
                     crate::detail::__rust_thunk___Z12TakesByValue10Nontrivial(::core::pin::Pin::into_inner_unchecked(::ctor::emplace!(x)))
                 }
@@ -1896,47 +1900,9 @@ fn test_nonunpin_param() -> Result<()> {
 }
 
 #[gtest]
-fn test_nonunpin_trait_param() -> Result<()> {
-    let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
-        // This type must be `!Unpin`.
-        struct Nontrivial {
-            Nontrivial(Nontrivial&&);
-            Nontrivial& operator=(Nontrivial) {}
-            ~Nontrivial();
-        };
-
-        struct Trivial final {
-            /*implicit*/ Trivial(Nontrivial) {}
-        };
-        "#,
-    )?;
-    let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
-    assert_rs_matches!(
-        rs_api,
-        quote! {
-            impl<'__param_0> From<::ctor::RvalueReference<'__param_0, crate::Nontrivial>> for Trivial {
-                #[inline(always)]
-                fn from(__param_0: ::ctor::RvalueReference<'__param_0, crate::Nontrivial>) -> Self {
-                    let mut tmp = ::core::mem::MaybeUninit::<Self>::zeroed();
-                    unsafe {
-                        crate::detail::__rust_thunk___ZN7TrivialC1E10Nontrivial(
-                            &raw mut tmp as *mut _,
-                            __param_0
-                        );
-                        tmp.assume_init()
-                    }
-                }
-            }
-        }
-    );
-    Ok(())
-}
-
-#[gtest]
 fn test_nonmovable_param() -> Result<()> {
     let ir = ir_from_cc(
-        r#"#pragma clang lifetime_elision
+        r#"
         // This type must be `!Unpin` and non-move constructible.
         struct Nonmovable {
             Nonmovable(Nonmovable&&) = delete;
@@ -1945,10 +1911,8 @@ fn test_nonmovable_param() -> Result<()> {
         void TakesByValue(Nonmovable) {}
         "#,
     )?;
-    let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
-    // Bindings for TakesByValue cannot be generated.
-    assert_rs_matches!(rs_api, quote! {TakesByValue<'error>});
-    assert_cc_not_matches!(rs_api_impl, quote! {TakesByValue});
+    let BindingsTokens { rs_api_impl, .. } = generate_bindings_tokens_for_test(ir)?;
+    assert_cc_not_matches!(rs_api_impl, quote! {void TakesByValue});
     Ok(())
 }
 
@@ -1976,7 +1940,7 @@ fn test_function_returning_rvalue_reference() -> Result<()> {
     let ir = ir_from_cc(
         r#"#pragma clang lifetime_elision
         struct SomeStruct final {
-            // Inline to force generation (and test coverage) of C++ thunks.
+// Inline to force generation (and test coverage) of C++ thunks.
             inline SomeStruct&& GetRValueReference() {
               return static_cast<SomeStruct&&>(*this);
             }
@@ -1993,9 +1957,7 @@ fn test_function_returning_rvalue_reference() -> Result<()> {
                 #[inline(always)]
                 pub fn GetRValueReference<'a>(&'a mut self)
                         -> ::ctor::RvalueReference<'a, crate::SomeStruct> {
-                    unsafe {
-                        crate::detail::__rust_thunk___ZN10SomeStruct18GetRValueReferenceEv(self)
-                    }
+                    unsafe { self::some_struct::GetRValueReference(self) }
                 }
             }
         }
@@ -2053,6 +2015,157 @@ fn test_c_abi_compatible_type_by_value_with_move() -> Result<()> {
             extern "C" void __rust_thunk___Z1fiPvi(MyTypedefDecl a, void* b, int c) {
                 f(a, b, c);
             }
+        }
+    );
+    Ok(())
+}
+
+#[gtest]
+fn test_simple_explicit_lifetime() -> Result<()> {
+    let ir = ir_from_assumed_lifetimes_cc("int& $a Add(int& $a x);")?;
+    let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            #[inline(always)]
+            pub fn Add<'a>(x: &'a mut ::ffi_11::c_int) -> ::cref::CMut<'a, ::ffi_11::c_int> {
+                unsafe { crate::detail::__rust_thunk___Z3AddRi(x) }
+            }
+        }
+    );
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            mod detail {
+                #[allow(unused_imports)]
+                use super::*;
+                unsafe extern "C" {
+                    #[link_name = "_Z3AddRi"]
+                    pub(crate) unsafe fn __rust_thunk___Z3AddRi<'a>(x: &'a mut ::ffi_11::c_int) -> ::cref::CMut<'a, ::ffi_11::c_int>;
+                }
+            }
+        }
+    );
+
+    assert_cc_not_matches!(rs_api_impl, quote! {__rust_thunk___Z3AddRi});
+    Ok(())
+}
+
+#[gtest]
+fn test_deterministic_lifetime_order() -> Result<()> {
+    let cc_src = with_lifetime_macros(
+        r#"
+        struct LIFETIME_PARAMS("a", "b", "c", "d") S {
+            int& $a x;
+            int& $b y;
+            int& $c z;
+            int& $d w;
+            S();
+            ~S();
+        };
+    "#,
+    );
+
+    let ir = ir_from_assumed_lifetimes_cc(&cc_src)?;
+    let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
+
+    // Verify that lifetimes are sorted alphabetically in the `use<...>` clause.
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            ...
+            + use<'a, 'b, 'c, 'd>
+            ...
+        }
+    );
+
+    Ok(())
+}
+
+#[gtest]
+fn test_unsafe_constructor_unpin() -> Result<()> {
+    let ir = ir_from_cc(
+        r#"
+        struct StructWithUnsafeConstructor final {
+            explicit StructWithUnsafeConstructor(int* p) : ptr_field(p) {}
+            int* ptr_field;
+        };"#,
+    )?;
+    let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            impl ::ctor::UnsafeFrom<*mut ::ffi_11::c_int> for StructWithUnsafeConstructor {
+                #[inline(always)]
+                unsafe fn unsafe_from(args: *mut ::ffi_11::c_int) -> Self {
+                    let mut p = args;
+                    let mut tmp = ::core::mem::MaybeUninit::<Self>::zeroed();
+                    unsafe {
+                        crate::detail::__rust_thunk___ZN27StructWithUnsafeConstructorC1EPi(
+                            &raw mut tmp as *mut _,
+                            p
+                        );
+                        tmp.assume_init()
+                    }
+                }
+            }
+        }
+    );
+    Ok(())
+}
+
+#[gtest]
+fn test_unsafe_constructor_nonunpin() -> Result<()> {
+    let ir = ir_from_cc(
+        r#"
+        struct NonUnpinStructWithUnsafeConstructor final {
+            explicit NonUnpinStructWithUnsafeConstructor(int* p) : ptr_field(p) {}
+            ~NonUnpinStructWithUnsafeConstructor(); // makes it non-Unpin
+            int* ptr_field;
+        };"#,
+    )?;
+    let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            impl ::ctor::UnsafeCtorNew<*mut ::ffi_11::c_int> for NonUnpinStructWithUnsafeConstructor {
+                type CtorType = ::ctor::Ctor![Self];
+                type Error = ::ctor::Infallible;
+                #[inline(always)]
+                unsafe fn ctor_new(args: *mut ::ffi_11::c_int) -> Self::CtorType {
+                    let mut p = args;
+                    unsafe {
+                        ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
+                            crate::detail::__rust_thunk___ZN35NonUnpinStructWithUnsafeConstructorC1EPi(
+                                __crubit_dest as *mut ::core::ffi::c_void,
+                                p
+                            );
+                        })
+                    }
+                }
+            }
+        }
+    );
+    Ok(())
+}
+
+#[gtest]
+fn test_function_using_error_type_by_value() -> Result<()> {
+    let ir = ir_from_cc(
+        r#"
+        struct __DunderName {};
+        void foo(__DunderName x);
+        "#,
+    )?;
+    let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
+
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            #[diagnostic::on_unimplemented(
+                message = "binding generation for function failed\nCannot use an error type `__DunderName` by value:\n  Skipping generating bindings for '__DunderName' because it has a leading `__`"
+            )]
+            pub trait BindingFailedFor_Z3foo12__DunderName {}
         }
     );
     Ok(())

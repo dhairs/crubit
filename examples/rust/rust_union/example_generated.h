@@ -4,23 +4,26 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // example_crate_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_EXAMPLES_RUST_RUST_UNION_EXAMPLE_CRATE_GOLDEN
 #define THIRD_PARTY_CRUBIT_EXAMPLES_RUST_RUST_UNION_EXAMPLE_CRATE_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 #include "support/internal/slot.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 namespace example_crate {
 
-// Generated from:
-// examples/rust/rust_union/example.rs;l=5
 union CRUBIT_INTERNAL_RUST_TYPE(
     ":: example_crate_golden :: ReprRustUnion") alignas(8)
     [[clang::trivial_abi]] ReprRustUnion final {
@@ -37,25 +40,17 @@ union CRUBIT_INTERNAL_RUST_TYPE(
   ReprRustUnion(const ReprRustUnion&) = delete;
   ReprRustUnion& operator=(const ReprRustUnion&) = delete;
   ReprRustUnion(::crubit::UnsafeRelocateTag, ReprRustUnion&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
-  // Generated from:
-  // examples/rust/rust_union/example.rs;l=21
-  void set_a(std::int32_t a);
+  void set_a(::std::int32_t a);
 
-  // Generated from:
-  // examples/rust/rust_union/example.rs;l=25
   void set_b(double b);
 
  private:
-  // Generated from:
-  // examples/rust/rust_union/example.rs;l=6
   struct {
-    std::int32_t value;
+    ::std::int32_t value;
   } a;
-  // Generated from:
-  // examples/rust/rust_union/example.rs;l=7
   struct {
     double value;
   } b;
@@ -74,17 +69,19 @@ namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(
     ::example_crate::ReprRustUnion* __ret_ptr);
 }
-inline ReprRustUnion::ReprRustUnion() {
+inline ::example_crate::ReprRustUnion::ReprRustUnion() {
   __crubit_internal::__crubit_thunk_default(this);
 }
-static_assert(std::is_trivially_destructible_v<ReprRustUnion>);
-static_assert(std::is_trivially_move_constructible_v<ReprRustUnion>);
-static_assert(std::is_trivially_move_assignable_v<ReprRustUnion>);
+static_assert(::std::is_trivially_destructible_v<ReprRustUnion>);
+static_assert(
+    ::std::is_trivially_move_constructible_v<::example_crate::ReprRustUnion>);
+static_assert(
+    ::std::is_trivially_move_assignable_v<::example_crate::ReprRustUnion>);
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_set_ua(::example_crate::ReprRustUnion&,
-                                      std::int32_t);
+                                      ::std::int32_t);
 }
-inline void ReprRustUnion::set_a(std::int32_t a) {
+inline void ReprRustUnion::set_a(::std::int32_t a) {
   auto&& self = *this;
   return __crubit_internal::__crubit_thunk_set_ua(self, a);
 }
@@ -101,4 +98,6 @@ inline void ReprRustUnion::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(ReprRustUnion, b));
 }
 }  // namespace example_crate
+
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_EXAMPLES_RUST_RUST_UNION_EXAMPLE_CRATE_GOLDEN

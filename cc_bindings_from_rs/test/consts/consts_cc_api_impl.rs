@@ -4,11 +4,12 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // consts_golden
-// Features: custom_ffi_types, experimental, non_unpin_ctor, std_unique_ptr, std_vector, supported, wrapper
 
 #![allow(unused_unsafe, deprecated, non_snake_case, unreachable_code)]
 #![allow(improper_ctypes_definitions)]
 #![deny(warnings)]
 
+extern crate alloc;
+extern crate core;
 const _: () = assert!(::std::mem::size_of::<::consts_golden::TyWithAssocConsts>() == 1);
 const _: () = assert!(::std::mem::align_of::<::consts_golden::TyWithAssocConsts>() == 1);

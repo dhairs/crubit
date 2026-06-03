@@ -64,7 +64,7 @@
 #include "clang/Basic/OperatorKinds.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Basic/Specifiers.h"
-#include "clang/Index/USRGeneration.h"
+#include "clang/UnifiedSymbolResolution/USRGeneration.h"
 #include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/DenseSet.h"
@@ -85,10 +85,6 @@ using ::clang::dataflow::Environment;
 using ::clang::dataflow::Formula;
 using ::clang::dataflow::RecordInitListHelper;
 using ::clang::dataflow::WatchedLiteralsSolver;
-
-using ConcreteNullabilityCache =
-    absl::flat_hash_map<const Decl *,
-                        std::optional<const PointerTypeNullability>>;
 
 namespace {
 /// Shared base class for visitors that walk the AST for evidence collection
@@ -196,17 +192,6 @@ VirtualMethodIndex getVirtualMethodIndex(ASTContext &Ctx, USRCache &UC) {
   return std::move(W.Index);
 }
 
-static RelatedSymbols saveVirtualMethodsMap(const RelatedVirtualMethodsMap& M) {
-  RelatedSymbols Result;
-  auto& RelatedMethods = *Result.mutable_related_symbols();
-  for (auto& [KeyMethod, MethodSet] : M) {
-    RelatedSymbols::SymbolSet& Methods = RelatedMethods[KeyMethod];
-    for (auto& Method : MethodSet)
-      Methods.add_symbols()->set_usr(Method.getKey());
-  }
-  return Result;
-}
-
 static RelatedVirtualMethodsMap loadVirtualMethodsMap(const RelatedSymbols& R) {
   RelatedVirtualMethodsMap Related;
   for (const auto& [KeyMethod, Methods] : R.related_symbols()) {
@@ -214,14 +199,6 @@ static RelatedVirtualMethodsMap loadVirtualMethodsMap(const RelatedSymbols& R) {
     for (auto& Symbol : Methods.symbols()) RelatedMethods.insert(Symbol.usr());
   }
   return Related;
-}
-
-VirtualMethodIndexSummary saveVirtualMethodsIndex(const VirtualMethodIndex& M) {
-  VirtualMethodIndexSummary Result;
-  *Result.mutable_overrides_to_bases() = saveVirtualMethodsMap(M.Bases);
-  for (auto& Entry : M.IsDefinedInTest)
-    Result.add_virtual_methods_defined_in_tests()->set_usr(Entry.getKey());
-  return Result;
 }
 
 VirtualMethodIndex loadVirtualMethodsIndex(const VirtualMethodIndexSummary& R) {
@@ -291,49 +268,60 @@ static void appendUSRs(const llvm::StringSet<> &Strings,
   for (auto &Entry : Strings) USRs.push_back(Entry.getKey());
 }
 
+struct AdditionalVirtualMethodTargets {
+  std::vector<std::string_view> NotCrossesFromTestToNontest;
+  std::vector<std::string_view> CrossesFromTestToNontest;
+};
+
 // Given a virtual method `USR` and its base methods `BaseUSRs`, append to
-// `Results` only if USR -> Base does not cross a test to non-test boundary.
-static void appendBaseUSRsIfNotLeavingTestBoundary(
+// `Results.NotCrossesFromTestToNontest` if USR -> Base does not cross a test to
+// non-test boundary. Otherwise, append to Results.CrossesFromTestToNontest.
+static void appendBaseUSRsWithCrossingTestBoundaryCategories(
     std::string_view USR, const llvm::StringSet<>& USRsDefinedInTests,
-    const llvm::StringSet<>& BaseUSRs, std::vector<std::string_view>& Results) {
+    const llvm::StringSet<>& BaseUSRs,
+    AdditionalVirtualMethodTargets& Results) {
   if (!USRsDefinedInTests.contains(USR)) {
-    appendUSRs(BaseUSRs, Results);
+    appendUSRs(BaseUSRs, Results.NotCrossesFromTestToNontest);
     return;
   }
-  // Otherwise, USR is defined in a test main file, so only propagate to bases
-  // that are also defined in test main files.
+  // Otherwise, USR is defined in a test main file. Track when we cross over
+  // to a non-test base.
   for (auto& Entry : BaseUSRs) {
     if (USRsDefinedInTests.contains(Entry.getKey())) {
-      Results.push_back(Entry.getKey());
+      Results.NotCrossesFromTestToNontest.push_back(Entry.getKey());
+    } else {
+      Results.CrossesFromTestToNontest.push_back(Entry.getKey());
     }
   }
 }
 
-static std::vector<std::string_view> getAdditionalTargetsForVirtualMethod(
+static AdditionalVirtualMethodTargets getAdditionalTargetsForVirtualMethod(
     std::string_view USR, Evidence::Kind Kind, bool ForReturnSlot,
-    const VirtualMethodIndex &Index) {
+    const VirtualMethodIndex& Index) {
   VirtualMethodEvidenceFlowDirection FlowDirection =
       getFlowDirection(Kind, ForReturnSlot);
-  std::vector<std::string_view> Results;
+  AdditionalVirtualMethodTargets Results;
   switch (FlowDirection) {
     case VirtualMethodEvidenceFlowDirection::kFromBaseToDerived:
       if (auto It = Index.Overrides.find(USR); It != Index.Overrides.end())
-        appendUSRs(It->second.OverridingUSRs, Results);
+        appendUSRs(It->second.OverridingUSRs,
+                   Results.NotCrossesFromTestToNontest);
       return Results;
     case VirtualMethodEvidenceFlowDirection::kFromDerivedToBase:
       if (auto It = Index.Bases.find(USR); It != Index.Bases.end()) {
-        appendBaseUSRsIfNotLeavingTestBoundary(USR, Index.IsDefinedInTest,
-                                               It->second, Results);
+        appendBaseUSRsWithCrossingTestBoundaryCategories(
+            USR, Index.IsDefinedInTest, It->second, Results);
       }
       return Results;
     case VirtualMethodEvidenceFlowDirection::kBoth:
       // Simply concatenate the two sets -- given the acyclic nature of the AST,
       // they must be exclusive.
       if (auto It = Index.Overrides.find(USR); It != Index.Overrides.end())
-        appendUSRs(It->second.OverridingUSRs, Results);
+        appendUSRs(It->second.OverridingUSRs,
+                   Results.NotCrossesFromTestToNontest);
       if (auto It = Index.Bases.find(USR); It != Index.Bases.end()) {
-        appendBaseUSRsIfNotLeavingTestBoundary(USR, Index.IsDefinedInTest,
-                                               It->second, Results);
+        appendBaseUSRsWithCrossingTestBoundaryCategories(
+            USR, Index.IsDefinedInTest, It->second, Results);
       }
       return Results;
   }
@@ -343,15 +331,18 @@ namespace {
 class InferableSlot {
  public:
   InferableSlot(PointerTypeNullability Nullability, Slot Slot,
-                std::string InferenceTargetUSR)
+                std::string InferenceTargetUSR, bool CrossesFromTestToNontest)
       : SymbolicNullability(Nullability),
         TargetSlot(Slot),
-        InferenceTargetUSR(std::move(InferenceTargetUSR)) {}
+        InferenceTargetUSR(std::move(InferenceTargetUSR)),
+        CrossesFromTestToNontest(CrossesFromTestToNontest) {}
 
   InferableSlot(PointerTypeNullability Nullability, Slot Slot,
-                const Decl &Target, USRCache &USRCache)
+                const Decl& Target, bool CrossesFromTestToNontest,
+                USRCache& USRCache)
       : InferableSlot(Nullability, Slot,
-                      std::string(getOrGenerateUSR(USRCache, Target))) {
+                      std::string(getOrGenerateUSR(USRCache, Target)),
+                      CrossesFromTestToNontest) {
     CHECK(isInferenceTarget(Target))
         << "InferableSlot created for a Target which is not an inference "
            "target: "
@@ -360,16 +351,23 @@ class InferableSlot {
                 : "not a named decl");
   }
 
-  const PointerTypeNullability &getSymbolicNullability() const {
+  const PointerTypeNullability& getSymbolicNullability() const {
     return SymbolicNullability;
   }
+
   Slot getTargetSlot() const { return TargetSlot; }
+
+  // Returns true if referencing the slot, from the perspective of the current
+  // "Target", would cross a boundary from test to non-test code.
+  bool crossesFromTestToNontest() const { return CrossesFromTestToNontest; }
+
   std::string_view getInferenceTargetUSR() const { return InferenceTargetUSR; }
 
  private:
   const PointerTypeNullability SymbolicNullability;
   const Slot TargetSlot;
   const std::string InferenceTargetUSR;
+  const bool CrossesFromTestToNontest;
 };
 }  // namespace
 
@@ -565,18 +563,23 @@ static bool isOrIsConstructedFromNullPointerConstant(const Expr *absl_nonnull E,
 }
 
 llvm::unique_function<EvidenceEmitter> evidenceEmitterWithPropagation(
-    llvm::unique_function<EvidenceEmitter> Emit, VirtualMethodIndex Index) {
-  return [Emit = std::move(Emit),
-          Index = std::move(Index)](Evidence E) mutable {
+    llvm::unique_function<EvidenceEmitter> Emit,
+    absl_nonnull std::shared_ptr<const VirtualMethodIndex> Index) {
+  return [Index, Emit = std::move(Emit)](Evidence E) mutable {
     Emit(E);
     // Virtual methods and their overrides constrain each other's nullabilities,
     // so propagate evidence in the appropriate direction based on the evidence
     // kind and whether the evidence is for the return type or a parameter type.
-    std::vector<std::string_view> Targets =
+    AdditionalVirtualMethodTargets Targets =
         getAdditionalTargetsForVirtualMethod(
-            E.symbol().usr(), E.kind(), E.slot() == SLOT_RETURN_TYPE, Index);
+            E.symbol().usr(), E.kind(), E.slot() == SLOT_RETURN_TYPE, *Index);
     *E.mutable_propagated_from() = E.symbol();
-    for (std::string_view USR : Targets) {
+    for (std::string_view USR : Targets.NotCrossesFromTestToNontest) {
+      E.mutable_symbol()->set_usr(USR);
+      Emit(E);
+    }
+    E.set_crosses_from_test_to_nontest(true);
+    for (std::string_view USR : Targets.CrossesFromTestToNontest) {
       E.mutable_symbol()->set_usr(USR);
       Emit(E);
     }
@@ -586,17 +589,20 @@ llvm::unique_function<EvidenceEmitter> evidenceEmitterWithPropagation(
 llvm::unique_function<EvidenceEmitter> evidenceEmitterWithPropagation(
     llvm::unique_function<EvidenceEmitter> Emit, USRCache &USRCache,
     ASTContext &Ctx) {
-  return evidenceEmitterWithPropagation(std::move(Emit),
-                                        getVirtualMethodIndex(Ctx, USRCache));
+  return evidenceEmitterWithPropagation(
+      std::move(Emit), std::make_shared<VirtualMethodIndex>(
+                           getVirtualMethodIndex(Ctx, USRCache)));
 }
 
 static Evidence makeEvidence(std::string_view USR, Slot S, Evidence::Kind Kind,
+                             bool CrossesFromTestToNontest,
                              std::string_view LocAsString) {
   Evidence E;
   E.set_slot(S);
   E.set_kind(Kind);
   if (!LocAsString.empty()) E.set_location(LocAsString);
   E.mutable_symbol()->set_usr(USR);
+  E.set_crosses_from_test_to_nontest(CrossesFromTestToNontest);
   return E;
 }
 
@@ -617,8 +623,172 @@ static SerializedSrcLoc serializeLoc(const SourceManager &SM,
 }
 
 namespace {
-// Collects nullability evidence from data extracted from the AST.
-class EvidenceCollector {
+
+/// Interface for collecting information/constraints from nullability-related
+/// behaviors.
+class CollectorFromNullabilityBehavior {
+ public:
+  virtual ~CollectorFromNullabilityBehavior() = default;
+
+  /// Notifies the collector that, based on our definition of null safety, we
+  /// have reason to believe that \c MustBeTrue can be made true by annotating
+  /// something Nonnull, if \c MustBeTrue is not already provably true or false.
+  ///
+  /// \param Loc The source location of an expression that leads to this
+  /// reasoning.
+  ///
+  /// \param EvidenceKind Indicates the pattern in code that leads to this
+  /// reasoning.
+  virtual void mustBeTrueByMarkingNonnull(const Formula& MustBeTrue,
+                                          const SerializedSrcLoc& Loc,
+                                          Evidence::Kind EvidenceKind) = 0;
+
+  /// Notifies the collector that, based on our definition of null safety, we
+  /// have reason to believe that \c MustBeTrue can be made true by annotating
+  /// something Nullable, if \c MustBeTrue is not already provably true or
+  /// false.
+  ///
+  /// \param Loc The source location of an expression that leads to this
+  /// reasoning.
+  ///
+  /// \param EvidenceKind Indicates the pattern in code that leads to this
+  /// reasoning.
+  virtual void mustBeTrueByMarkingNullable(const Formula& MustBeTrue,
+                                           const SerializedSrcLoc& Loc,
+                                           Evidence::Kind EvidenceKind) = 0;
+
+  /// Notifies the collector about an assignment-like operation where the
+  /// assignee is a declaration (e.g. field, parameter, variable) and the LHS's
+  /// type and type-level nullability can constrain the nullability of the RHS.
+  ///
+  /// \param IsLHSTypeConst Indicates whether the LHS declaration's type is
+  /// const, after stripping away any potential outer reference type.
+  ///
+  /// \param LHSTopLevel The outermost nullability property of the declaration's
+  /// nullability vector.
+  ///
+  /// \param LHSFingerprint The fingerprint of the LHS ValueDecl whose
+  /// nullability annotation may be overridden in future rounds of inference.
+  /// When the LHS nullability does not change in future rounds of
+  /// inference, this can be nullopt.
+  ///
+  /// \param RHSTypeNullability The top-level nullability of the RHS's type
+  /// *if and only if* the LHS declaration is a reference to a pointer. In
+  /// this (unusual) case, the assignment places stricter constraints on the
+  /// RHS's nullability.
+  ///
+  /// \param RHSValueNullability The value nullability of the RHS expression.
+  ///
+  /// \param RHSLoc The beginning source location of the RHS expression.
+  virtual void collectAssignmentToType(
+      bool IsLHSTypeConst, const PointerTypeNullability& LHSTopLevel,
+      std::optional<SlotFingerprint> LHSFingerprint,
+      const std::optional<PointerTypeNullability>& RHSTypeNullability,
+      const PointerNullState& RHSValueNullability,
+      const SerializedSrcLoc& RHSLoc) = 0;
+
+  /// Notifies the collector about an assignment-like operation, where the RHS
+  /// value can constrain the nullability of the LHS.
+  ///
+  /// \param TypeNullability The nullability of the LHS's type (which may
+  /// already be known to be Nonnull or Nullable).
+  ///
+  /// \param ValueNullState The null state of the RHS expression. It should be
+  /// nullopt *if and only if* the RHS expression has \c std::nullptr_t type.
+  ///
+  /// \param ValueLoc A source location that helps identify the assignment.
+  ///
+  /// \param EvidenceKindForAssignmentFromNullable The evidence kind to use if
+  /// the ValueNullState is Nullable.
+  virtual void collectAssignmentFromValue(
+      PointerTypeNullability TypeNullability,
+      std::optional<PointerNullState> ValueNullState,
+      const SerializedSrcLoc& ValueLoc,
+      Evidence::Kind EvidenceKindForAssignmentFromNullable) = 0;
+
+  /// Notifies the collector about behavior that constrains an unannotated
+  /// decl's nullability slot (identified by \c TargetUSR and \c TargetSlot)
+  /// nullability to match the type nullability \c NullabilityToMatch.
+  ///
+  /// \param CrossesFromTestToNontest Indicates that the nullability behavior
+  /// originates from a reference from test code to non-test code.
+  ///
+  /// \param CollectionLoc The beginning source location of the expression
+  /// from which \c NullabilityToMatch was derived.
+  virtual void collectMustHaveInvariantTypeNullability(
+      std::string_view TargetUSR, Slot TargetSlot,
+      bool CrossesFromTestToNontest,
+      const PointerTypeNullability& NullabilityToMatch,
+      const SerializedSrcLoc& CollectionLoc) = 0;
+
+  /// Notifies the collector about behavior that constrains \c TargetNullability
+  /// to match \c NullabilityToMatch.
+  ///
+  /// \param FingerprintOfNullabilityToMatch The fingerprint of the ValueDecl
+  /// from which \c NullabilityToMatch was derived. This is useful when the
+  /// ValueDecl's nullability annotation may be overridden in future rounds of
+  /// inference. When \c NullabilityToMatch does not change in future rounds of
+  /// inference, this can be nullopt.
+  ///
+  /// \param CollectionLoc The beginning source location of the expression
+  /// from which \c TargetNullability was derived.
+  virtual void collectMustHaveInvariantTypeNullability(
+      const PointerTypeNullability& TargetNullability,
+      const PointerTypeNullability& NullabilityToMatch,
+      std::optional<SlotFingerprint> FingerprintOfNullabilityToMatch,
+      const SerializedSrcLoc& CollectionLoc) = 0;
+
+  /// Notifies the collector about an argument passed at a call site.
+  ///
+  /// \param FunctionUSR The USR of the callee.
+  ///
+  /// \param ParamSlot The slot of the parameter of the callee.
+  ///
+  /// \param ParamTyProps The type properties of the parameter of the callee.
+  ///
+  /// \param CrossesFromTestToNontest True if the call site is in test code and
+  /// the callee is in non-test code.
+  ///
+  /// \param ArgNullState The null state of the argument. It should be
+  /// nullopt *if and only if* the argument has \c std::nullptr_t type.
+  ///
+  /// \param ArgLoc The source location of the call site argument.
+  virtual void collectArgBinding(std::string_view FunctionUSR, Slot ParamSlot,
+                                 EvidenceTypeProperties ParamTyProps,
+                                 bool CrossesFromTestToNontest,
+                                 std::optional<PointerNullState> ArgNullState,
+                                 const SerializedSrcLoc& ArgLoc) = 0;
+
+  /// Notifies the collector about an operation that requires two pointer
+  /// operands to differ in value. This is relevant when one operand is likely
+  /// to be null, in which case the other must be Nonnull. This is intended
+  /// to handle cases when we do not already know which operand is null.
+  /// Otherwise, we could use the simpler \c mustBeTrueByMarkingNonnull API on
+  /// the Nonnull operand.
+  ///
+  /// The canonical example is \code CHECK_NE(p, q) \endcode, but other
+  /// operations could conceivably provide the same constraints.
+  virtual void collectAbortIfEqual(const dataflow::Formula& FirstIsNull,
+                                   const SerializedSrcLoc& FirstLoc,
+                                   const dataflow::Formula& SecondIsNull,
+                                   const SerializedSrcLoc& SecondLoc) = 0;
+
+  /// Notifies the collector about a return value that constrains the
+  /// return type Nullability for a function (identified by \c FunctionUSR).
+  ///
+  /// \param ReturnTyProps Properties of function return type.
+  ///
+  /// \param ReturnNullState The null state of the return value.
+  ///
+  /// \param ReturnLoc The source location of the return value.
+  virtual void collectReturn(std::string_view FunctionUSR,
+                             EvidenceTypeProperties ReturnTyProps,
+                             PointerNullState ReturnNullState,
+                             const SerializedSrcLoc& ReturnLoc) = 0;
+};
+
+/// Collects and emits evidence from nullability behaviors.
+class EvidenceCollector : public CollectorFromNullabilityBehavior {
  public:
   EvidenceCollector(const std::vector<InferableSlot> &InferableSlots,
                     const Formula &InferableSlotsConstraint,
@@ -631,26 +801,22 @@ class EvidenceCollector {
         Solver(Solver) {}
 
   void emit(std::string_view USR, Slot S, Evidence::Kind Kind,
-            const SerializedSrcLoc &Loc) {
-    if (!USR.empty()) Emit(makeEvidence(USR, S, Kind, Loc.Loc));
+            bool CrossesFromTestToNontest, const SerializedSrcLoc& Loc) {
+    if (!USR.empty())
+      Emit(makeEvidence(USR, S, Kind, CrossesFromTestToNontest, Loc.Loc));
   }
 
-  /// Collects evidence for Nonnull-ness of one slot, derived from the necessity
-  /// that `MustBeTrue` must be true.
-  ///
-  /// Used when we have reason to believe that `MustBeTrue` can be made true by
-  /// marking a slot Nonnull.
-  void mustBeTrueByMarkingNonnull(const Formula &MustBeTrue,
-                                  const SerializedSrcLoc &Loc,
-                                  Evidence::Kind EvidenceKind) {
+  void mustBeTrueByMarkingNonnull(const Formula& MustBeTrue,
+                                  const SerializedSrcLoc& Loc,
+                                  Evidence::Kind EvidenceKind) override {
     auto &A = Env.arena();
     // If `MustBeTrue` is already proven true or false (or both, which indicates
     // unsatisfiable flow conditions), collect no evidence.
     if (Env.proves(MustBeTrue) || Env.proves(A.makeNot(MustBeTrue))) return;
 
-    for (auto &IS : InferableSlots) {
-      auto &SlotNonnull = IS.getSymbolicNullability().isNonnull(A);
-      auto &SlotNonnullImpliesFormulaTrue =
+    auto DoesMarkingInferableSlotNonnullSatisfy = [&](const InferableSlot& IS) {
+      auto& SlotNonnull = IS.getSymbolicNullability().isNonnull(A);
+      auto& SlotNonnullImpliesFormulaTrue =
           A.makeImplies(SlotNonnull, MustBeTrue);
       // Don't collect evidence if the implication is true by virtue of
       // `SlotNonnull` being false.
@@ -669,23 +835,38 @@ class EvidenceCollector {
       //   }
       // }
       // ```
-      if (Env.allows(SlotNonnull) &&
-          Env.proves(SlotNonnullImpliesFormulaTrue)) {
-        emit(IS.getInferenceTargetUSR(), IS.getTargetSlot(), EvidenceKind, Loc);
+      return Env.allows(SlotNonnull) &&
+             Env.proves(SlotNonnullImpliesFormulaTrue);
+    };
+
+    // Look for the first inferable slot where it would help to mark the slot
+    // Nonnull. We first make a pass over InferableSlots that do not cross
+    // from test to non-test code, before falling back to the slots
+    // that involve a crossing.
+    llvm::SmallVector<InferableSlot> FallbackSlots;
+    for (auto& IS : InferableSlots) {
+      if (IS.crossesFromTestToNontest()) {
+        FallbackSlots.push_back(IS);
+        continue;
+      }
+      if (DoesMarkingInferableSlotNonnullSatisfy(IS)) {
+        emit(IS.getInferenceTargetUSR(), IS.getTargetSlot(), EvidenceKind,
+             IS.crossesFromTestToNontest(), Loc);
+        return;
+      }
+    }
+    for (auto& IS : FallbackSlots) {
+      if (DoesMarkingInferableSlotNonnullSatisfy(IS)) {
+        emit(IS.getInferenceTargetUSR(), IS.getTargetSlot(), EvidenceKind,
+             IS.crossesFromTestToNontest(), Loc);
         return;
       }
     }
   }
 
-  /// Collects evidence for Nullable-ness for potentially multiple slots,
-  /// derived from the necessity that `MustBeTrue` must be true.
-  ///
-  /// Used when we have reason to believe that `MustBeTrue` can be made provably
-  /// true by marking a single slot Nullable, and that all such slots should be
-  /// marked Nullable.
-  void mustBeTrueByMarkingNullable(const Formula &MustBeTrue,
-                                   const SerializedSrcLoc &Loc,
-                                   Evidence::Kind EvidenceKind) {
+  void mustBeTrueByMarkingNullable(const Formula& MustBeTrue,
+                                   const SerializedSrcLoc& Loc,
+                                   Evidence::Kind EvidenceKind) override {
     auto &A = Env.arena();
     // If `MustBeTrue` is already proven true or false (or both, which indicates
     // unsatisfiable flow conditions), collect no evidence.
@@ -699,44 +880,19 @@ class EvidenceCollector {
       // `SlotNullable` being false.
       if (Env.allows(SlotNullable) &&
           Env.proves(SlotNullableImpliesFormulaTrue)) {
-        emit(IS.getInferenceTargetUSR(), IS.getTargetSlot(), EvidenceKind, Loc);
+        emit(IS.getInferenceTargetUSR(), IS.getTargetSlot(), EvidenceKind,
+             IS.crossesFromTestToNontest(), Loc);
         // Continue the loop, emitting evidence for all such slots.
       }
     }
   }
 
-  /// For a variety of assignment-like operations, where the assignee is a
-  /// declaration (e.g. field, variable, parameter), collects evidence regarding
-  /// the type of the assignment's right-hand side (RHS) and any inferable-slots
-  /// which may influence the value's nullability. For example, if the assignee
-  /// is Nonnull, collects evidence that the RHS is nonnull as well.
-  ///
-  /// The parameters define the properties of the assignment:
-  ///
-  /// * `IsLHSTypeConst` indicates whether the LHS declarations's type is const,
-  ///   after stripping away any potential outer reference type.
-  ///
-  /// * `LHSTopLevel` is the outermost nullability property of the declaration's
-  ///   nullability vector.
-  ///
-  /// * `RHSTypeNullability` holds the (top-level) nullability of the RHS's type
-  ///    *if and only if* the LHS declaration is a reference to a pointer. In
-  ///    this (unusual) case, the assignment places stricter constraints on the
-  ///    RHS's nullability, so we can collect additional evidence.
-  ///
-  /// * `RHSValueNullability` is the value nullability of the RHS expression.
-  ///
-  /// * `RHSLoc` is the beginning source location of the RHS expression.
-  ///
-  /// The (unused) fingerprint argument is only included in the signature
-  /// because this method implements the abstract interface required by
-  /// `NullabilityBehaviorVisitor`.
   void collectAssignmentToType(
-      bool IsLHSTypeConst, const PointerTypeNullability &LHSTopLevel,
+      bool IsLHSTypeConst, const PointerTypeNullability& LHSTopLevel,
       std::optional<SlotFingerprint> /* UNUSED */,
-      const std::optional<PointerTypeNullability> &RHSTypeNullability,
-      const PointerNullState &RHSValueNullability,
-      const SerializedSrcLoc &RHSLoc) {
+      const std::optional<PointerTypeNullability>& RHSTypeNullability,
+      const PointerNullState& RHSValueNullability,
+      const SerializedSrcLoc& RHSLoc) override {
     dataflow::Arena &A = Env.arena();
     if (RHSTypeNullability) {
       // The RHS type nullability is only provided when the LHS is a reference.
@@ -784,36 +940,34 @@ class EvidenceCollector {
     }
   }
 
-  /// For an unannotated decl's nullability slot identified by `TargetUSR` and
-  /// `TargetSlot`, collect evidence to indicate that the nullability slot must
-  /// match the type nullability `NullabilityToMatch`.
   void collectMustHaveInvariantTypeNullability(
       std::string_view TargetUSR, Slot TargetSlot,
+      bool CrossesFromTestToNontest,
       const PointerTypeNullability& NullabilityToMatch,
-      const SerializedSrcLoc& CollectionLoc) {
+      const SerializedSrcLoc& CollectionLoc) override {
     dataflow::Arena& A = Env.arena();
     if (NullabilityToMatch.concrete() == NullabilityKind::NonNull ||
         (NullabilityToMatch.isSymbolic() &&
          Env.proves(A.makeImplies(InferableSlotsConstraint,
                                   NullabilityToMatch.isNonnull(A))))) {
       emit(TargetUSR, TargetSlot,
-           Evidence::ASSIGNED_TO_OR_FROM_INVARIANT_NONNULL, CollectionLoc);
+           Evidence::ASSIGNED_TO_OR_FROM_INVARIANT_NONNULL,
+           CrossesFromTestToNontest, CollectionLoc);
     } else if (NullabilityToMatch.concrete() == NullabilityKind::Nullable ||
                (NullabilityToMatch.isSymbolic() &&
                 Env.proves(A.makeImplies(InferableSlotsConstraint,
                                          NullabilityToMatch.isNullable(A))))) {
       emit(TargetUSR, TargetSlot,
-           Evidence::ASSIGNED_TO_OR_FROM_INVARIANT_NULLABLE, CollectionLoc);
+           Evidence::ASSIGNED_TO_OR_FROM_INVARIANT_NULLABLE,
+           CrossesFromTestToNontest, CollectionLoc);
     }
   }
 
-  /// Collect evidence that will lead to `TargetNullability` matching
-  /// `NullabilityToMatch`.
   void collectMustHaveInvariantTypeNullability(
       const PointerTypeNullability& TargetNullability,
       const PointerTypeNullability& NullabilityToMatch,
-      std::optional<SlotFingerprint> /*UNUSED*/,
-      const SerializedSrcLoc& CollectionLoc) {
+      std::optional<SlotFingerprint> /* UNUSED */,
+      const SerializedSrcLoc& CollectionLoc) override {
     dataflow::Arena& A = Env.arena();
     if (NullabilityToMatch.concrete() == NullabilityKind::NonNull ||
         (NullabilityToMatch.isSymbolic() &&
@@ -832,14 +986,11 @@ class EvidenceCollector {
     }
   }
 
-  /// Collects evidence for parameter nullability based on arguments passed at
-  /// call sites. Considers two distinct cases, based on the setting of
-  /// `ArgNullState` -- when populated, the argument is a pointer value; when
-  /// nullopt, the argument is a nullptr literal.
   void collectArgBinding(std::string_view FunctionUSR, Slot ParamSlot,
                          EvidenceTypeProperties ParamTyProps,
+                         bool CrossesFromTestToNontest,
                          std::optional<PointerNullState> ArgNullState,
-                         const SerializedSrcLoc &ArgLoc) {
+                         const SerializedSrcLoc& ArgLoc) override {
     // Calculate the parameter's nullability, using InferableSlotsConstraint to
     // reflect the current knowledge of the annotations from previous inference
     // rounds, and not all possible annotations for them.
@@ -849,22 +1000,13 @@ class EvidenceCollector {
             : getNullabilityForNullptrT(Env, &InferableSlotsConstraint);
     emit(FunctionUSR, ParamSlot,
          getArgEvidenceKindFromNullability(ArgNullability, ParamTyProps),
-         ArgLoc);
+         CrossesFromTestToNontest, ArgLoc);
   }
 
-  /// Collects evidence from an operation that requires two pointer operands to
-  /// differ in value. Specifically, considers cases where one operand is known
-  /// statically to be null, in which case we have evidence that the other is
-  /// Nonnull. The canonical example is `CHECK_NE(p, q)`, but other operations
-  /// could conceivably provide the same potential evidence.
-  ///
-  /// This function is not intended for use when either operand is a nullptr
-  /// literal, since that can be handled more efficiently by avoiding the calls
-  /// to `proves()`.
-  void collectAbortIfEqual(const dataflow::Formula &FirstIsNull,
-                           const SerializedSrcLoc &FirstLoc,
-                           const dataflow::Formula &SecondIsNull,
-                           const SerializedSrcLoc &SecondLoc) {
+  void collectAbortIfEqual(const dataflow::Formula& FirstIsNull,
+                           const SerializedSrcLoc& FirstLoc,
+                           const dataflow::Formula& SecondIsNull,
+                           const SerializedSrcLoc& SecondLoc) override {
     auto &A = Env.arena();
     if (Env.proves(FirstIsNull)) {
       mustBeTrueByMarkingNonnull(A.makeNot(SecondIsNull), SecondLoc,
@@ -875,11 +1017,10 @@ class EvidenceCollector {
     }
   }
 
-  /// Collects evidence for return-type Nullability.
   void collectReturn(std::string_view FunctionUSR,
                      EvidenceTypeProperties ReturnTyProps,
                      PointerNullState ReturnNullState,
-                     const SerializedSrcLoc &ReturnLoc) {
+                     const SerializedSrcLoc& ReturnLoc) override {
     NullabilityKind ReturnNullability =
         getNullability(ReturnNullState, Env, &InferableSlotsConstraint);
 
@@ -909,34 +1050,15 @@ class EvidenceCollector {
           ReturnEvidenceKind = Evidence::UNKNOWN_RETURN;
       }
     }
-    emit(FunctionUSR, SLOT_RETURN_TYPE, ReturnEvidenceKind, ReturnLoc);
+    emit(FunctionUSR, SLOT_RETURN_TYPE, ReturnEvidenceKind,
+         /*CrossesFromTestToNontest=*/false, ReturnLoc);
   }
 
-  /// Collects evidence from assignments, specifically about the nullability of
-  /// an assignee based on the nullability of the RHS value.
-  ///
-  /// `ValueNullState` holds the null state of  the RHS expression. It should be
-  ///  nullopt *if and only if* the RHS expression has `std::nullptr_t` type.
-  ///
-  /// Example:
-  /// ```
-  /// void target(int* p, int* q, NullabilityUnknown<int*> r) {
-  ///   p = nullptr;
-  ///   if (!r) {
-  ///     q = r;
-  ///   }
-  ///   int i = 0;
-  ///   int* s = &i;
-  /// }
-  /// ```
-  /// From the above, we collect evidence from each of the assignments of `p`
-  /// and `q` that they were ASSIGNED_FROM_NULLABLE and evidence from the
-  /// assignment of `s` that it was ASSIGNED_FROM_NONNULL.
   void collectAssignmentFromValue(
       PointerTypeNullability TypeNullability,
       std::optional<PointerNullState> ValueNullState,
-      const SerializedSrcLoc &ValueLoc,
-      Evidence::Kind EvidenceKindForAssignmentFromNullable) {
+      const SerializedSrcLoc& ValueLoc,
+      Evidence::Kind EvidenceKindForAssignmentFromNullable) override {
     dataflow::Arena &A = Env.arena();
     const Formula &TypeIsNullable = TypeNullability.isNullable(A);
 
@@ -974,25 +1096,32 @@ class EvidenceCollector {
             EvidenceKind = Evidence::ASSIGNED_FROM_UNKNOWN;
         }
         emit(IS.getInferenceTargetUSR(), IS.getTargetSlot(), EvidenceKind,
-             ValueLoc);
+             IS.crossesFromTestToNontest(), ValueLoc);
         return;
       }
     }
   }
 
+  /// Collects evidence about the nullability of a USR (e.g., for a member
+  /// variable), given the null state in the exit block of the constructor.
   void collectConstructorExitBlock(std::string_view USR,
                                    PointerNullState NullState,
-                                   const SerializedSrcLoc &Loc) {
+                                   const SerializedSrcLoc& Loc) {
     if (isNullable(NullState, Env, &InferableSlotsConstraint)) {
-      emit(USR, Slot(0), Evidence::LEFT_NULLABLE_BY_CONSTRUCTOR, Loc);
+      emit(USR, Slot(0), Evidence::LEFT_NULLABLE_BY_CONSTRUCTOR,
+           /*CrossesFromTestToNontest=*/false, Loc);
     }
   }
 
+  /// Collects evidence about the nullability of a USR (e.g., for a member
+  /// variable), given the null state in the exit block of a supported
+  /// late initializer function.
   void collectSupportedLateInitializerExitBlock(std::string_view USR,
                                                 PointerNullState NullState,
-                                                const SerializedSrcLoc &Loc) {
+                                                const SerializedSrcLoc& Loc) {
     if (!isNullable(NullState, Env, &InferableSlotsConstraint)) {
-      emit(USR, Slot(0), Evidence::LEFT_NOT_NULLABLE_BY_LATE_INITIALIZER, Loc);
+      emit(USR, Slot(0), Evidence::LEFT_NOT_NULLABLE_BY_LATE_INITIALIZER,
+           /*CrossesFromTestToNontest=*/false, Loc);
     }
   }
 
@@ -1004,7 +1133,9 @@ class EvidenceCollector {
   const dataflow::Solver &Solver;
 };
 
-template <typename BehaviorConsumer>
+/// Visits CFGElements and AST nodes to find and collect from
+/// nullability-related behaviors through the given
+/// `CollectorFromNullabilityBehavior`.
 class NullabilityBehaviorVisitor {
  public:
   // `Consumer` is an in/out parameter, because it may accumulate state that the
@@ -1018,21 +1149,21 @@ class NullabilityBehaviorVisitor {
                     const Environment& Env, const SourceManager& SM,
                     const CFGElement& CFGElem,
                     LocFilter* absl_nullable NotTestMainFileLocFilter,
-                    BehaviorConsumer& BC) {
-    NullabilityBehaviorVisitor<BehaviorConsumer> Visitor(
-        InferableSlots, USRCache, Lattice, Env, SM, NotTestMainFileLocFilter,
-        BC);
+                    CollectorFromNullabilityBehavior& CollectorFromBehavior) {
+    NullabilityBehaviorVisitor Visitor(InferableSlots, USRCache, Lattice, Env,
+                                       SM, NotTestMainFileLocFilter,
+                                       CollectorFromBehavior);
     Visitor.visit(CFGElem);
   }
 
  private:
-  NullabilityBehaviorVisitor(const std::vector<InferableSlot>& InferableSlots,
-                             USRCache& USRCache,
-                             const PointerNullabilityLattice& Lattice,
-                             const Environment& Env, const SourceManager& SM,
-                             LocFilter* absl_nullable NotTestMainFileLocFilter,
-                             BehaviorConsumer& BC)
-      : Consumer(BC),
+  NullabilityBehaviorVisitor(
+      const std::vector<InferableSlot>& InferableSlots, USRCache& USRCache,
+      const PointerNullabilityLattice& Lattice, const Environment& Env,
+      const SourceManager& SM,
+      LocFilter* absl_nullable NotTestMainFileLocFilter,
+      CollectorFromNullabilityBehavior& CollectorFromBehavior)
+      : Collector(CollectorFromBehavior),
         Env(Env),
         HasInferableSlots(!InferableSlots.empty()),
         USRCache(USRCache),
@@ -1068,7 +1199,7 @@ class NullabilityBehaviorVisitor {
     if (IsNull == nullptr) return;
     auto &A = Env.arena();
     const Formula &F = A.makeNot(*IsNull);
-    Consumer.mustBeTrueByMarkingNonnull(F, Loc, EvidenceKind);
+    Collector.mustBeTrueByMarkingNonnull(F, Loc, EvidenceKind);
   }
 
   PointerNullState getPointerNullStateOrDie(
@@ -1134,9 +1265,9 @@ class NullabilityBehaviorVisitor {
       }
     }
 
-    Consumer.collectAssignmentToType(LHSTyProps.IsNonReferenceConst,
-                                     LHSTopLevel, LHSFingerprint, RHSTopLevel,
-                                     RHSNullState, RHSLoc);
+    Collector.collectAssignmentToType(LHSTyProps.IsNonReferenceConst,
+                                      LHSTopLevel, LHSFingerprint, RHSTopLevel,
+                                      RHSNullState, RHSLoc);
   }
 
   // Visits the binding of `Arg` to `Param` when their types are inferable but
@@ -1145,8 +1276,8 @@ class NullabilityBehaviorVisitor {
   // the entirety of the two types.
   void visitArgAndParamWithInferableNonPointerTypes(
       const ParmVarDecl& Param, std::string_view ParamSlotUSR, Slot ParamSlot,
-      bool CalleeIsInferenceTarget, const Expr& Arg,
-      SerializedSrcLoc CollectionLoc) {
+      bool CrossesFromTestToNontest, bool CalleeIsInferenceTarget,
+      const Expr& Arg, SerializedSrcLoc CollectionLoc) {
     // TODO: Account for each layer of nullability when we handle more than
     // top-level pointers as template arguments.
 
@@ -1166,8 +1297,9 @@ class NullabilityBehaviorVisitor {
     // is not already annotated in source.
     if (CalleeIsInferenceTarget &&
         !evidenceKindFromDeclaredNullability(ParamTypeNullabilityInSource)) {
-      Consumer.collectMustHaveInvariantTypeNullability(
-          ParamSlotUSR, ParamSlot, ArgTopLevelNullability, CollectionLoc);
+      Collector.collectMustHaveInvariantTypeNullability(
+          ParamSlotUSR, ParamSlot, CrossesFromTestToNontest,
+          ArgTopLevelNullability, CollectionLoc);
     }
     // Collect information about the nullability requirement for the argument.
     // The argument's nullability must be symbolic and influenced by at least
@@ -1181,7 +1313,7 @@ class NullabilityBehaviorVisitor {
           getNullabilityAnnotationsFromDeclAndOverrides(Param, Lattice);
       CHECK(!ParamTypeNullabilityWithOverrides.empty());
 
-      Consumer.collectMustHaveInvariantTypeNullability(
+      Collector.collectMustHaveInvariantTypeNullability(
           ArgTopLevelNullability, ParamTypeNullabilityWithOverrides[0],
           fingerprint(ParamSlotUSR, ParamSlot), CollectionLoc);
     }
@@ -1195,18 +1327,15 @@ class NullabilityBehaviorVisitor {
     bool AnalyzeCallee = CalleeIsInferenceTarget;
     bool AnalyzeCaller = HasInferableSlots;
 
-    // Don't consider nullability behaviors where the caller is in a test main
-    // file, but the callee is not, to avoid collecting such evidence (test
-    // evidence may not be as accurate as non-test evidence). If the caller and
-    // callee are both in test main files, then that will be the only evidence,
-    // so we consider that behavior.
-    if (AnalyzeCallee && NotTestMainFileLocFilter != nullptr) {
-      if (NotTestMainFileLocFilter->check(
-              CalleeDecl.getCanonicalDecl()->getBeginLoc()) &&
-          !NotTestMainFileLocFilter->check(Expr.getBeginLoc())) {
-        AnalyzeCallee = false;
-      }
-    }
+    // Track whether the caller is in a test main file, but the callee is not,
+    // to de-prioritize such evidence (test evidence may not be as accurate as
+    // non-test evidence). If the caller and callee are both in test main files,
+    // then that is not considered "crossing" a test boundary.
+    bool CrossesFromTestToNontest =
+        AnalyzeCallee && NotTestMainFileLocFilter != nullptr &&
+        NotTestMainFileLocFilter->check(
+            CalleeDecl.getCanonicalDecl()->getBeginLoc()) &&
+        !NotTestMainFileLocFilter->check(Expr.getBeginLoc());
 
     for (ParamAndArgIterator<CallOrConstructExpr> Iter(CalleeDecl, Expr); Iter;
          ++Iter) {
@@ -1261,8 +1390,8 @@ class NullabilityBehaviorVisitor {
         // differently for non-pointers.
         visitArgAndParamWithInferableNonPointerTypes(
             Iter.param(), getOrGenerateUSR(USRCache, CalleeDecl),
-            paramSlot(Iter.paramIdx()), CalleeIsInferenceTarget, Iter.arg(),
-            ArgLoc);
+            paramSlot(Iter.paramIdx()), CrossesFromTestToNontest,
+            CalleeIsInferenceTarget, Iter.arg(), ArgLoc);
         return;
       }
 
@@ -1293,16 +1422,17 @@ class NullabilityBehaviorVisitor {
               getTypeNullability(Iter.param(), Lattice.defaults()))) {
         dataflow::PointerValue *PV = getPointerValue(&Iter.arg(), Env);
         if (PV != nullptr) {
-          Consumer.collectArgBinding(
+          Collector.collectArgBinding(
               getOrGenerateUSR(USRCache, CalleeDecl),
               paramSlot(Iter.paramIdx()),
               getEvidenceTypeProperties(Iter.param().getType()),
-              getPointerNullState(*PV), ArgLoc);
+              CrossesFromTestToNontest, getPointerNullState(*PV), ArgLoc);
         } else if (ArgIsNullPtrT) {
-          Consumer.collectArgBinding(
+          Collector.collectArgBinding(
               getOrGenerateUSR(USRCache, CalleeDecl),
               paramSlot(Iter.paramIdx()),
               getEvidenceTypeProperties(Iter.param().getType()),
+              CrossesFromTestToNontest,
               /*ArgNullState*/ std::nullopt, ArgLoc);
         }
       }
@@ -1454,9 +1584,9 @@ class NullabilityBehaviorVisitor {
       const dataflow::BoolValue *BV = Env.get<dataflow::BoolValue>(*Arg);
       if (!BV || BV->getKind() == dataflow::BoolValue::Kind::TopBool) return;
 
-      Consumer.mustBeTrueByMarkingNonnull(BV->formula(),
-                                          serializeLoc(SM, Arg->getExprLoc()),
-                                          Evidence::ABORT_IF_NULL);
+      Collector.mustBeTrueByMarkingNonnull(BV->formula(),
+                                           serializeLoc(SM, Arg->getExprLoc()),
+                                           Evidence::ABORT_IF_NULL);
     }
   }
 
@@ -1514,7 +1644,7 @@ class NullabilityBehaviorVisitor {
           getPointerNullState(*SecondPV).IsNull;
       if (!SecondIsNull) return;
 
-      Consumer.collectAbortIfEqual(
+      Collector.collectAbortIfEqual(
           *FirstIsNull, serializeLoc(SM, First->getExprLoc()), *SecondIsNull,
           serializeLoc(SM, Second->getExprLoc()));
     }
@@ -1598,7 +1728,7 @@ class NullabilityBehaviorVisitor {
         !evidenceKindFromDeclaredReturnType(*CurrentFunc, Lattice.defaults())) {
       const dataflow::PointerValue *PV = getPointerValue(ReturnExpr, Env);
       if (!PV) return;
-      Consumer.collectReturn(
+      Collector.collectReturn(
           getOrGenerateUSR(USRCache, *CurrentFunc),
           getEvidenceTypeProperties(CurrentFunc->getReturnType()),
           getPointerNullState(*PV), serializeLoc(SM, ReturnExpr->getExprLoc()));
@@ -1633,8 +1763,8 @@ class NullabilityBehaviorVisitor {
     if (LHSNullability.empty()) return;
     std::optional<PointerNullState> NullState =
         PV ? std::make_optional(getPointerNullState(*PV)) : std::nullopt;
-    Consumer.collectAssignmentFromValue(LHSNullability[0], NullState, Loc,
-                                        EvidenceKindForAssignmentFromNullable);
+    Collector.collectAssignmentFromValue(LHSNullability[0], NullState, Loc,
+                                         EvidenceKindForAssignmentFromNullable);
   }
 
   /// Analyzes an assignment of `RHS` to `LHSDecl`, through a direct assignment
@@ -1918,14 +2048,14 @@ class NullabilityBehaviorVisitor {
   }
 
  private:
-  BehaviorConsumer &Consumer;
-  const Environment &Env;
+  CollectorFromNullabilityBehavior& Collector;
+  const Environment& Env;
   // Whether the definition being analyzed has any inferable slots. Lack of
   // inferable slots simplifies the analysis.
   const bool HasInferableSlots;
-  USRCache &USRCache;
-  const PointerNullabilityLattice &Lattice;
-  const SourceManager &SM;
+  USRCache& USRCache;
+  const PointerNullabilityLattice& Lattice;
+  const SourceManager& SM;
   // Null if the TU is not a GoogleTest TU. Otherwise, if it is a test TU,
   // then this LocFilter will allow all locations, except the test main file.
   LocFilter* absl_nullable NotTestMainFileLocFilter;
@@ -2030,6 +2160,7 @@ static InferableSlotProto saveInferableSlot(const InferableSlot &IS) {
   Proto.set_nonnull_atom(getAtomNumber(PTN.nonnullAtom()));
   Proto.set_nullable_atom(getAtomNumber(PTN.nullableAtom()));
   Proto.set_slot(IS.getTargetSlot());
+  Proto.set_crosses_from_test_to_nontest(IS.crossesFromTestToNontest());
   Proto.mutable_symbol()->set_usr(IS.getInferenceTargetUSR());
   return Proto;
 }
@@ -2119,15 +2250,16 @@ static llvm::Expected<PointerNullState> loadPointerNullState(
 }
 
 static std::vector<InferableSlot> loadInferableSlots(
-    const proto2::RepeatedPtrField<InferableSlotProto> &Protos,
-    dataflow::Arena &Arena, llvm::DenseMap<unsigned, Atom> &AtomMap) {
+    const proto2::RepeatedPtrField<InferableSlotProto>& Protos,
+    dataflow::Arena& Arena, llvm::DenseMap<unsigned, Atom>& AtomMap) {
   std::vector<InferableSlot> InferableSlots;
-  for (const auto &ISProto : Protos) {
+  for (const auto& ISProto : Protos) {
     InferableSlots.emplace_back(
         PointerTypeNullability::createSymbolic(
             getAtom(ISProto.nonnull_atom(), Arena, AtomMap),
             getAtom(ISProto.nullable_atom(), Arena, AtomMap)),
-        static_cast<Slot>(ISProto.slot()), ISProto.symbol().usr());
+        static_cast<Slot>(ISProto.slot()), ISProto.symbol().usr(),
+        ISProto.crosses_from_test_to_nontest());
   }
   return InferableSlots;
 }
@@ -2164,8 +2296,10 @@ static llvm::Expected<dataflow::SimpleLogicalContext> loadLogicalContext(
 }
 
 namespace {
-// Collects nullability summaries and outputs them as protobufs.
-class SummaryCollector {
+
+// Collects nullability summaries (in the form of protobufs) from nullability
+// behaviors.
+class SummaryCollector : public CollectorFromNullabilityBehavior {
  public:
   static llvm::SmallVector<NullabilityBehaviorSummary> summarizeElement(
       llvm::ArrayRef<InferableSlot> InferableSlots,
@@ -2174,41 +2308,33 @@ class SummaryCollector {
       const SourceManager& SM, const CFGElement& CFGElem,
       LocFilter* absl_nullable NotTestMainFileLocFilter) {
     SummaryCollector SCollector(Env, UsedTokens);
-    NullabilityBehaviorVisitor<SummaryCollector>::visit(
-        InferableSlots, USRCache, Lattice, Env, SM, CFGElem,
-        NotTestMainFileLocFilter, SCollector);
+    NullabilityBehaviorVisitor::visit(InferableSlots, USRCache, Lattice, Env,
+                                      SM, CFGElem, NotTestMainFileLocFilter,
+                                      SCollector);
     // Consume the summaries generated in this visit.
     return std::move(SCollector.Summaries);
   }
 
-  void mustBeTrueByMarkingNonnull(const Formula &MustBeTrue,
-                                  const SerializedSrcLoc &Loc,
-                                  Evidence::Kind EvidenceKind) {
+  void mustBeTrueByMarkingNonnull(const Formula& MustBeTrue,
+                                  const SerializedSrcLoc& Loc,
+                                  Evidence::Kind EvidenceKind) override {
     addRequiresAnnotationSummary(Nullability::NONNULL, MustBeTrue, Loc,
                                  EvidenceKind);
   }
 
-  void mustBeTrueByMarkingNullable(const Formula &MustBeTrue,
-                                   const SerializedSrcLoc &Loc,
-                                   Evidence::Kind EvidenceKind) {
+  void mustBeTrueByMarkingNullable(const Formula& MustBeTrue,
+                                   const SerializedSrcLoc& Loc,
+                                   Evidence::Kind EvidenceKind) override {
     addRequiresAnnotationSummary(Nullability::NULLABLE, MustBeTrue, Loc,
                                  EvidenceKind);
   }
 
-  // `IsLHSTypeConst` indicates whether the LHS type is const, after stripping
-  // away any potential outer reference type.
-  //
-  // `LHSFingerprint` provides the fingerprint of the LHS decl, when necessary
-  // for tracking potential overrides from previous rounds of inference. This
-  // specifically applies to decls that can be overridden but are not inferable
-  // slots. Currently, that covers return types and callee parameters (which are
-  // not named at call sites).
   void collectAssignmentToType(
-      bool IsLHSTypeConst, const PointerTypeNullability &LHSTypeNullability,
+      bool IsLHSTypeConst, const PointerTypeNullability& LHSTypeNullability,
       std::optional<SlotFingerprint> LHSFingerprint,
-      const std::optional<PointerTypeNullability> &RHSTypeNullability,
-      const PointerNullState &RHSValueNullability,
-      const SerializedSrcLoc &RHSLoc) {
+      const std::optional<PointerTypeNullability>& RHSTypeNullability,
+      const PointerNullState& RHSValueNullability,
+      const SerializedSrcLoc& RHSLoc) override {
     ValueAssignedToTypeSummary &S = *addSummary().mutable_value_assigned();
     S.set_lhs_is_non_reference_const(IsLHSTypeConst);
     *S.mutable_lhs_type_nullability() =
@@ -2225,27 +2351,30 @@ class SummaryCollector {
 
   void collectMustHaveInvariantTypeNullability(
       std::string_view TargetUSR, Slot TargetSlot,
+      bool CrossesFromTestToNontest,
       const PointerTypeNullability& NullabilityToMatch,
-      const SerializedSrcLoc& CollectionLoc) {
+      const SerializedSrcLoc& CollectionLoc) override {
     TypeAssignedToInvariantTypeSummary& S =
         *addSummary().mutable_assigned_to_invariant_type();
     *S.mutable_nullability_to_match() =
         savePointerTypeNullability(NullabilityToMatch);
     S.mutable_target_symbol()->set_usr(TargetUSR);
     S.set_target_slot(TargetSlot);
+    S.set_crosses_from_test_to_nontest(CrossesFromTestToNontest);
     S.set_location(CollectionLoc.Loc);
   }
 
   void collectMustHaveInvariantTypeNullability(
       const PointerTypeNullability& TargetNullability,
       const PointerTypeNullability& NullabilityToMatch,
-      SlotFingerprint FingerprintOfNullabilityToMatch,
-      const SerializedSrcLoc& CollectionLoc) {
+      std::optional<SlotFingerprint> FingerprintOfNullabilityToMatch,
+      const SerializedSrcLoc& CollectionLoc) override {
     TypeAssignedToInvariantTypeSummary& S =
         *addSummary().mutable_assigned_to_invariant_type();
     *S.mutable_nullability_to_match() =
         savePointerTypeNullability(NullabilityToMatch);
-    S.set_nullability_to_match_fingerprint(FingerprintOfNullabilityToMatch);
+    if (FingerprintOfNullabilityToMatch.has_value())
+      S.set_nullability_to_match_fingerprint(*FingerprintOfNullabilityToMatch);
     *S.mutable_target_nullability() =
         savePointerTypeNullability(TargetNullability);
     S.set_location(CollectionLoc.Loc);
@@ -2254,8 +2383,8 @@ class SummaryCollector {
   void collectAssignmentFromValue(
       PointerTypeNullability TypeNullability,
       std::optional<PointerNullState> ValueNullState,
-      const SerializedSrcLoc &ValueLoc,
-      Evidence::Kind EvidenceKindForAssignmentFromNullable) {
+      const SerializedSrcLoc& ValueLoc,
+      Evidence::Kind EvidenceKindForAssignmentFromNullable) override {
     AssignmentFromValueSummary &S =
         *addSummary().mutable_assignment_from_value();
     *S.mutable_lhs_type_nullability() =
@@ -2268,22 +2397,24 @@ class SummaryCollector {
 
   void collectArgBinding(std::string_view FunctionUSR, Slot ParamSlot,
                          EvidenceTypeProperties ParamTyProps,
+                         bool CrossesFromTestToNontest,
                          std::optional<PointerNullState> ArgNullState,
-                         const SerializedSrcLoc &ArgLoc) {
+                         const SerializedSrcLoc& ArgLoc) override {
     BindingSummary &S = *addSummary().mutable_argument_binding();
     S.mutable_function_symbol()->set_usr(FunctionUSR);
     S.set_slot(ParamSlot);
     S.set_type_is_lvalue_ref(ParamTyProps.IsLValueRef);
     S.set_type_is_const(ParamTyProps.IsNonReferenceConst);
+    S.set_crosses_from_test_to_nontest(CrossesFromTestToNontest);
     if (ArgNullState)
       *S.mutable_null_state() = savePointerNullState(*ArgNullState);
     S.set_location(ArgLoc.Loc);
   }
 
-  void collectAbortIfEqual(const dataflow::Formula &FirstIsNull,
-                           const SerializedSrcLoc &FirstLoc,
-                           const dataflow::Formula &SecondIsNull,
-                           const SerializedSrcLoc &SecondLoc) {
+  void collectAbortIfEqual(const dataflow::Formula& FirstIsNull,
+                           const SerializedSrcLoc& FirstLoc,
+                           const dataflow::Formula& SecondIsNull,
+                           const SerializedSrcLoc& SecondLoc) override {
     AbortIfEqualSummary &S = *addSummary().mutable_abort_if_equal();
     *S.mutable_first_is_null() = saveFormula(FirstIsNull);
     S.set_first_loc(FirstLoc.Loc);
@@ -2294,12 +2425,13 @@ class SummaryCollector {
   void collectReturn(std::string_view FunctionUSR,
                      EvidenceTypeProperties ReturnTyProps,
                      PointerNullState ReturnNullState,
-                     const SerializedSrcLoc &ReturnLoc) {
+                     const SerializedSrcLoc& ReturnLoc) override {
     BindingSummary &S = *addSummary().mutable_returned();
     S.mutable_function_symbol()->set_usr(FunctionUSR);
     S.set_slot(SLOT_RETURN_TYPE);
     S.set_type_is_lvalue_ref(ReturnTyProps.IsLValueRef);
     S.set_type_is_const(ReturnTyProps.IsNonReferenceConst);
+    S.set_crosses_from_test_to_nontest(false);
     *S.mutable_null_state() = savePointerNullState(ReturnNullState);
     S.set_location(ReturnLoc.Loc);
   }
@@ -2335,6 +2467,7 @@ class SummaryCollector {
   const Environment &Env;
 };
 
+/// Collects and emits evidence from `NullabilityBehaviorSummary` protos.
 class SummaryEvidenceCollector {
  public:
   static llvm::Error collectEvidenceFromBehaviorSummary(
@@ -2446,7 +2579,7 @@ class SummaryEvidenceCollector {
     if (!RHSValueNullability) return RHSValueNullability.takeError();
 
     // Callee doesn't use the `LHSFingerprint` argument -- it is only included
-    // because the signature is required by `SummaryCollector`.
+    // because the signature is required by `CollectorFromNullabilityBehavior`.
     Collector.collectAssignmentToType(
         Summary.lhs_is_non_reference_const(), *LHSTypeNullability,
         /*LHSFingerprint*/ std::nullopt, RHSTypeNullability,
@@ -2457,13 +2590,16 @@ class SummaryEvidenceCollector {
   llvm::Error collectTypeAssignedToInvariantType(
       const TypeAssignedToInvariantTypeSummary& Summary) {
     if (Summary.has_target_nullability() ==
-            (Summary.has_target_symbol() && Summary.has_target_slot()) ||
-        (Summary.has_target_symbol() != Summary.has_target_slot())) {
+            (Summary.has_target_symbol() && Summary.has_target_slot() &&
+             Summary.has_crosses_from_test_to_nontest()) ||
+        (Summary.has_target_symbol() != Summary.has_target_slot() ||
+         Summary.has_target_symbol() !=
+             Summary.has_crosses_from_test_to_nontest())) {
       return llvm::createStringError(
-          "Exactly one of `target_nullability` or (`target_symbol` and "
-          "`target_slot`) should be set, depending on whether the side of the "
-          "assignment we are inferring for was a known decl or a potentially "
-          "arbitrary expression.");
+          "Exactly one of `target_nullability` or (`target_symbol`, "
+          "`target_slot`, and `crosses_from_test_to_nontest`) should be set, "
+          "depending on whether the side of the assignment we are inferring "
+          "for was a known decl or a potentially arbitrary expression.");
     }
 
     auto NullabilityToMatch = [&]() -> llvm::Expected<PointerTypeNullability> {
@@ -2482,13 +2618,18 @@ class SummaryEvidenceCollector {
           Summary.target_nullability(), Arena, AtomMap);
 
       if (!TargetNullability) return TargetNullability.takeError();
+      // Callee doesn't use the `FingerprintOfNullabilityToMatch` argument -- it
+      // is only included because the signature is required by
+      // `CollectorFromNullabilityBehavior`.
       Collector.collectMustHaveInvariantTypeNullability(
-          *TargetNullability, *NullabilityToMatch, std::nullopt,
+          *TargetNullability, *NullabilityToMatch,
+          /*FingerprintOfNullabilityToMatch=*/std::nullopt,
           {Summary.location()});
     } else {
       Collector.collectMustHaveInvariantTypeNullability(
           Summary.target_symbol().usr(),
-          static_cast<Slot>(Summary.target_slot()), *NullabilityToMatch,
+          static_cast<Slot>(Summary.target_slot()),
+          Summary.crosses_from_test_to_nontest(), *NullabilityToMatch,
           {Summary.location()});
     }
     return llvm::Error::success();
@@ -2526,7 +2667,8 @@ class SummaryEvidenceCollector {
 
     Collector.collectArgBinding(
         Summary.function_symbol().usr(), static_cast<Slot>(Summary.slot()),
-        {Summary.type_is_lvalue_ref(), Summary.type_is_const()}, ArgNullState,
+        {Summary.type_is_lvalue_ref(), Summary.type_is_const()},
+        Summary.crosses_from_test_to_nontest(), ArgNullState,
         {Summary.location()});
     return llvm::Error::success();
   }
@@ -2611,51 +2753,16 @@ static void wrappedEmit(llvm::function_ref<EvidenceEmitter> Emit,
   auto &SM = Target.getDeclContext()->getParentASTContext().getSourceManager();
 
   std::string_view USR = getOrGenerateUSR(USRCache, Target);
-  if (!USR.empty()) Emit(makeEvidence(USR, S, Kind, serializeLoc(SM, Loc).Loc));
+  if (!USR.empty())
+    Emit(makeEvidence(USR, S, Kind,
+                      // This is only used for evidence we get from a
+                      // declaration (e.g., an annotation, or a default
+                      // argument, etc. which shouldn't have interesting
+                      // behaviors when crossing a test boundary)
+                      /*CrossesFromTestToNontest=*/false,
+                      serializeLoc(SM, Loc).Loc));
 }
 
-/// Returns a function that the analysis can use to override Decl nullability
-/// values from the source code being analyzed with previously inferred
-/// nullabilities.
-///
-/// In practice, this should only override the default nullability for Decls
-/// that do not spell out a nullability in source code, because we only pass in
-/// inferences from the previous round which are non-trivial and annotations
-/// "inferred" by reading an annotation from source code in the previous round
-/// were marked trivial.
-static auto getConcreteNullabilityOverrideFromPreviousInferences(
-    ConcreteNullabilityCache &Cache, USRCache &USRCache,
-    const PreviousInferences &PreviousInferences) {
-  return [&](const Decl &D) -> std::optional<const PointerTypeNullability *> {
-    auto [It, Inserted] = Cache.try_emplace(&D);
-    if (Inserted) {
-      std::optional<const Decl *> FingerprintedDecl;
-      Slot Slot;
-      if (auto *FD = dyn_cast<FunctionDecl>(&D)) {
-        FingerprintedDecl = FD;
-        Slot = SLOT_RETURN_TYPE;
-      } else if (auto *PD = dyn_cast<ParmVarDecl>(&D)) {
-        if (auto *Parent = dyn_cast_or_null<FunctionDecl>(
-                PD->getParentFunctionOrMethod())) {
-          FingerprintedDecl = Parent;
-          Slot = paramSlot(PD->getFunctionScopeIndex());
-        }
-      }
-      if (!FingerprintedDecl) return std::nullopt;
-      auto Fingerprint =
-          fingerprint(getOrGenerateUSR(USRCache, **FingerprintedDecl), Slot);
-      if (PreviousInferences.Nullable->contains(Fingerprint)) {
-        It->second.emplace(NullabilityKind::Nullable);
-      } else if (PreviousInferences.Nonnull->contains(Fingerprint)) {
-        It->second.emplace(NullabilityKind::NonNull);
-      } else {
-        It->second = std::nullopt;
-      }
-    }
-    if (!It->second) return std::nullopt;
-    return &*It->second;
-  };
-}
 
 template <typename ContainerT>
 static bool hasAnyInferenceTargets(const ContainerT &Decls) {
@@ -2676,19 +2783,16 @@ std::unique_ptr<dataflow::Solver> makeDefaultSolverForInference() {
   return std::make_unique<dataflow::WatchedLiteralsSolver>(MaxSATIterations);
 }
 
-using EBInitHandler =
-    llvm::function_ref<void(std::string_view USR, PointerNullState NullState,
-                            const SerializedSrcLoc &Loc)>;
-
-// If D is a constructor definition, summarizes cases of potential
+// If D is a constructor definition, summarizes the exit block.
+// From the summary, we can later potentially produce
 // LEFT_NULLABLE_BY_CONSTRUCTOR evidence for smart pointer fields implicitly
 // default-initialized and left nullable in the exit block of the constructor
-// body.
-static void processConstructorExitBlock(const clang::Decl &MaybeConstructor,
-                                        const Environment &ExitEnv,
-                                        USRCache &USRCache,
-                                        EBInitHandler InitHandler) {
-  auto *Ctor = dyn_cast<CXXConstructorDecl>(&MaybeConstructor);
+// body. `EBSummary` is an out-parameter for accumulating results.
+static void summarizeConstructorExitBlock(const clang::Decl& MaybeConstructor,
+                                          const Environment& ExitEnv,
+                                          USRCache& USRCache,
+                                          ExitBlockSummary& EBSummary) {
+  auto* Ctor = dyn_cast<CXXConstructorDecl>(&MaybeConstructor);
   if (!Ctor) return;
   for (auto *Initializer : Ctor->inits()) {
     if (Initializer->isWritten() || Initializer->isInClassMemberInitializer()) {
@@ -2734,24 +2838,30 @@ static void processConstructorExitBlock(const clang::Decl &MaybeConstructor,
     PointerNullState NullState = getPointerNullState(*PV);
     auto &SM =
         Field->getDeclContext()->getParentASTContext().getSourceManager();
-    std::string_view USR = getOrGenerateUSR(USRCache, *Field);
+
+    InitOnExitSummary& InitSummary = *EBSummary.add_ctor_inits_on_exit();
+    InitSummary.mutable_field()->set_usr(getOrGenerateUSR(USRCache, *Field));
+    *InitSummary.mutable_null_state() = savePointerNullState(NullState);
     SerializedSrcLoc Loc = serializeLoc(
         SM, Ctor->isImplicit() ? Field->getBeginLoc() : Ctor->getBeginLoc());
-    InitHandler(USR, NullState, Loc);
+    InitSummary.set_location(Loc.Loc);
   }
 }
 
-// Supported late initializers are no-argument SetUp methods of classes that
-// inherit from ::testing::Test. From the exit block of such a method, we
-// collect LEFT_NOT_NULLABLE_BY_LATE_INITIALIZER evidence for smart pointer
-// fields that are not nullable. This allows ignoring the
-// LEFT_NULLABLE_BY_CONSTRUCTOR evidence for such a field.
-static void processSupportedLateInitializerExitBlock(
-    const clang::Decl &MaybeLateInitializationMethod,
-    const Environment &ExitEnv, USRCache &USRCache, EBInitHandler InitHandler) {
-  auto *Method = dyn_cast<CXXMethodDecl>(&MaybeLateInitializationMethod);
+// Summarize the exit block of a supported late initializer. From the
+// summary, we can later potentially produce
+// LEFT_NOT_NULLABLE_BY_LATE_INITIALIZER evidence, for smart pointer fields that
+// are not nullable. This allows ignoring the LEFT_NULLABLE_BY_CONSTRUCTOR
+// evidence for such a field. Supported late initializers are no-argument SetUp
+// methods of classes that inherit from ::testing::Test. `EBSummary` is an
+// out-parameter for accumulating results.
+static void summarizeSupportedLateInitializerExitBlock(
+    const clang::Decl& MaybeLateInitializationMethod,
+    const Environment& ExitEnv, USRCache& USRCache,
+    ExitBlockSummary& EBSummary) {
+  auto* Method = dyn_cast<CXXMethodDecl>(&MaybeLateInitializationMethod);
   if (!Method || !Method->isVirtual() || Method->getNumParams() != 0) return;
-  if (IdentifierInfo *Identifier = Method->getIdentifier();
+  if (IdentifierInfo* Identifier = Method->getIdentifier();
       !Identifier || Identifier->getName() != "SetUp") {
     return;
   }
@@ -2780,69 +2890,16 @@ static void processSupportedLateInitializerExitBlock(
         cast<dataflow::RecordStorageLocation>(ChildLoc), ExitEnv);
     if (PV != nullptr && hasPointerNullState(*PV)) {
       PointerNullState NullState = getPointerNullState(*PV);
-      std::string_view USR = getOrGenerateUSR(USRCache, *ChildDecl);
+      InitOnExitSummary& LateInitSummary = *EBSummary.add_late_inits_on_exit();
+      LateInitSummary.mutable_field()->set_usr(
+          getOrGenerateUSR(USRCache, *ChildDecl));
+      *LateInitSummary.mutable_null_state() = savePointerNullState(NullState);
       SerializedSrcLoc Loc =
           serializeLoc(Method->getParentASTContext().getSourceManager(),
                        Method->getBeginLoc());
-      InitHandler(USR, NullState, Loc);
+      LateInitSummary.set_location(Loc.Loc);
     }
   }
-}
-
-static void collectEvidenceFromConstructorExitBlock(
-    const clang::Decl &MaybeConstructor, const Environment &ExitEnv,
-    USRCache &USRCache, EvidenceCollector &Collector) {
-  processConstructorExitBlock(
-      MaybeConstructor, ExitEnv, USRCache,
-      [&Collector](std::string_view USR, PointerNullState NullState,
-                   const SerializedSrcLoc &Loc) {
-        Collector.collectConstructorExitBlock(USR, NullState, Loc);
-      });
-}
-
-static void collectEvidenceFromSupportedLateInitializerExitBlock(
-    const clang::Decl &MaybeLateInitializationMethod,
-    const Environment &ExitEnv, USRCache &USRCache,
-    EvidenceCollector &Collector) {
-  processSupportedLateInitializerExitBlock(
-      MaybeLateInitializationMethod, ExitEnv, USRCache,
-      [&Collector](std::string_view USR, PointerNullState NullState,
-                   const SerializedSrcLoc &Loc) {
-        Collector.collectSupportedLateInitializerExitBlock(USR, NullState, Loc);
-      });
-}
-
-// `EBSummary` is an out-parameter for accumulating results.
-static void summarizeConstructorExitBlock(const clang::Decl &MaybeConstructor,
-                                          const Environment &ExitEnv,
-                                          USRCache &USRCache,
-                                          ExitBlockSummary &EBSummary) {
-  processConstructorExitBlock(
-      MaybeConstructor, ExitEnv, USRCache,
-      [&EBSummary](std::string_view USR, PointerNullState NullState,
-                   const SerializedSrcLoc &Loc) {
-        InitOnExitSummary &InitSummary = *EBSummary.add_ctor_inits_on_exit();
-        InitSummary.mutable_field()->set_usr(USR);
-        *InitSummary.mutable_null_state() = savePointerNullState(NullState);
-        InitSummary.set_location(Loc.Loc);
-      });
-}
-
-// `EBSummary` is an out-parameter for accumulating results.
-static void summarizeSupportedLateInitializerExitBlock(
-    const clang::Decl &MaybeLateInitializationMethod,
-    const Environment &ExitEnv, USRCache &USRCache,
-    ExitBlockSummary &EBSummary) {
-  processSupportedLateInitializerExitBlock(
-      MaybeLateInitializationMethod, ExitEnv, USRCache,
-      [&EBSummary](std::string_view USR, PointerNullState NullState,
-                   const SerializedSrcLoc &Loc) {
-        InitOnExitSummary &LateInitSummary =
-            *EBSummary.add_late_inits_on_exit();
-        LateInitSummary.mutable_field()->set_usr(USR);
-        *LateInitSummary.mutable_null_state() = savePointerNullState(NullState);
-        LateInitSummary.set_location(Loc.Loc);
-      });
 }
 
 // Checks the "last layer" forwarding functions called from the given statement.
@@ -2965,8 +3022,8 @@ static std::vector<InferableSlot> gatherInferableSlots(
     USRCache& USRCache, LocFilter* absl_nullable NotTestMainFileLocFilter) {
   std::vector<InferableSlot> InferableSlots;
 
-  // Don't consider slots where the target (e.g., caller) is defined in a test
-  // main file, but the referenced decl (e.g., callee) is not.
+  // Track for each reference whether the target (e.g., caller) is defined in a
+  // test main file, but the referenced decl (e.g., callee) is not.
   LocFilter* absl_nullable ActiveFilter = nullptr;
   if (NotTestMainFileLocFilter != nullptr) {
     bool IsTargetInTestMainFile =
@@ -2975,9 +3032,9 @@ static std::vector<InferableSlot> gatherInferableSlots(
     // to check the referenced decl. Otherwise, we can skip the check.
     if (IsTargetInTestMainFile) ActiveFilter = NotTestMainFileLocFilter;
   }
-  auto ShouldConsiderReference = [&](const DeclaratorDecl& D) {
-    if (ActiveFilter == nullptr) return true;
-    return !ActiveFilter->check(D.getCanonicalDecl()->getBeginLoc());
+  auto ReferenceCrossesFromTestToNontest = [&](const DeclaratorDecl& D) {
+    if (ActiveFilter == nullptr) return false;
+    return ActiveFilter->check(D.getCanonicalDecl()->getBeginLoc());
   };
 
   if (TargetAsFunc && isInferenceTarget(*TargetAsFunc)) {
@@ -2990,31 +3047,29 @@ static std::vector<InferableSlot> gatherInferableSlots(
            !evidenceKindFromDeclaredTypeLoc(TSI->getTypeLoc(), Defaults))) {
         InferableSlots.emplace_back(
             Analysis.assignNullabilityVariable(Param, Arena), paramSlot(I),
-            *TargetAsFunc, USRCache);
+            *TargetAsFunc, /*CrossesFromTestToNontest=*/false, USRCache);
       }
     }
   }
 
   for (const FieldDecl *Field : ReferencedDecls.Fields) {
-    const TypeSourceInfo *TSI = Field->getTypeSourceInfo();
+    const TypeSourceInfo* TSI = Field->getTypeSourceInfo();
     if (isInferenceTarget(*Field) &&
         (!TSI ||
-         !evidenceKindFromDeclaredTypeLoc(TSI->getTypeLoc(), Defaults)) &&
-        ShouldConsiderReference(*Field)) {
+         !evidenceKindFromDeclaredTypeLoc(TSI->getTypeLoc(), Defaults))) {
       InferableSlots.emplace_back(
           Analysis.assignNullabilityVariable(Field, Arena), Slot(0), *Field,
-          USRCache);
+          ReferenceCrossesFromTestToNontest(*Field), USRCache);
     }
   }
   for (const VarDecl *Global : ReferencedDecls.Globals) {
     const TypeSourceInfo *TSI = Global->getTypeSourceInfo();
     if (isInferenceTarget(*Global) &&
         (!TSI ||
-         !evidenceKindFromDeclaredTypeLoc(TSI->getTypeLoc(), Defaults)) &&
-        ShouldConsiderReference(*Global)) {
+         !evidenceKindFromDeclaredTypeLoc(TSI->getTypeLoc(), Defaults))) {
       InferableSlots.emplace_back(
           Analysis.assignNullabilityVariable(Global, Arena), Slot(0), *Global,
-          USRCache);
+          ReferenceCrossesFromTestToNontest(*Global), USRCache);
     }
   }
   for (const VarDecl *Local : ReferencedDecls.Locals) {
@@ -3024,7 +3079,7 @@ static std::vector<InferableSlot> gatherInferableSlots(
          !evidenceKindFromDeclaredTypeLoc(TSI->getTypeLoc(), Defaults))) {
       InferableSlots.emplace_back(
           Analysis.assignNullabilityVariable(Local, Arena), Slot(0), *Local,
-          USRCache);
+          /*CrossesFromTestToNontest=*/false, USRCache);
     }
   }
 
@@ -3048,11 +3103,10 @@ static std::vector<InferableSlot> gatherInferableSlots(
     const FunctionDecl* Function = *Iter;
     if (isInferenceTarget(*Function) &&
         hasInferable(Function->getReturnType()) &&
-        !evidenceKindFromDeclaredReturnType(*Function, Defaults) &&
-        ShouldConsiderReference(*Function)) {
+        !evidenceKindFromDeclaredReturnType(*Function, Defaults)) {
       InferableSlots.emplace_back(
           Analysis.assignNullabilityVariable(Function, Arena), SLOT_RETURN_TYPE,
-          *Function, USRCache);
+          *Function, ReferenceCrossesFromTestToNontest(*Function), USRCache);
     }
   }
   for (const ParmVarDecl *Param : ReferencedDecls.LambdaCapturedParams) {
@@ -3068,111 +3122,58 @@ static std::vector<InferableSlot> gatherInferableSlots(
       unsigned Index = Param->getFunctionScopeIndex();
       InferableSlots.emplace_back(
           Analysis.assignNullabilityVariable(Param, Arena), paramSlot(Index),
-          *ContainingFunction, USRCache);
+          *ContainingFunction, /*CrossesFromTestToNontest=*/false, USRCache);
     }
   }
   return InferableSlots;
 }
 
-llvm::Error collectEvidenceFromDefinition(
-    const Decl &Definition, llvm::function_ref<EvidenceEmitter> Emit,
-    USRCache &USRCache, const NullabilityPragmas &Pragmas,
-    const PreviousInferences &PreviousInferences,
-    const SolverFactory &MakeSolver) {
-  std::optional<DeclStmt> DeclStmtForVarDecl;
-  auto T = getTarget(Definition, DeclStmtForVarDecl);
-  if (!T) return T.takeError();
-  Stmt &TargetStmt = **T;
+static void summarizeFromTUIndexIfPresent(
+    const FunctionDecl* absl_nullable Func, const VirtualMethodIndex& TUIndex,
+    USRCache& Cache, VirtualMethodIndexSummary& Summary) {
+  if (!Func) return;
+  // If Func isn't actually an override of a virtual method, we won't find it in
+  // TUIndex.Bases and will return early.
+  std::string_view OverrideUSR = getOrGenerateUSR(Cache, *Func);
 
-  const auto *absl_nullable TargetFunc = dyn_cast<FunctionDecl>(&Definition);
-  dataflow::ReferencedDecls ReferencedDecls =
-      TargetFunc != nullptr ? dataflow::getReferencedDecls(*TargetFunc)
-                            : dataflow::getReferencedDecls(TargetStmt);
-  collectReferencesFromForwardingFunctions(TargetStmt, ReferencedDecls);
-
-  // TODO: b/416755108 -- We should be able to check functions as
-  // well (and therefore drop the `!TargetFunc` filter), but we're missing some
-  // Referenced constructors, so `hasAnyInferenceTargets` will fail for certain
-  // functions.
-  if (!TargetFunc && !isInferenceTarget(Definition) &&
-      !hasAnyInferenceTargets(ReferencedDecls))
-    return llvm::Error::success();
-
-  ASTContext &Ctx = Definition.getASTContext();
-  llvm::Expected<dataflow::AdornedCFG> ACFG =
-      dataflow::AdornedCFG::build(Definition, TargetStmt, Ctx);
-  if (!ACFG) return ACFG.takeError();
-
-  std::unique_ptr<dataflow::Solver> Solver = MakeSolver();
-  DataflowAnalysisContext AnalysisContext(*Solver);
-  Environment Env = TargetFunc ? Environment(AnalysisContext, *TargetFunc)
-                               : Environment(AnalysisContext, TargetStmt);
-  PointerNullabilityAnalysis Analysis(Ctx, Env, Pragmas);
-
-  std::unique_ptr<LocFilter> NotTestMainFileLocFilter =
-      getNotTestMainFileLocFilter(Ctx);
-
-  std::vector<InferableSlot> InferableSlots = gatherInferableSlots(
-      TypeNullabilityDefaults(Ctx, Pragmas), TargetFunc, TargetStmt,
-      ReferencedDecls, Analysis, AnalysisContext.arena(), USRCache,
-      NotTestMainFileLocFilter.get());
-
-  // Here, we overlay new knowledge from past iterations over the symbolic
-  // entities for the `InferableSlots` (whose symbols are invariant across
-  // inference iterations).
-  const auto &InferableSlotsConstraint = getConstraintsOnInferableSlots(
-      InferableSlots, PreviousInferences, AnalysisContext.arena());
-
-  ConcreteNullabilityCache ConcreteNullabilityCache;
-  Analysis.assignNullabilityOverride(
-      getConcreteNullabilityOverrideFromPreviousInferences(
-          ConcreteNullabilityCache, USRCache, PreviousInferences));
-
-  std::vector<
-      std::optional<dataflow::DataflowAnalysisState<PointerNullabilityLattice>>>
-      Results;
-  dataflow::CFGEltCallbacks<PointerNullabilityAnalysis> PostAnalysisCallbacks;
-  PostAnalysisCallbacks.Before =
-      [&](const CFGElement& Element,
-          const dataflow::DataflowAnalysisState<PointerNullabilityLattice>&
-              State) {
-        if (Solver->reachedLimit()) return;
-
-        EvidenceCollector Collector(InferableSlots, InferableSlotsConstraint,
-                                    State.Env, *Solver, Emit);
-        NullabilityBehaviorVisitor<EvidenceCollector>::visit(
-            InferableSlots, USRCache, State.Lattice, State.Env,
-            Ctx.getSourceManager(), Element, NotTestMainFileLocFilter.get(),
-            Collector);
-      };
-  if (llvm::Error Error = dataflow::runDataflowAnalysis(*ACFG, Analysis, Env,
-                                                        PostAnalysisCallbacks)
-                              .moveInto(Results))
-    return Error;
-
-  if (Results.empty()) return llvm::Error::success();
-
-  if (std::optional<dataflow::DataflowAnalysisState<PointerNullabilityLattice>>
-          &ExitBlockResult = Results[ACFG->getCFG().getExit().getBlockID()]) {
-    EvidenceCollector Collector(InferableSlots, InferableSlotsConstraint,
-                                ExitBlockResult->Env, *Solver, Emit);
-    collectEvidenceFromConstructorExitBlock(Definition, ExitBlockResult->Env,
-                                            USRCache, Collector);
-    collectEvidenceFromSupportedLateInitializerExitBlock(
-        Definition, ExitBlockResult->Env, USRCache, Collector);
+  auto It = TUIndex.Bases.find(OverrideUSR);
+  if (It == TUIndex.Bases.end()) return;
+  if (TUIndex.IsDefinedInTest.contains(OverrideUSR)) {
+    Summary.add_virtual_methods_defined_in_tests()->set_usr(OverrideUSR);
   }
-
-  if (Solver->reachedLimit()) {
-    return llvm::createStringError(llvm::errc::interrupted,
-                                   "SAT solver reached iteration limit");
+  // All overrides tracked in TUIndex are expected have at least one base. If
+  // that's not the case, we can still safely proceed, but it would be nice to
+  // find out.
+  DCHECK(!It->second.empty());
+  RelatedSymbols::SymbolSet& BasesInSummary =
+      (*Summary.mutable_overrides_to_bases()
+            ->mutable_related_symbols())[OverrideUSR];
+  for (const auto& [BaseUSR, _] : It->second) {
+    BasesInSummary.add_symbols()->set_usr(BaseUSR);
+    if (TUIndex.IsDefinedInTest.contains(BaseUSR)) {
+      Summary.add_virtual_methods_defined_in_tests()->set_usr(BaseUSR);
+    }
   }
-
-  return llvm::Error::success();
 }
 
-llvm::Expected<CFGSummary> summarizeDefinition(
-    const Decl &Definition, USRCache &USRCache,
-    const NullabilityPragmas &Pragmas, const SolverFactory &MakeSolver) {
+static void saveCFGScopeVirtualMethodIndex(
+    const dataflow::ReferencedDecls& ReferencedDecls,
+    const FunctionDecl* absl_nullable TargetFunc,
+    const VirtualMethodIndex& VirtualMethodsInTU, USRCache& Cache,
+    VirtualMethodIndexSummary& CFGVirtualMethodSummary) {
+  for (const FunctionDecl* ReferencedFunc : ReferencedDecls.Functions) {
+    summarizeFromTUIndexIfPresent(ReferencedFunc, VirtualMethodsInTU, Cache,
+                                  CFGVirtualMethodSummary);
+  }
+  summarizeFromTUIndexIfPresent(TargetFunc, VirtualMethodsInTU, Cache,
+                                CFGVirtualMethodSummary);
+}
+
+llvm::Expected<std::optional<CFGSummary>> summarizeDefinition(
+    const Decl& Definition, USRCache& USRCache,
+    const NullabilityPragmas& Pragmas,
+    const VirtualMethodIndex& VirtualMethodsInTU,
+    const SolverFactory& MakeSolver) {
   std::optional<DeclStmt> DeclStmtForVarDecl;
   llvm::Expected<Stmt *absl_nonnull> T =
       getTarget(Definition, DeclStmtForVarDecl);
@@ -3192,7 +3193,7 @@ llvm::Expected<CFGSummary> summarizeDefinition(
   // functions.
   if (!TargetFunc && !isInferenceTarget(Definition) &&
       !hasAnyInferenceTargets(ReferencedDecls))
-    return Summary;
+    return std::nullopt;
 
   ASTContext &Ctx = Definition.getASTContext();
   llvm::Expected<dataflow::AdornedCFG> ACFG =
@@ -3212,10 +3213,13 @@ llvm::Expected<CFGSummary> summarizeDefinition(
       TypeNullabilityDefaults(Ctx, Pragmas), TargetFunc, TargetStmt,
       ReferencedDecls, Analysis, AnalysisContext.arena(), USRCache,
       NotTestMainFileLocFilter.get());
-
   for (const auto &IS : InferableSlots) {
     *Summary.add_inferable_slots() = saveInferableSlot(IS);
   }
+
+  saveCFGScopeVirtualMethodIndex(ReferencedDecls, TargetFunc,
+                                 VirtualMethodsInTU, USRCache,
+                                 *Summary.mutable_virtual_method_index());
 
   llvm::DenseSet<Atom> UsedTokens;
   std::vector<
@@ -3239,10 +3243,10 @@ llvm::Expected<CFGSummary> summarizeDefinition(
                               .moveInto(Results))
     return Error;
 
-  // When `Results` are empty, the post-analysis callbacks should not have been
-  // called, so `Summary` should be empty. But, to be sure, explicitly return a
-  // fresh empty summary.
-  if (Results.empty()) return CFGSummary();
+  // When `Results` are empty, there's nothing to summarize and the
+  // post-analysis callbacks should not have been called, so `Summary` should be
+  // empty. Instead of returning an empty summary, don't return one.
+  if (Results.empty()) return std::nullopt;
 
   if (std::optional<dataflow::DataflowAnalysisState<PointerNullabilityLattice>>
           &ExitBlockResult = Results[ACFG->getCFG().getExit().getBlockID()]) {
@@ -3264,12 +3268,16 @@ llvm::Expected<CFGSummary> summarizeDefinition(
 
   *Summary.mutable_logical_context() =
       saveLogicalContext(std::move(UsedTokens), AnalysisContext);
+  SourceLocation Loc = Definition.getLocation();
+  if (Loc = Ctx.getSourceManager().getFileLoc(Loc); Loc.isValid())
+    Summary.set_definition_location(Loc.printToString(Ctx.getSourceManager()));
 
   if (Solver->reachedLimit()) {
     return llvm::createStringError(llvm::errc::interrupted,
                                    "SAT solver reached iteration limit");
   }
 
+  if (Summary.behavior_summaries_size() <= 0) return std::nullopt;
   return Summary;
 }
 
@@ -3278,7 +3286,13 @@ llvm::Error collectEvidenceFromSummary(
     const PreviousInferences &PreviousInferences,
     const SolverFactory &MakeSolver) {
   std::unique_ptr<dataflow::Solver> Solver = MakeSolver();
-  DataflowAnalysisContext AnalysisContext(*Solver);
+  DataflowAnalysisContext AnalysisContext(
+      *Solver,
+      // Use a null logger as:
+      // 1. We don't run the DataflowAnalysis to be able to tell the logger
+      //    about the beginAnalysis() and endAnalysis() events.
+      // 2. At this point, we don't have a CFG to pass to beginAnalysis().
+      DataflowAnalysisContext::Options{.Log = &dataflow::Logger::null()});
   llvm::DenseMap<unsigned, dataflow::Atom> AtomMap;
   llvm::Expected<dataflow::SimpleLogicalContext> Ctx = loadLogicalContext(
       Summary.logical_context(), AnalysisContext.arena(), AtomMap);
@@ -3368,7 +3382,7 @@ static void emitWellKnownNullability(const clang::FunctionDecl &Fn,
                                      llvm::function_ref<EvidenceEmitter> Emit,
                                      USRCache &USRCache) {
   if (Fn.isMain() && Fn.getNumParams() > 1) {
-    if (const auto *ArgvParam = Fn.getParamDecl(1)) {
+    if (const auto* ArgvParam = Fn.getParamDecl(1)) {
       wrappedEmit(Emit, USRCache, Fn, paramSlot(1),
                   Evidence::WELL_KNOWN_NONNULL, ArgvParam->getBeginLoc());
       // When we infer for nested pointers, we can add here that the inner

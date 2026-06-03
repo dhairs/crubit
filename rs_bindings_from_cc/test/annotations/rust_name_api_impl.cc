@@ -4,7 +4,6 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/annotations:rust_name
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #include "support/internal/cxx20_backports.h"
 #include "support/internal/offsetof.h"
@@ -23,7 +22,7 @@ extern "C" void __rust_thunk___ZN6crubit4test13FreeFnOldNameEv() {
   crubit::test::FreeFnOldName();
 }
 
-static_assert((void (*)())&crubit::test::FreeFnOldName);
+static_assert((void (*)()) & ::crubit::test::FreeFnOldName);
 
 static_assert(sizeof(struct crubit::test::StructOldName) == 1);
 static_assert(alignof(struct crubit::test::StructOldName) == 1);
@@ -54,6 +53,6 @@ extern "C" void __rust_thunk___ZNK6crubit4test10SomeStruct13MethodOldNameEv(
 }
 
 static_assert((void (::crubit::test::SomeStruct::*)() const) &
-              crubit::test::SomeStruct::MethodOldName);
+              ::crubit::test::SomeStruct::MethodOldName);
 
 #pragma clang diagnostic pop

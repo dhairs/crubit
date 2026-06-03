@@ -26,6 +26,15 @@ struct StructWithExplicitConversionConstructor final {
   int int_field;
 };
 
+struct StructWithMultipleConstructors final {
+  explicit StructWithMultipleConstructors(int i) : int_field(i) {}
+  explicit StructWithMultipleConstructors(int i, int j) : int_field(i + j) {}
+  explicit StructWithMultipleConstructors(int i, int j, int k)
+      : int_field(i + j + k) {}
+
+  int int_field;
+};
+
 struct StructWithImplicitConversionConstructor final {
   // Testing `impl From<int> for ...` when the constructor is *not* `explicit`.
   // NOLINTNEXTLINE(google-explicit-constructor)
@@ -95,6 +104,11 @@ struct NonTrivialStructWithConstructors final {
   ~NonTrivialStructWithConstructors();
 
   int int_field;
+};
+
+struct StructWithUnsafeConstructor final {
+  explicit StructWithUnsafeConstructor(int* p) : ptr_field(p) {}
+  int* ptr_field;
 };
 
 #endif  // CRUBIT_RS_BINDINGS_FROM_CC_TEST_STRUCT_CONSTRUCTORS_CONSTRUCTORS_H_

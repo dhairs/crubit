@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:overloads_unsupported_type_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 /// Tests that no bindings are generated when an overload set includes
@@ -42,11 +43,11 @@ impl Default for SomeClass {
     }
 }
 
-// Error while generating bindings for function 'Overload':
-// Cannot generate bindings for overloaded function
+// error: function `Overload` could not be bound
+//   Cannot generate bindings for overloaded function
 
-// Error while generating bindings for function 'Overload':
-// Cannot generate bindings for overloaded function
+// error: function `Overload` could not be bound
+//   Cannot generate bindings for overloaded function
 
 mod detail {
     #[allow(unused_imports)]

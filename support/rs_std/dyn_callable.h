@@ -2,17 +2,19 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+// IWYU pragma: private, include "support/rs_std/dyn_callable.h"
+
 #ifndef THIRD_PARTY_CRUBIT_SUPPORT_RS_STD_DYN_CALLABLE_H_
 #define THIRD_PARTY_CRUBIT_SUPPORT_RS_STD_DYN_CALLABLE_H_
 
 #include <cstddef>
-#include <cstdint>
 #include <cstring>
 #include <exception>
 #include <type_traits>
 #include <utility>
 
 #include "absl/base/nullability.h"
+#include "absl/functional/any_invocable.h"
 #include "support/bridge.h"
 
 namespace rs_std {
@@ -25,143 +27,116 @@ namespace internal_dyn_callable {
 template <class Sig>
 struct DynCallableAbi;
 
-// Storage for holding the `ZeroableCallable<dyn Trait>`.
-//
-// This type is only intended for passing around the in-memory representation,
-// and does not provide usable constructors / copy / move operations, etc.
-struct UnmanagedZeroableCallable {
-  void SetZero() {
-    repr[0] = 0;
-    repr[1] = 0;
-  }
-
-  // Check whether or not the DynCallable is in the empty state.
-  bool HasValue() const { return repr[0] != 0 && repr[1] != 0; }
-
-  uintptr_t repr[2] = {0, 0};
-};
-
-// A discriminator when calling the "manager" function that describes operation
-// type-erased operation should be invoked.
-//
-// This type is intended to be an ABI compatible duplicate of
-// `absl::internal_any_invocable::FunctionToCall`.
-enum class FunctionToCall : unsigned char {
-  dispose = 0,
-  relocate_from_to = 1,
-  relocate_from_to_and_query_rust = 2,
-};
-
-// The type for functions issuing lifetime-related operations: move and dispose.
-// When `do_dispose` is true, `from` is disposed and `to` is ignored.
-// When `do_dispose` is false, `from` is moved to `to`. When this happens,
-// `to` should already be empty.
-//
-// Note that while this type is useful by itself for Rust and Crubit purposes,
-// it serves the dual purpose that it can be reused verbatim within the
-// implementation details of absl::AnyInvocable.
-using ManagerType = void(FunctionToCall,
-                         UnmanagedZeroableCallable* absl_nonnull /*from*/,
-                         UnmanagedZeroableCallable* absl_nonnull /*to*/);
+// NOLINTBEGIN(abseil-no-internal-dependencies)
+using absl::internal_any_invocable::EmptyManager;
+using absl::internal_any_invocable::ForwardedParameterType;
+using absl::internal_any_invocable::FunctionToCall;
+using absl::internal_any_invocable::ManagerType;
+using absl::internal_any_invocable::TypeErasedState;
+// NOLINTEND(abseil-no-internal-dependencies)
 
 // Storage type for managing relocation and destruction of the
-// `ZeroableCallable<dyn Trait>` received from Rust.
-class ManagedZeroableCallable : protected UnmanagedZeroableCallable {
+// `Box<dyn Trait>` received from Rust.
+class ManagedCallable {
  protected:
-  explicit ManagedZeroableCallable(
-      UnmanagedZeroableCallable unmanaged_zeroable_callable,
-      ManagerType manager)
-      : UnmanagedZeroableCallable(unmanaged_zeroable_callable),
-        manager_(manager) {}
+  explicit ManagedCallable(TypeErasedState state,
+                           ManagerType* absl_nonnull manager)
+      : storage_(state), manager_(manager) {}
 
-  explicit ManagedZeroableCallable()
-      : manager_([](FunctionToCall, UnmanagedZeroableCallable*,
-                    UnmanagedZeroableCallable*) {}) {}
+  explicit ManagedCallable() : manager_(EmptyManager) {}
 
-  ~ManagedZeroableCallable() { manager_(FunctionToCall::dispose, this, this); }
-
-  ManagedZeroableCallable(ManagedZeroableCallable&) = delete;
-  ManagedZeroableCallable& operator=(ManagedZeroableCallable&) = delete;
-
-  ManagedZeroableCallable(ManagedZeroableCallable&& other) {
-    *this = std::forward<ManagedZeroableCallable>(other);
+  ~ManagedCallable() {
+    manager_(FunctionToCall::dispose, &this->storage_, &this->storage_);
   }
 
-  ManagedZeroableCallable& operator=(ManagedZeroableCallable&& other) {
+  ManagedCallable(ManagedCallable&) = delete;
+  ManagedCallable& operator=(ManagedCallable&) = delete;
+
+  ManagedCallable(ManagedCallable&& other) {
+    *this = std::forward<ManagedCallable>(other);
+  }
+
+  ManagedCallable& operator=(ManagedCallable&& other) {
     // Dispose this.
-    manager_(FunctionToCall::dispose, this, this);
+    manager_(FunctionToCall::dispose, &this->storage_, &this->storage_);
 
     // Move other into this.
-    other.manager_(FunctionToCall::relocate_from_to, /*from=*/&other,
-                   /*to=*/this);
+    other.manager_(FunctionToCall::relocate_from_to, /*from=*/&other.storage_,
+                   /*to=*/&this->storage_);
     manager_ = other.manager_;
 
-    // Put other in the moved-from state. Since the moved-from state is valid
-    // for moving and disposing, it may keep its manager.
-    other.SetZero();
+    // Remove the manager from other so it doesn't do anything on its
+    // now-invalid state.
+    other.manager_ = EmptyManager;
 
     return *this;
   }
 
+  TypeErasedState storage_;
   ManagerType* absl_nonnull manager_;
 };
 
 // The type for functions issuing the actual invocation of the object.
 // A pointer to such a function is contained in each DynCallable instance.
 template <class ReturnType, class... P>
-using InvokerType = ReturnType(UnmanagedZeroableCallable*, P...);
+using InvokerType = ReturnType(TypeErasedState*, ForwardedParameterType<P>...);
 
-// Partially specialized class that wraps ManagedZeroableCallable and handles
+// Partially specialized class that wraps ManagedCallable and handles
 // operator().
 template <class Sig>
 class Impl {};
 
 // Raises a fatal error when the DynCallable is invoked after a move.
 template <class ReturnType, class... P>
-inline ReturnType DefaultInvoker(UnmanagedZeroableCallable*, P...) {
+inline ReturnType InvokedAfterMove(TypeErasedState*,
+                                   ForwardedParameterType<P>...) {
   std::terminate();
 }
 
-#define CRUBIT_INTERNAL_RUST_ANY_CALLABLE_IMPL(qual)                          \
-  template <class ReturnType, class... P>                                     \
-  class Impl<ReturnType(P...) qual> : public ManagedZeroableCallable {        \
-   protected:                                                                 \
-    friend struct DynCallableAbi<ReturnType(P...) qual>;                      \
-    using InvokerType = InvokerType<ReturnType, P...>;                        \
-                                                                              \
-    explicit Impl(UnmanagedZeroableCallable unmanaged_zeroable_callable,      \
-                  ManagerType manager, InvokerType* invoker)                  \
-        : ManagedZeroableCallable(unmanaged_zeroable_callable, manager),      \
-          invoker_(invoker) {}                                                \
-                                                                              \
-   public:                                                                    \
-    Impl() = default;                                                         \
-    Impl(const Impl& other) = delete;                                         \
-    Impl& operator=(const Impl& other) = delete;                              \
-    Impl(Impl&& other) { *this = std::forward<Impl>(other); }                 \
-    Impl& operator=(Impl&& other) {                                           \
-      ManagedZeroableCallable::operator=(std::move(other));                   \
-      /*other may keep its invoker_, but invoking will safely panic in Rust*/ \
-      invoker_ = other.invoker_;                                              \
-      return *this;                                                           \
-    }                                                                         \
-                                                                              \
-    ReturnType operator()(P... args) qual {                                   \
-      using Self = std::remove_pointer_t<decltype(this)>;                     \
-                                                                              \
-      InvokerType* absl_nonnull invoker_copy = invoker_;                      \
-      if constexpr (std::is_rvalue_reference_v<Self>) {                       \
-        invoker_ = DefaultInvoker<ReturnType, P...>;                          \
-      }                                                                       \
-      if constexpr (std::is_const_v<Self>) {                                  \
-        return invoker_copy(const_cast<Impl*>(this), args...);                \
-      } else {                                                                \
-        return invoker_copy(this, args...);                                   \
-      }                                                                       \
-    }                                                                         \
-                                                                              \
-   private:                                                                   \
-    InvokerType* absl_nonnull invoker_ = DefaultInvoker<ReturnType, P...>;    \
+#define CRUBIT_INTERNAL_RUST_ANY_CALLABLE_IMPL(qual)                           \
+  template <class ReturnType, class... P>                                      \
+  class Impl<ReturnType(P...) qual> : public ManagedCallable {                 \
+   protected:                                                                  \
+    friend struct DynCallableAbi<ReturnType(P...) qual>;                       \
+    using InvokerType = InvokerType<ReturnType, P...>;                         \
+                                                                               \
+    explicit Impl(TypeErasedState state, ManagerType* absl_nonnull manager,    \
+                  InvokerType* invoker)                                        \
+        : ManagedCallable(state, manager), invoker_(invoker) {}                \
+                                                                               \
+   public:                                                                     \
+    Impl() = default;                                                          \
+    Impl(const Impl& other) = delete;                                          \
+    Impl& operator=(const Impl& other) = delete;                               \
+    Impl(Impl&& other) { *this = std::forward<Impl>(other); }                  \
+    Impl& operator=(Impl&& other) {                                            \
+      ManagedCallable::operator=(std::move(other));                            \
+      invoker_ = other.invoker_;                                               \
+      other.invoker_ = nullptr;                                                \
+      return *this;                                                            \
+    }                                                                          \
+                                                                               \
+    ReturnType operator()(P... args) qual {                                    \
+      using QualifiedTestType = int qual;                                      \
+                                                                               \
+      InvokerType* invoker_copy = invoker_;                                    \
+      if constexpr (std::is_rvalue_reference_v<QualifiedTestType>) {           \
+        invoker_ = InvokedAfterMove<ReturnType, P...>;                         \
+        manager_ = EmptyManager;                                               \
+      }                                                                        \
+      if constexpr (std::is_const_v<QualifiedTestType>) {                      \
+        return invoker_copy(&const_cast<Impl*>(this)->storage_,                \
+                            std::forward<ForwardedParameterType<P>>(args)...); \
+      } else {                                                                 \
+        return invoker_copy(&this->storage_,                                   \
+                            std::forward<ForwardedParameterType<P>>(args)...); \
+      }                                                                        \
+    }                                                                          \
+                                                                               \
+    bool HasValue() const { return invoker_ != nullptr; }                      \
+                                                                               \
+   protected:                                                                  \
+    InvokerType* invoker_ = nullptr;                                           \
   };
 
 CRUBIT_INTERNAL_RUST_ANY_CALLABLE_IMPL(const)
@@ -170,6 +145,14 @@ CRUBIT_INTERNAL_RUST_ANY_CALLABLE_IMPL(&&)
 
 #undef CRUBIT_INTERNAL_RUST_ANY_CALLABLE_IMPL
 
+// The ABI contract for `DynCallableAbi<F>` varies between Rust -> C++, and C++
+// -> Rust.
+//
+// When sending from Rust to C++, the value is encoded as `Box<dyn F>`.
+//
+// When sending from C++ to Rust, the value is encoded as a bool indicating
+// whether the value is present. If present, the bool is followed by the
+// `Box<dyn F>`.
 template <class Sig>
 struct DynCallableAbi {
   using Value = DynCallable<Sig>;
@@ -177,20 +160,27 @@ struct DynCallableAbi {
   static constexpr size_t kSize = 24;
 
   void Encode(Value value, crubit::Encoder& encoder) && {
-    crubit::TransmuteAbi<UnmanagedZeroableCallable>().Encode(value.state,
-                                                             encoder);
+    // Encode whether true if the value is present, false if it's in the
+    // moved-from state.
+    crubit::TransmuteAbi<bool>().Encode(static_cast<bool>(value), encoder);
+    if (value) {
+      // If present, encode the state.
+      crubit::TransmuteAbi<TypeErasedState>().Encode(value.storage_, encoder);
+    }
+    // Remove the manager since the value is moved-from.
+    value.manager_ = EmptyManager;
   }
 
   Value Decode(crubit::Decoder& decoder) && {
-    auto unmanaged_zero_callable =
-        crubit::TransmuteAbi<UnmanagedZeroableCallable>().Decode(decoder);
-    auto manager = crubit::TransmuteAbi<ManagerType*>().Decode(decoder);
-    return DynCallable<Sig>(unmanaged_zero_callable, manager, invoker);
+    auto state = crubit::TransmuteAbi<TypeErasedState>().Decode(decoder);
+    return DynCallable<Sig>(state, manager, invoker);
   }
 
-  explicit DynCallableAbi(Value::Impl::InvokerType* invoker)
-      : invoker(invoker) {}
+  explicit DynCallableAbi(ManagerType* absl_nonnull manager,
+                          Value::Impl::InvokerType* invoker)
+      : manager(manager), invoker(invoker) {}
 
+  ManagerType* absl_nonnull manager;
   Value::Impl::InvokerType* invoker;
 };
 
@@ -229,19 +219,15 @@ class DynCallable : private internal_dyn_callable::Impl<Sig> {
 
   // Private constructor, only intended to be called by DynCallableAbi<Sig>.
   //
-  // * `unmanaged_zeroable_callable` should either be zeros, or be a verbatim
-  //   memcpy of the representation of `Box<dyn Trait>` in Rust, e.g., two
-  //   pointers because it is a wide pointer with a vtable pointer as the
-  //   metadata.
+  // * `state` is a two pointers containing the `Box<dyn Trait>` from Rust.
   // * `manager` is a function pointer with the `ManagerType` signature, and
-  //   knows how to move and dispose of the `unmanaged_zeroable_callable`.
+  //   knows how to move and dispose `state`.
   // * `invoker` is a C++ function pointer that knows how to invoke the
   //   `Box<dyn Trait>`.
-  explicit DynCallable(internal_dyn_callable::UnmanagedZeroableCallable
-                           unmanaged_zeroable_callable,
-                       internal_dyn_callable::ManagerType manager,
+  explicit DynCallable(internal_dyn_callable::TypeErasedState state,
+                       internal_dyn_callable::ManagerType* absl_nonnull manager,
                        Impl::InvokerType* invoker)
-      : Impl(unmanaged_zeroable_callable, manager, invoker) {}
+      : Impl(state, manager, invoker) {}
 
  public:
   // Constructors
@@ -276,6 +262,15 @@ class DynCallable : private internal_dyn_callable::Impl<Sig> {
   explicit operator bool() const noexcept { return this->HasValue(); }
 
   using Impl::operator();
+
+  // NOLINTNEXTLINE(google-explicit-constructor)
+  operator absl::AnyInvocable<Sig>() && {
+    auto* manager = this->manager_;
+    auto* invoker = this->invoker_;
+    this->manager_ = internal_dyn_callable::EmptyManager;
+    this->invoker_ = nullptr;
+    return absl::AnyInvocable<Sig>(&this->storage_, manager, invoker);
+  }
 
   // Returns `true` if `f` is empty.
   friend bool operator==(const DynCallable& f, std::nullptr_t) noexcept {

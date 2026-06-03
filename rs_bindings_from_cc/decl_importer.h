@@ -15,17 +15,22 @@
 #include "absl/container/flat_hash_set.h"
 #include "absl/log/check.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/string_view.h"
 #include "absl/types/span.h"
 #include "lifetime_annotations/lifetime_annotations.h"
 #include "lifetime_annotations/type_lifetimes.h"
 #include "rs_bindings_from_cc/bazel_types.h"
 #include "rs_bindings_from_cc/ir.h"
+#include "clang/AST/Decl.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/DeclTemplate.h"
+#include "clang/AST/DeclarationName.h"
 #include "clang/AST/RawCommentList.h"
 #include "clang/AST/Type.h"
 #include "clang/Basic/SourceLocation.h"
 #include "clang/Sema/Sema.h"
+#include "llvm/ADT/SmallVector.h"
+#include "llvm/Support/Regex.h"
 
 namespace crubit {
 
@@ -35,13 +40,20 @@ class Invocation {
   Invocation(
       BazelLabel target, absl::Span<const HeaderName> public_headers,
       const absl::flat_hash_map<HeaderName, BazelLabel>& header_targets,
-      std::optional<absl::flat_hash_set<std::string>> do_not_bind_allowlist)
+      std::optional<absl::flat_hash_set<std::string>> do_not_bind_allowlist,
+      absl::flat_hash_map<BazelLabel, absl::flat_hash_set<std::string>>
+          crubit_features,
+      bool kythe_annotations,
+      std::shared_ptr<const llvm::Regex> template_blocklist_path_regex)
       : target_(target),
         public_headers_(public_headers),
         lifetime_context_(std::make_shared<
                           clang::tidy::lifetimes::LifetimeAnnotationContext>()),
         do_not_bind_allowlist_(std::move(do_not_bind_allowlist)),
-        header_targets_(header_targets) {
+        header_targets_(header_targets),
+        kythe_annotations_(kythe_annotations),
+        template_blocklist_path_regex_(
+            std::move(template_blocklist_path_regex)) {
     // Caller should verify that the inputs are non-empty.
     CHECK(!public_headers_.empty());
     CHECK(!header_targets_.empty());
@@ -49,6 +61,7 @@ class Invocation {
     ir_.public_headers.insert(ir_.public_headers.end(), public_headers_.begin(),
                               public_headers.end());
     ir_.current_target = target_;
+    ir_.crubit_features = std::move(crubit_features);
   }
 
   // Returns the target of a header, if any.
@@ -73,8 +86,45 @@ class Invocation {
   // The main output of the import process
   IR ir_;
 
+  // Returns whether to record extra location information for Kythe annotations.
+  bool kythe_annotations() const { return kythe_annotations_; }
+
+  // Returns true if we should instantiate a template defined at `loc`.
+  // (`loc` is the definition location of the primary or partial template,
+  // *not* the location causing the instantiation to occur.) Fails open;
+  // that is, we only will reject a location if we can get a positive match.
+  bool should_instantiate_template_from_path(
+      const clang::SourceManager& source_manager,
+      clang::SourceLocation loc) const {
+    if (template_blocklist_path_regex_ == nullptr) {
+      return true;
+    }
+    if (loc.isInvalid()) {
+      return true;
+    }
+    loc = source_manager.getSpellingLoc(loc);
+    if (loc.isInvalid()) {
+      return true;
+    }
+    absl::string_view path = source_manager.getFilename(loc);
+    if (path.empty()) {
+      return true;
+    }
+    llvm::SmallVector<llvm::StringRef, 4> captures;
+    return !(template_blocklist_path_regex_->match(path, &captures)
+                 ? captures[0].size() == path.size()
+                 : false);
+  }
+
  private:
   const absl::flat_hash_map<HeaderName, BazelLabel>& header_targets_;
+
+  // Whether to record extra location information for Kythe annotations.
+  bool kythe_annotations_;
+
+  // If non-null, a regex that matches the paths of definition files of
+  // templates that should not be instantiated.
+  std::shared_ptr<const llvm::Regex> template_blocklist_path_regex_;
 };
 
 // Explicitly defined interface that defines how `DeclImporter`s are allowed to
@@ -94,15 +144,27 @@ class ImportContext {
   // generation time.
   virtual IR::Item HardError(const clang::Decl& decl, FormattedError error) = 0;
 
-  // Imports an unsupported function with a vector of formatted error messages.
+  // Imports an unsupported item with a vector of formatted error messages.
+  //
+  // `is_hard_error` determines the effect of the error:
+  // If true, a failure to bind this item is treated as a fatal error that fails
+  // the entire binding generation process (e.g. due to
+  // `[[crubit::must_bind]]`). If false, the error is instead emitted as a
+  // comment in the generated Rust source, allowing the rest of the target's
+  // bindings to be generated.
   virtual IR::Item ImportUnsupportedItem(
       const clang::Decl& decl, std::optional<UnsupportedItem::Path> path,
-      std::vector<FormattedError> error) = 0;
+      std::vector<FormattedError> errors, bool is_hard_error) = 0;
 
-  // Imports an unsupported item with a single formatted error message.
-  virtual IR::Item ImportUnsupportedItem(
-      const clang::Decl& decl, std::optional<UnsupportedItem::Path> path,
-      FormattedError error) = 0;
+  // Convenience wrapper for `ImportUnsupportedItem` with `is_hard_error=false`.
+  // This results in a diagnostic comment in the generated Rust code rather than
+  // a build failure.
+  IR::Item ImportUnsupportedItem(const clang::Decl& decl,
+                                 std::optional<UnsupportedItem::Path> path,
+                                 std::vector<FormattedError> errors) {
+    return ImportUnsupportedItem(decl, std::move(path), std::move(errors),
+                                 /*is_hard_error=*/false);
+  }
 
   // Imports a decl and creates an IR item (or error messages). This allows
   // importers to recursively delegate to other importers.
@@ -161,6 +223,37 @@ class ImportContext {
   // other redeclarations of the decl.
   virtual bool IsFromProtoTarget(const clang::Decl& decl) const = 0;
 
+  // Returns true iff `label` has opted in to crubit support.
+  virtual bool IsCrubitEnabledForTarget(const BazelLabel& label) const = 0;
+
+  // Returns true iff lifetime annotations in `label` should be recorded as
+  // raw in the IR for later processing.
+  virtual bool AreAssumedLifetimesEnabledForTarget(
+      const BazelLabel& label) const = 0;
+
+  // Returns true iff `label` has opted in to marking classes with
+  // `[[gsl::Pointer]]` as unsafe.
+  virtual bool IsUnsafeViewEnabledForTarget(const BazelLabel& label) const = 0;
+
+  virtual bool IsFeatureEnabledForTarget(const BazelLabel& label,
+                                         absl::string_view feature) const = 0;
+
+  bool IsFeatureEnabledForCurrentTarget(absl::string_view feature) {
+    return IsFeatureEnabledForTarget(invocation_.target_, feature);
+  }
+
+  // Returns whether the given `decl`'s type has a detectable formatter.
+  //
+  // Either finds the `CRUBIT_OVERRIDE_DISPLAY` annotation or attempts to infer
+  // formatability, per the documentation of `CRUBIT_OVERRIDE_DISPLAY`.
+  //
+  // Fails if `CRUBIT_OVERRIDE_DISPLAY` is:
+  // * declared inconsistently.
+  // * declared with no or more than one argument.
+  // * declared with a non-bool value.
+  virtual absl::StatusOr<bool> DetectFormatter(
+      const clang::TypeDecl& decl) const = 0;
+
   // Gets an IR UnqualifiedIdentifier for the named decl.
   //
   // If the decl's name is an identifier, this returns that identifier as-is.
@@ -181,9 +274,10 @@ class ImportContext {
   virtual std::optional<std::string> GetComment(
       const clang::Decl* decl) const = 0;
 
-  // Converts a Clang source location to IR.
+  // Converts a Clang source location to IR. `name_info` may be null.
   virtual std::string ConvertSourceLocation(
-      clang::SourceLocation loc) const = 0;
+      clang::SourceLocation loc,
+      clang::DeclarationNameInfo* name_info) const = 0;
 
   // Converts the Clang type `qual_type` into an equivalent `CcType`.
   // Lifetimes for the type can optionally be specified using `lifetimes` (pass
@@ -198,10 +292,17 @@ class ImportContext {
   // nullability annotations. Today, the only caller that passes in
   // `nullable=false` is the code that handles the `this` parameter type for
   // methods, which is always a pointer that cannot be null.
-  virtual absl::StatusOr<CcType> ConvertQualType(
+  // If `assume_lifetimes` is true, then any explicit lifetime variables
+  // (as arguments or parameters) will be recorded.
+  virtual CcType ConvertQualType(
       clang::QualType qual_type,
-      const clang::tidy::lifetimes::ValueLifetimes* lifetimes,
-      bool nullable = true) = 0;
+      const clang::tidy::lifetimes::ValueLifetimes* lifetimes, bool nullable,
+      bool assume_lifetimes) = 0;
+
+  // Returns a unique name for the given decl. (Probably the USR.)
+  //
+  // This should be unique for all items declared by a given Bazel target.
+  virtual std::string GetUniqueName(const clang::Decl& decl) const = 0;
 
   // Marks `decl` as successfully imported.  Other pieces of code can check
   // HasBeenAlreadySuccessfullyImported to avoid introducing dangling ItemIds
@@ -220,6 +321,11 @@ class ImportContext {
   // MarkAsSuccessfullyImported.
   virtual bool EnsureSuccessfullyImported(clang::NamedDecl* decl) = 0;
 
+  // Returns the canonical typedef for this template specialziation, or nullptr
+  // if there is not one (or if this is not a template specialization).
+  virtual clang::TypedefNameDecl* GetTemplateSpecializationAlias(
+      clang::Decl* decl) const = 0;
+
   Invocation& invocation_;
   clang::ASTContext& ctx_;
   clang::Sema& sema_;
@@ -236,7 +342,7 @@ class DeclImporter {
   // If it can't be imported, other DeclImporters may be attempted.
   // To indicate that an item can't be imported, and no other importers should
   // be attempted, return UnsupportedItem.
-  virtual std::optional<IR::Item> ImportDecl(clang::Decl*) = 0;
+  virtual std::optional<IR::Item> ImportDecl(clang::Decl*, bool must_bind) = 0;
 
  protected:
   ImportContext& ictx_;
@@ -250,12 +356,18 @@ class DeclImporterBase : public DeclImporter {
   explicit DeclImporterBase(ImportContext& context) : DeclImporter(context) {}
 
  protected:
-  std::optional<IR::Item> ImportDecl(clang::Decl* decl) override {
+  std::optional<IR::Item> ImportDecl(clang::Decl* decl,
+                                     bool must_bind) override {
     auto* typed_decl = clang::dyn_cast<D>(decl);
     if (typed_decl == nullptr) return std::nullopt;
+    must_bind_ = must_bind;
     return Import(typed_decl);
   }
   virtual std::optional<IR::Item> Import(D*) = 0;
+
+  // A property of the current decl being imported.
+  // This is used to avoid re-parsing the annotation.
+  bool must_bind_ = false;
 };
 
 }  // namespace crubit

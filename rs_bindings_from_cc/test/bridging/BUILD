@@ -13,6 +13,8 @@ load(
     "additional_rust_srcs_for_crubit_bindings",
 )
 
+licenses(["notice"])
+
 rust_library(
     name = "rust_library",
     srcs = ["rust_library.rs"],
@@ -21,34 +23,6 @@ rust_library(
 cc_bindings_from_rust(
     name = "rust_library_cc",
     crate = ":rust_library",
-)
-
-cc_library(
-    name = "bridging_lib",
-    hdrs = ["bridging_lib.h"],
-    aspect_hints = [
-        "//features:experimental",
-        ":converter",
-    ],
-    deps = [
-        "//support/public:bindings_support",  # build_cleaner: keep
-    ],
-)
-
-additional_rust_srcs_for_crubit_bindings(
-    name = "converter",
-    srcs = ["converter.rs"],
-)
-
-crubit_rust_test(
-    name = "test",
-    srcs = ["test.rs"],
-    cc_deps = [
-        ":bridging_lib",
-    ],
-    deps = [
-        "@crate_index//:googletest",
-    ],
 )
 
 cc_library(
@@ -89,6 +63,7 @@ cc_library(
         "//support/rs_std:slice_ref",
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/types:span",
     ],
 )
 

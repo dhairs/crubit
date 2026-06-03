@@ -4,12 +4,13 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // arrays_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #![allow(unused_unsafe, deprecated, non_snake_case, unreachable_code)]
 #![allow(improper_ctypes_definitions)]
 #![deny(warnings)]
 
+extern crate alloc;
+extern crate core;
 const _: () = assert!(::std::mem::size_of::<::arrays_golden::ArrayStruct>() == 8);
 const _: () = assert!(::std::mem::align_of::<::arrays_golden::ArrayStruct>() == 4);
 #[unsafe(no_mangle)]
@@ -181,5 +182,26 @@ unsafe extern "C" fn __crubit_thunk_function_uwith_unested_udrop_udefault_uarray
         let array = array.assume_init_read();
         let __rs_return_value = ::arrays_golden::function_with_nested_drop_default_arrays(array);
         (__ret_ptr as *mut [[::arrays_golden::HasDropAndDefault; 2]; 2]).write(__rs_return_value);
+    }
+}
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_function_uwith_utuple_uarray_uid(
+    tup_array: &'static mut ::core::mem::MaybeUninit<[(i32, i32); 2]>,
+    __ret_ptr: *mut core::ffi::c_void,
+) -> () {
+    unsafe {
+        let tup_array = tup_array.assume_init_read();
+        let __rs_return_value = ::arrays_golden::function_with_tuple_array_id(tup_array);
+        (__ret_ptr as *mut [(i32, i32); 2]).write(__rs_return_value);
+    }
+}
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_default(__ret_ptr: *mut core::ffi::c_void) -> () {
+    unsafe {
+        let __rs_return_value = <(i32, i32) as ::core::default::Default>::default();
+        let (__rs_return_value_0, __rs_return_value_1) = __rs_return_value;
+        let [__ret_ptr_0, __ret_ptr_1] = *(__ret_ptr as *mut [*mut core::ffi::c_void; 2usize]);
+        (__ret_ptr_0 as *mut i32).write(__rs_return_value_0);
+        (__ret_ptr_1 as *mut i32).write(__rs_return_value_1);
     }
 }

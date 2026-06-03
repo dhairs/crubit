@@ -41,3 +41,31 @@ const _: () = {
     assert_impl_all!(c_longlong: From<i8>, From<u8>, From<i16>, From<i32>, From<i64>, From<c_schar>, From<c_short>, From<c_int>, From<c_long>);
     assert_impl_all!(c_ulonglong: From<u8>, From<u16>, From<u32>, From<u64>, From<c_uchar>, From<c_ushort>, From<c_uint>, From<c_ulong>);
 };
+
+#[test] //allow_core_test
+fn test_cast() {
+    let string = c"Hello, world!";
+    let ffi_11_str_ptr = string.as_ffi_11_ptr();
+
+    assert_eq!(ffi_11_str_ptr.cast_ffi_11(), string.as_ptr());
+    unsafe {
+        assert_eq!(core::ffi::CStr::from_ffi_11_ptr(ffi_11_str_ptr), string);
+    }
+}
+
+#[test]
+fn test_new() {
+    const _: c_float = new_c_float(0.0);
+    const _: c_double = new_c_double(0.0);
+    const _: c_char = new_c_char(0);
+    const _: c_schar = new_c_schar(0);
+    const _: c_uchar = new_c_uchar(0);
+    const _: c_short = new_c_short(0);
+    const _: c_ushort = new_c_ushort(0);
+    const _: c_int = new_c_int(0);
+    const _: c_uint = new_c_uint(0);
+    const _: c_long = new_c_long(0);
+    const _: c_ulong = new_c_ulong(0);
+    const _: c_longlong = new_c_longlong(0);
+    const _: c_ulonglong = new_c_ulonglong(0);
+}

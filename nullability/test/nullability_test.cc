@@ -36,7 +36,7 @@
 #include "nullability/pointer_nullability_analysis.h"
 #include "nullability/pointer_nullability_lattice.h"
 #include "nullability/pragma.h"
-#include "nullability/test/test_headers.h"
+#include "nullability/test/mock_headers.h"
 #include "nullability/type_nullability.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/ASTTypeTraits.h"
@@ -65,7 +65,6 @@
 #include "clang/Tooling/CompilationDatabase.h"
 #include "clang/Tooling/StandaloneExecution.h"
 #include "clang/Tooling/Tooling.h"
-#include "llvm/ADT/ArrayRef.h"
 #include "llvm/ADT/DenseMap.h"
 #include "llvm/ADT/STLExtras.h"
 #include "llvm/ADT/SmallString.h"
@@ -229,11 +228,13 @@ std::optional<StringRef> getSymbolicID(TemplateDecl *TD) {
 }
 
 // We've seen a type<T>(expr) assertion, extract the nullability vector for T.
-TypeNullability getAssertedTypeNullability(QualType T, SymbolicMap &Symbolic,
-                                           dataflow::Arena &A) {
+TypeNullability getAssertedTypeNullability(QualType T, SymbolicMap& Symbolic,
+                                           dataflow::Arena& A,
+                                           const ASTContext& Ctx) {
   // As a special case, we do not respect pragmas to interpret types within a
   // type<...> assertion. Doing so would on balance make tests less clear.
-  TypeNullabilityDefaults EmptyDefaults;
+  NullabilityPragmas EmptyPragmas;
+  TypeNullabilityDefaults EmptyDefaults(Ctx, EmptyPragmas);
   return getTypeNullability(
       T, FileID(), EmptyDefaults,
       // Given type< symbolic::X<int* _Nullable*> *_Nonnull >(...)
@@ -242,7 +243,7 @@ TypeNullability getAssertedTypeNullability(QualType T, SymbolicMap &Symbolic,
       // We know symbolic::X<T>'s definition is T. When we see the substitution
       // of int* _Nullable* into T, we find its vector [Unspecified, Nullable]
       // and replace the outer nullability for the symbolic one.
-      [&](const SubstTemplateTypeParmType *T)
+      [&](const SubstTemplateTypeParmType* T)
           -> std::optional<TypeNullability> {
         if (auto ID =
                 getSymbolicID(dyn_cast<TemplateDecl>(T->getAssociatedDecl()))) {
@@ -253,7 +254,8 @@ TypeNullability getAssertedTypeNullability(QualType T, SymbolicMap &Symbolic,
             // Create a variable now so we have something to assert against.
             // That way the test will fail with a reasonable error message.
             Sym = Symbolic[*ID] = PointerTypeNullability::createSymbolic(A);
-          auto Result = getAssertedTypeNullability(T->desugar(), Symbolic, A);
+          auto Result =
+              getAssertedTypeNullability(T->desugar(), Symbolic, A, Ctx);
           Result.front() = Sym;
           return Result;
         }
@@ -271,13 +273,13 @@ void diagnoseCall(const CallExpr &CE, const ASTContext &Ctx, Diagnoser &Diags,
                               Got);
   }
   if (auto Want = getAssertedType(CE); Want && CE.getNumArgs() == 1) {
-    auto &Got = *CE.getArgs()[0];
+    auto& Got = *CE.getArgs()[0];
     auto WantCanon = Ctx.getCanonicalType(*Want);
     auto GotCanon = Ctx.getCanonicalType(Got.getType());
     auto WantNulls = getAssertedTypeNullability(
-        *Want, Symbolic, State.Env.getDataflowAnalysisContext().arena());
+        *Want, Symbolic, State.Env.getDataflowAnalysisContext().arena(), Ctx);
     TypeNullability GotNulls = unspecifiedNullability(&Got);
-    if (const auto *GN = State.Lattice.getTypeNullability(&Got)) GotNulls = *GN;
+    if (const auto* GN = State.Lattice.getTypeNullability(&Got)) GotNulls = *GN;
     Diags.diagnoseType(CE.getBeginLoc(), Got.getSourceRange(), WantCanon,
                        GotCanon, WantNulls, GotNulls);
   }
@@ -642,9 +644,9 @@ int main(int argc, const char **argv) {
     exit(1);
   }
   clang::tooling::StandaloneToolExecutor Executor{*CDB, Sources};
-  for (const auto &Entry :
-       llvm::ArrayRef(test_headers_create(), test_headers_size()))
-    Executor.mapVirtualFile(Entry.name, Entry.data);
+  auto Headers = clang::tidy::nullability::test::getMockHeaders();
+  for (const auto& Entry : Headers)
+    Executor.mapVirtualFile(Entry.first, Entry.second);
   // Run in C++17 and C++20 mode to cover differences in the AST between modes
   // (e.g. C++20 can contain `CXXRewrittenBinaryOperator`).
   for (const char *CxxMode : {"-std=c++17", "-std=c++20"})

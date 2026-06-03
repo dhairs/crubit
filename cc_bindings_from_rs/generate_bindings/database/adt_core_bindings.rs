@@ -29,7 +29,7 @@ use std::hash::{Hash, Hasher};
 #[derive(Clone)]
 pub struct AdtCoreBindings<'tcx> {
     /// DefId of the ADT.
-    pub def_id: DefId,
+    pub def_id: Option<DefId>,
 
     /// C++ tag - e.g. `struct`, `class`, `enum`, or `union`.  This isn't always
     /// a direct mapping from Rust (e.g. a Rust `enum` might end up being
@@ -47,6 +47,7 @@ pub struct AdtCoreBindings<'tcx> {
     /// Rust spelling of the ADT type - e.g.
     /// `::some_crate::some_module::SomeStruct`.
     pub rs_fully_qualified_name: TokenStream,
+    pub cc_fully_qualified_name: TokenStream,
 
     pub self_ty: Ty<'tcx>,
     pub alignment_in_bytes: u64,
@@ -56,7 +57,7 @@ pub struct AdtCoreBindings<'tcx> {
 // AdtCoreBindings are a pure (and memoized...) function of the def_id.
 impl PartialEq for AdtCoreBindings<'_> {
     fn eq(&self, other: &Self) -> bool {
-        self.def_id == other.def_id
+        self.def_id == other.def_id && self.self_ty == other.self_ty
     }
 }
 
@@ -64,6 +65,7 @@ impl Eq for AdtCoreBindings<'_> {}
 impl Hash for AdtCoreBindings<'_> {
     fn hash<H: Hasher>(&self, state: &mut H) {
         self.def_id.hash(state);
+        self.self_ty.hash(state);
     }
 }
 
@@ -72,10 +74,33 @@ impl Hash for AdtCoreBindings<'_> {
 // See discussion on http://cl/828812151 for why the type is in this crate/module, not the one that
 // defines BindingsGenerator.
 #[derive(Clone)]
-pub struct NoMoveOrAssign {
+pub struct NoMoveOrAssign<'tcx> {
     /// An error explaining why we didn't generate the special member functions.
     pub err: arc_anyhow::Error,
 
     /// Snippets containing explicitly deleted declarations.
-    pub explicitly_deleted: ApiSnippets,
+    pub explicitly_deleted: ApiSnippets<'tcx>,
+}
+
+/// The style of copy constructor and assignment operator to generate for an ADT.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum CopyCtorStyle {
+    // The type is copy and can use the default C++ copy constructor and assignment operator.
+    Copy,
+    // The type is clone and needs to call a clone thunk in the copy constructor and assignment
+    // operator.
+    Clone,
+}
+
+// The style of move constructor and assignment operator to generate for an ADT.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum MoveCtorStyle {
+    // The type does not require drop glue and can be moved by the default C++ move constructor and
+    // assignment operator.
+    Default,
+    // The type is Default (and Unpin) and can be moved using MemSwap and std::move.
+    MemSwap,
+    // The type cannot be moved but has a copy constructor and assignment operator that are used in
+    // lieu of the move constructor and assignment operator.
+    Copy,
 }

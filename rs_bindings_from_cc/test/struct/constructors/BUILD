@@ -2,6 +2,10 @@
 
 load("//common:crubit_wrapper_macros_oss.bzl", "crubit_rust_test")
 load("//rs_bindings_from_cc/test:test_bindings.bzl", "crubit_test_cc_library")
+load(
+    "//rs_bindings_from_cc/test/golden:golden_test.bzl",
+    "golden_test",
+)
 
 package(default_applicable_licenses = ["//:license"])
 
@@ -13,11 +17,28 @@ crubit_test_cc_library(
     aspect_hints = ["//features:experimental"],
 )
 
+crubit_test_cc_library(
+    name = "span_constructors",
+    hdrs = ["span_constructors.h"],
+    # operator lifetime inference and ctor
+    aspect_hints = ["//features:experimental"],
+    deps = ["@abseil-cpp//absl/types:span"],
+)
+
+golden_test(
+    name = "constructors_golden_test",
+    basename = "constructors",
+    cc_library = ":constructors",
+    golden_cc = "constructors_api_impl.cc",
+    golden_rs = "constructors_rs_api.rs",
+)
+
 crubit_rust_test(
     name = "constructors_test",
     srcs = ["test.rs"],
     cc_deps = [
         ":constructors",
+        ":span_constructors",
     ],
     deps = [
         "//support:ctor",

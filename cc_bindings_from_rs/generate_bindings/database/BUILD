@@ -2,6 +2,10 @@ load(
     "@rules_rust//rust:defs.bzl",
     "rust_library",
 )
+load(
+    "//common:crubit_wrapper_macros_oss.bzl",
+    "LLVM_UNSTABLE_ONLY",
+)
 
 package(
     default_applicable_licenses = ["//:license"],
@@ -19,7 +23,7 @@ rust_library(
         "fully_qualified_name.rs",
         "include_guard.rs",
         "lib.rs",
-        "sugared_ty.rs",
+        "static_method_mode.rs",
         "type_location.rs",
     ],
     # LINT.IfChange

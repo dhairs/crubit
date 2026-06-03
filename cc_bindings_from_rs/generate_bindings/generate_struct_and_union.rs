@@ -7,37 +7,50 @@ extern crate rustc_hir;
 extern crate rustc_middle;
 extern crate rustc_span;
 
+use crate::avoid_colliding_types::{AvoidCollidingTypes, TypeCollisionRisk};
 use crate::format_cc_ident;
 use crate::format_type::CcParamTy;
 use crate::generate_doc_comment;
-use crate::generate_function::{generate_thunk_call, Param};
-use crate::{
-    crate_features, generate_const, generate_deprecated_tag, generate_must_use_tag,
-    generate_trait_thunks, generate_unsupported_def, get_layout, get_scalar_int_type,
-    get_tag_size_with_padding, is_bridged_type, is_copy, RsSnippet, SortedByDef, TraitThunks,
+use crate::generate_function::{
+    cc_param_to_c_abi, format_variant_ctor_cc_name, generate_thunk_call, Param, ThunkSelfParameter,
 };
+use crate::generate_function_thunk::{
+    generate_thunk_decl, generate_thunk_impl, replace_all_regions_with_static,
+};
+use crate::{
+    generate_const, generate_deprecated_tag, generate_must_use_tag, generate_trait_thunks,
+    generate_unsupported_def, get_layout, get_scalar_int_type, get_tag_size_with_padding,
+    is_bridged_type, is_copy, BridgedBuiltin, RsSnippet, SortedByDef, TraitThunks,
+};
+
 use arc_anyhow::{Context, Result};
 use code_gen_utils::{expect_format_cc_type_name, make_rs_ident, CcInclude};
 use database::code_snippet::{ApiSnippets, CcPrerequisites, CcSnippet};
-use database::{AdtCoreBindings, BindingsGenerator, SugaredTy, TypeLocation};
+use database::{AdtCoreBindings, BindingsGenerator, StaticMethodMode, TypeLocation};
 use error_report::{anyhow, bail, ensure};
 use itertools::Itertools;
 use proc_macro2::{Ident, Literal, TokenStream};
-use query_compiler::post_analysis_typing_env;
+use query_compiler::{
+    is_c_abi_compatible_by_value, liberate_and_deanonymize_late_bound_regions,
+    post_analysis_typing_env, try_normalize,
+};
 use quote::{format_ident, quote};
-use rustc_abi::{FieldsShape, VariantIdx, Variants};
-use rustc_hir::attrs::AttributeKind;
-use rustc_hir::{self as hir, Attribute};
+#[rustversion::since(2026-05-18)]
+use rustc_abi::VariantLayout;
+use rustc_abi::{Endian, FieldIdx, FieldsShape, LayoutData, VariantIdx, Variants};
+
 use rustc_middle::mir::interpret::Scalar;
 use rustc_middle::mir::ConstValue;
-use rustc_middle::ty::{self, Ty, TyCtxt, TyKind, TypeFlags};
-use rustc_span::def_id::{CrateNum, DefId, LocalDefId, LOCAL_CRATE};
+#[rustversion::since(2026-04-22)]
+use rustc_middle::ty::Flags;
+use rustc_middle::ty::{self, AssocKind, Ty, TyCtxt, TyKind, TypeFlags, TypingEnv};
+use rustc_span::def_id::{CrateNum, DefId, LOCAL_CRATE};
 use rustc_span::symbol::sym;
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::iter::once;
 use std::rc::Rc;
 
-fn has_type_or_const_vars() -> TypeFlags {
+pub(crate) fn has_type_or_const_vars() -> TypeFlags {
     TypeFlags::HAS_TY_PARAM
         | TypeFlags::HAS_CT_PARAM
         | TypeFlags::HAS_TY_INFER
@@ -52,7 +65,11 @@ pub(crate) fn adt_core_bindings_needs_drop<'tcx>(
     bindings: &AdtCoreBindings<'tcx>,
     tcx: TyCtxt<'tcx>,
 ) -> bool {
-    bindings.self_ty.needs_drop(tcx, post_analysis_typing_env(tcx, bindings.def_id))
+    let typing_env = bindings
+        .def_id
+        .map(|id| post_analysis_typing_env(tcx, id))
+        .unwrap_or_else(ty::TypingEnv::fully_monomorphized);
+    bindings.self_ty.needs_drop(tcx, typing_env)
 }
 
 /// Returns the Rust underlying type of the `cpp_enum` struct specified by the given def id.
@@ -66,48 +83,21 @@ pub fn cpp_enum_rust_underlying_type(tcx: TyCtxt, def_id: DefId) -> Result<Ty> {
     }
 
     let field_def_id = fields[0].did;
-    let field_ty = tcx.type_of(field_def_id).instantiate_identity();
+    let field_ty = crate::normalize_ty(
+        tcx,
+        tcx.param_env(field_def_id),
+        tcx.type_of(field_def_id).instantiate_identity(),
+    );
 
     Ok(field_ty)
 }
 
 /// Returns the C++ underlying type of the `cpp_enum` struct specified by the given def id.
-pub(crate) fn cpp_enum_cpp_underlying_type(
-    db: &dyn BindingsGenerator,
+pub(crate) fn cpp_enum_cpp_underlying_type<'tcx>(
+    db: &BindingsGenerator<'tcx>,
     def_id: DefId,
-) -> Result<CcSnippet> {
-    let tcx = db.tcx();
-
-    let field_middle_ty = cpp_enum_rust_underlying_type(tcx, def_id)?;
-
-    let field_type = if db.enable_hir_types() {
-        use rustc_hir::ItemKind;
-        let field_hir_ty = match tcx.hir_node_by_def_id(def_id.expect_local()) {
-            rustc_hir::Node::Item(hir_item) => match hir_item.kind {
-                ItemKind::Struct(_, _, variant_data) => {
-                    if variant_data.fields().len() != 1 {
-                        return Err(anyhow!(
-                            "Expected one field in cpp_enum hir item, got {:?}",
-                            variant_data.fields().len()
-                        ));
-                    }
-                    Some(variant_data.fields()[0].ty)
-                }
-                _ => {
-                    // ItemKind is not Struct.
-                    return Err(anyhow!(
-                        "Unexpected `ItemKind` in cpp_enum hir item: {:?}",
-                        hir_item.kind
-                    ));
-                }
-            },
-            _ => None, // HIR node is not an Item.
-        };
-        SugaredTy::new(field_middle_ty, field_hir_ty)
-    } else {
-        SugaredTy::missing_hir(field_middle_ty)
-    };
-
+) -> Result<CcSnippet<'tcx>> {
+    let field_type = cpp_enum_rust_underlying_type(db.tcx(), def_id)?;
     db.format_ty_for_cc(field_type, TypeLocation::Other)
 }
 
@@ -201,16 +191,16 @@ pub fn scalar_value_to_string(tcx: TyCtxt, scalar: Scalar, kind: TyKind) -> Resu
 /// This will generate (approximately) the following C++ code:
 ///
 /// ```c++
-/// enum class MyEnum : std::int32_t {
+/// enum class MyEnum : ::std::int32_t {
 ///     VARIANT_0 = 0,
 ///     VARIANT_1 = 1,
 ///     // ...
 /// };
 /// ```
 fn generate_cpp_enum<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     core: Rc<AdtCoreBindings<'tcx>>,
-) -> ApiSnippets {
+) -> ApiSnippets<'tcx> {
     let tcx = db.tcx();
     let enumeration_cc_name = &core.cc_short_name;
 
@@ -220,16 +210,17 @@ fn generate_cpp_enum<'tcx>(
     // Generate relevant attributes.
     let rs_type = core.rs_fully_qualified_name.to_string();
     let mut attributes = vec![quote! {CRUBIT_INTERNAL_RUST_TYPE(#rs_type)}];
-    if let Some(tag) = generate_must_use_tag(tcx, core.def_id) {
+    let def_id = core.def_id.expect("cpp_enum requires a valid DefId");
+    if let Some(tag) = generate_must_use_tag(tcx, def_id) {
         attributes.push(tag);
     }
-    if let Some(tag) = generate_deprecated_tag(tcx, core.def_id) {
+    if let Some(tag) = generate_deprecated_tag(tcx, def_id) {
         attributes.push(tag);
     }
 
     // Generate the enumerator list.
     let enumerator_lines: Vec<TokenStream> = tcx
-        .inherent_impls(core.def_id)
+        .inherent_impls(def_id)
         .iter()
         .copied()
         .sorted_by_def(tcx)
@@ -238,7 +229,7 @@ fn generate_cpp_enum<'tcx>(
             if !is_supported_associated_item(tcx, assoc_item.def_id) {
                 return None;
             }
-            let ty::AssocKind::Const { name } = assoc_item.kind else {
+            let ty::AssocKind::Const { name, .. } = assoc_item.kind else {
                 db.fatal_errors().report(&format!(
                     "C++ enums can only have `const`s as public items, found: {:?}",
                     assoc_item.kind
@@ -246,7 +237,15 @@ fn generate_cpp_enum<'tcx>(
                 return None;
             };
             let enumerator_name = format_cc_ident(db, name.as_str()).unwrap();
-            let value_kind = *cpp_enum_rust_underlying_type(tcx, core.def_id).unwrap().kind();
+            let (opt_doc_comment, bracketed_enumerator_name) = if db.kythe_annotations() {
+                (
+                    generate_doc_comment(db, assoc_item.def_id),
+                    quote! { __CAPTURE_BEGIN__ #enumerator_name __CAPTURE_END__ },
+                )
+            } else {
+                (TokenStream::new(), quote! { #enumerator_name })
+            };
+            let value_kind = *cpp_enum_rust_underlying_type(tcx, def_id).unwrap().kind();
             let scalar = match tcx.const_eval_poly(assoc_item.def_id).unwrap() {
                 ConstValue::Scalar(scalar) => scalar,
                 other => {
@@ -258,19 +257,24 @@ fn generate_cpp_enum<'tcx>(
                 .parse::<TokenStream>()
                 .unwrap();
 
-            Some(quote! { #enumerator_name = #enumerator_value, })
+            Some(quote! { #opt_doc_comment #bracketed_enumerator_name = #enumerator_value, })
         })
         .collect();
 
-    let doc_comment = generate_doc_comment(db, core.def_id);
+    let doc_comment = generate_doc_comment(db, def_id);
     let keyword = &core.keyword;
-    let underlying_cc_type_snippet = cpp_enum_cpp_underlying_type(db, core.def_id).unwrap();
+    let underlying_cc_type_snippet = cpp_enum_cpp_underlying_type(db, def_id).unwrap();
     let underlying_cc_type = underlying_cc_type_snippet.tokens;
+    let bracketed_enumeration_cc_name = if db.kythe_annotations() {
+        quote! { __CAPTURE_BEGIN__ #enumeration_cc_name __CAPTURE_END__ }
+    } else {
+        quote! { #enumeration_cc_name }
+    };
 
     let main_api = CcSnippet {
         tokens: quote! {
             __NEWLINE__ #doc_comment
-            #keyword #(#attributes)* #enumeration_cc_name : #underlying_cc_type {
+            #keyword #(#attributes)* #bracketed_enumeration_cc_name : #underlying_cc_type {
                 #( __NEWLINE__ #enumerator_lines)*
             };
             __NEWLINE__
@@ -295,53 +299,116 @@ fn generate_cpp_enum<'tcx>(
 fn is_supported_associated_item<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
     tcx.visibility(def_id).is_public()
         && tcx.lookup_stability(def_id).is_none_or(|stability| stability.is_stable())
+        && is_trait_method_of_impl_lookup_stable(tcx, def_id)
 }
 
-fn generate_associated_item<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+fn is_trait_method_of_impl_lookup_stable<'tcx>(tcx: TyCtxt<'tcx>, impl_assoc_id: DefId) -> bool {
+    let Some(impl_id) = tcx.trait_impl_of_assoc(impl_assoc_id) else {
+        // For inherent impls, we don't need to perform this check because the associated item is
+        // the only place an unstable attribute could live.
+        return true;
+    };
+    let trait_to_impl_map = tcx.impl_item_implementor_ids(impl_id);
+    trait_to_impl_map
+        .items()
+        .filter_map(
+            |(trait_id, impl_id)| {
+                if *impl_id == impl_assoc_id {
+                    Some(trait_id)
+                } else {
+                    None
+                }
+            },
+        )
+        .get_only()
+        .map(|trait_id| {
+            tcx.lookup_stability(*trait_id).is_none_or(|stability| stability.is_stable())
+        })
+        .expect("Associated trait item should be defined on it's trait")
+}
+
+pub(crate) fn generate_associated_item<'tcx>(
+    db: &BindingsGenerator<'tcx>,
     assoc_item: &ty::AssocItem,
     member_function_names: &mut HashSet<String>,
-) -> Option<ApiSnippets> {
+    method_name_override: Option<&'static str>,
+    static_method_mode: StaticMethodMode,
+) -> Option<ApiSnippets<'tcx>> {
     let tcx = db.tcx();
     let def_id = assoc_item.def_id;
     if !is_supported_associated_item(tcx, def_id) {
         return None;
     }
+    crate::error_scope!(db, def_id);
     let result = match assoc_item.kind {
         ty::AssocKind::Fn { .. } => {
-            let result = db.generate_function(def_id);
-            if result.is_ok() {
+            db.generate_function(def_id, method_name_override, static_method_mode).inspect(|_binding| {
+                // If `generate_function` succeeds, record the method in `member_function_names`.
                 let unqualified_name = db
                     .symbol_unqualified_name(def_id)
                     .expect("Associated item should have an unqualified name: {def_id:?}");
                 let cpp_name = unqualified_name.cpp_name.to_string();
-                member_function_names.insert(cpp_name);
-            }
-            result
+                let was_inserted = member_function_names.insert(cpp_name.clone());
+                assert!(
+                    was_inserted, // Bindings for Rust/user-named items are given priority.
+                    "Unexpected (user-named 'members' are handled first) naming conflict: {cpp_name}",
+            );
+            })
         }
         ty::AssocKind::Const { .. } => generate_const(db, def_id),
         // TODO: b/405132277 - Rust does not support inherent associated types, but should support
         // associated types when adding traits.
-        ty::AssocKind::Type { .. } => Err(anyhow!(
-            "Associated types are not yet supported, found {:?}. See b/405132277.",
-            assoc_item.opt_name()
-        )),
+        ty::AssocKind::Type { .. } => {
+            assoc_item
+                .opt_name()
+                .zip(tcx.trait_impl_of_assoc(def_id))
+                .ok_or(anyhow!("Associated types with no name are not supported."))
+                .and_then(|(name, impl_id)| {
+                    #[rustversion::before(2026-04-19)]
+                    let trait_ref = tcx.impl_trait_header(impl_id).trait_ref.instantiate_identity();
+                    #[rustversion::since(2026-04-19)]
+                    let trait_ref = crate::normalize_ty(
+                        tcx,
+                        tcx.param_env(impl_id),
+                        tcx.impl_trait_header(impl_id).trait_ref.instantiate_identity(),
+                    );
+                    let trait_rs_name = db
+                        .symbol_canonical_name(trait_ref.def_id)
+                        .expect("Trait impl should have a canonical name.")
+                        .format_for_rs();
+                    // The first argument of a trait ref is the self type.
+                    let self_ty = trait_ref.args.type_at(0);
+                    let alias_type = crate::normalize_ty(
+                        tcx,
+                        tcx.param_env(def_id),
+                        tcx.type_of(def_id).instantiate_identity(),
+                    );
+                    if alias_type.walk().any(|arg| {
+                        arg.as_type()
+                            .and_then(|ty| ty.ty_adt_def())
+                            .is_some_and(|adt| !crate::should_receive_bindings(db, adt.did()))
+                    }) {
+                        bail!("Associated type `{name}` contains a type that shouldn't receive bindings.");
+                    }
+                    let rs_type_spelling = format!("<{} as {}>::{}", self_ty, trait_rs_name, name);
+                    crate::create_type_alias_with_rs_type(
+                        db,
+                        def_id,
+                        &rs_type_spelling,
+                        name.as_str(),
+                        alias_type,
+                    )
+                    .map(|snippet| snippet.into_main_api())
+                })
+        }
     };
     let result = result.and_then(|snippet| {
-        snippet.resolve_feature_requirements(crate_features(db, db.source_crate_num()))
+        snippet.resolve_feature_requirements(db.crate_features(db.source_crate_num()))
     });
     match result {
         Err(err) => {
             if crubit_attr::get_attrs(tcx, def_id).unwrap().must_bind {
-                let self_name = crate::item_name(db, tcx.parent(def_id));
-                let item_name = crate::item_name(db, def_id);
-                let must_bind_message = format!(
-                    "Failed to generate bindings for `{self_name}::{item_name}`:\n\
-                    {err:?}\n\
-                    This is a hard error because `{self_name}::{item_name}` was annotated with \
-                    `#[crubit_annotate::must_bind]`"
-                );
-                db.fatal_errors().report(&must_bind_message);
+                crate::report_must_bind_error(db, def_id, &err);
             }
             Some(generate_unsupported_def(db, def_id, err).into_main_api())
         }
@@ -350,14 +417,27 @@ fn generate_associated_item<'tcx>(
 }
 
 fn erase_regions<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Ty<'tcx> {
-    #[rustversion::since(2025-09-10)]
+    #[rustversion::any(since(1.94), since(2025-09-10))]
     return tcx.erase_and_anonymize_regions(ty);
-    #[rustversion::before(2025-09-10)]
+    #[rustversion::all(before(1.94), before(2025-09-10))]
     return tcx.erase_regions(ty);
 }
 
+fn get_trait_ref_from_impl_id<'tcx>(tcx: TyCtxt<'tcx>, impl_id: DefId) -> ty::TraitRef<'tcx> {
+    #[rustversion::any(since(1.94), since(2025-10-17))]
+    let middle_trait_header = tcx.impl_trait_header(impl_id);
+    #[rustversion::all(before(1.94), before(2025-10-17))]
+    let middle_trait_header =
+        tcx.impl_trait_header(impl_id).expect("DefId for a trait impl lacked a trait header");
+    crate::normalize_ty(
+        tcx,
+        tcx.param_env(impl_id),
+        middle_trait_header.trait_ref.instantiate_identity(),
+    )
+}
+
 pub fn from_trait_impls_by_argument<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     crate_num: CrateNum,
 ) -> Rc<HashMap<Ty<'tcx>, Vec<DefId>>> {
     let tcx = db.tcx();
@@ -373,17 +453,11 @@ pub fn from_trait_impls_by_argument<'tcx>(
     };
     let mut map: HashMap<Ty<'tcx>, Vec<DefId>> = HashMap::new();
     for from_impl_id in impls_iter {
-        #[rustversion::since(2025-10-17)]
-        let middle_trait_header = tcx.impl_trait_header(from_impl_id);
-        #[rustversion::before(2025-10-17)]
-        let middle_trait_header = tcx
-            .impl_trait_header(from_impl_id)
-            .expect("DefId for an `From` trait impl lacked a trait header");
-        let trait_ref = middle_trait_header.trait_ref.instantiate_identity();
+        let trait_ref = get_trait_ref_from_impl_id(tcx, from_impl_id);
         let ty = trait_ref.args.type_at(1);
         // We want to check if our type has type variables and constant variables, but not
         // region variables. Region variables are fine and we'll replace them with 'static.
-        if ty.flags().contains(has_type_or_const_vars()) {
+        if ty.flags().intersects(has_type_or_const_vars()) {
             continue;
         }
 
@@ -395,56 +469,82 @@ pub fn from_trait_impls_by_argument<'tcx>(
     Rc::new(map)
 }
 
+pub fn into_trait_impls_by_destination<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    crate_num: CrateNum,
+) -> Rc<HashMap<Ty<'tcx>, Vec<DefId>>> {
+    let tcx = db.tcx();
+    let into_trait = tcx.get_diagnostic_item(sym::Into).expect("Could not find Into trait");
+    let impls_iter: Box<dyn Iterator<Item = DefId>> = if crate_num == LOCAL_CRATE {
+        Box::new(tcx.local_trait_impls(into_trait).iter().map(|impl_id| impl_id.to_def_id()))
+    } else {
+        Box::new(
+            tcx.implementations_of_trait((crate_num, into_trait))
+                .iter()
+                .map(|(impl_id, _)| *impl_id),
+        )
+    };
+    let mut map: HashMap<Ty<'tcx>, Vec<DefId>> = HashMap::new();
+    for into_impl_id in impls_iter {
+        let trait_ref = get_trait_ref_from_impl_id(tcx, into_impl_id);
+        let dest_ty = trait_ref.args.type_at(1);
+        // We want to check if our type has type variables and constant variables, and still allow
+        // region variables.
+        if dest_ty.flags().intersects(has_type_or_const_vars()) {
+            continue;
+        }
+        let dest_self_ty = erase_regions(tcx, dest_ty);
+        map.entry(dest_self_ty).or_default().push(into_impl_id);
+    }
+    Rc::new(map)
+}
+
 fn generate_into_impls<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     core: &AdtCoreBindings<'tcx>,
-) -> ApiSnippets {
+) -> ApiSnippets<'tcx> {
     let tcx = db.tcx();
     let cc_struct_name = &core.cc_short_name;
 
     let into_trait = tcx.get_diagnostic_item(sym::Into).expect("Could not find Into trait");
+    let Some(def_id) = core.def_id else {
+        // If we don't have a def_id, we can't generate Into impls.
+        return ApiSnippets::default();
+    };
 
-    let from_map = db.from_trait_impls_by_argument(core.def_id.krate);
+    let from_map = db.from_trait_impls_by_argument(def_id.krate);
     let from_impls = from_map.get(&core.self_ty).into_iter().flat_map(|vec| vec.iter()).filter_map(
         |from_impl_id| {
-            #[rustversion::since(2025-10-17)]
-            let middle_trait_header = tcx.impl_trait_header(*from_impl_id);
-            #[rustversion::before(2025-10-17)]
-            let middle_trait_header = tcx
-                .impl_trait_header(*from_impl_id)
-                .expect("DefId for a `From` trait impl lacked a trait header");
-            let trait_ref = middle_trait_header.trait_ref.instantiate_identity();
-
+            let trait_ref = get_trait_ref_from_impl_id(tcx, *from_impl_id);
             let from_middle_ty = trait_ref.args.type_at(0);
 
             // If our type contains type variables or constant variables (but not region variables),
             // we can't generate an `into` impl.
-            if from_middle_ty.flags().contains(has_type_or_const_vars()) {
+            if from_middle_ty.flags().intersects(has_type_or_const_vars()) {
                 return None;
             }
-            let sugar_ty = SugaredTy::missing_hir(from_middle_ty);
             // We know that our type will always appear in FnReturn position for the `into` method.
             // If our type isn't C++-compatible, we can't generate an `into` impl.
-            let cc_ty = db.format_ty_for_cc(sugar_ty, TypeLocation::FnReturn).ok()?;
+            let cc_ty = db
+                .format_ty_for_cc(from_middle_ty, TypeLocation::FnReturn { is_constructor: false })
+                .ok()?;
             Some((from_middle_ty, cc_ty, *from_impl_id))
         },
     );
     let into_impls =
         tcx.non_blanket_impls_for_ty(into_trait, core.self_ty).filter_map(|into_impl_id| {
-            #[rustversion::since(2025-10-17)]
-            let middle_trait_header = tcx.impl_trait_header(into_impl_id);
-            #[rustversion::before(2025-10-17)]
-            let middle_trait_header = tcx
-                .impl_trait_header(into_impl_id)
-                .expect("DefId for an `Into` trait impl lacked a trait header");
+            let trait_ref = get_trait_ref_from_impl_id(tcx, into_impl_id);
             // Index 0 of our trait ref is the self type, so index 1 is the type we're converting
             // into.
-            let into_middle_ty =
-                middle_trait_header.trait_ref.instantiate_identity().args.type_at(1);
+            let into_middle_ty = trait_ref.args.type_at(1);
+            if into_middle_ty.flags().intersects(has_type_or_const_vars()) {
+                return None;
+            }
 
-            let sugar_ty = SugaredTy::missing_hir(into_middle_ty);
-            // If our type isn't Cxx compatible, we can't generate an `into` impl.
-            let cc_ty = db.format_ty_for_cc(sugar_ty, TypeLocation::FnReturn).ok()?;
+            // If our type isn't C++ compatible, we can't generate an `into` impl.
+            let cc_ty = db
+                .format_ty_for_cc(into_middle_ty, TypeLocation::FnReturn { is_constructor: false })
+                .ok()?;
 
             Some((into_middle_ty, cc_ty, into_impl_id))
         });
@@ -461,7 +561,16 @@ fn generate_into_impls<'tcx>(
                 method_name_to_cc_thunk_name,
                 cc_thunk_decls,
                 rs_thunk_impls: rs_details,
-            } = generate_trait_thunks(db, into_trait, &[middle_ty], core).ok()?;
+            } = generate_trait_thunks(
+                db,
+                into_trait,
+                &[middle_ty],
+                core.self_ty,
+                core.def_id,
+                core.rs_fully_qualified_name.clone(),
+                /*is_constructor=*/ false,
+            )
+            .ok()?;
 
             let thunk_name = method_name_to_cc_thunk_name
                 .into_values()
@@ -471,10 +580,9 @@ fn generate_into_impls<'tcx>(
             let cc_thunk_decls = cc_thunk_decls.into_tokens(&mut prereqs);
             let doc_comment = generate_doc_comment(db, def_id);
 
-            let sugar_self_ty = SugaredTy::missing_hir(core.self_ty);
             let self_cpp_ty = db
                 .format_ty_for_cc(
-                    sugar_self_ty,
+                    core.self_ty,
                     TypeLocation::FnParam { is_self_param: true, elided_is_output: true },
                 )
                 .expect(
@@ -485,16 +593,19 @@ fn generate_into_impls<'tcx>(
                 db,
                 def_id,
                 thunk_name.clone(),
-                SugaredTy::missing_hir(middle_ty),
-                /*takes_self_by_copy=*/ is_copy(tcx, def_id, core.self_ty),
-                /*has_self_param=*/ true,
+                middle_ty,
+                ThunkSelfParameter::new(
+                    /*has_self=*/ true,
+                    is_copy(tcx, def_id, core.self_ty),
+                    /*is_trait_method =*/ false,
+                ),
                 &[Param {
                     cc_name: format_ident!("self"),
                     cpp_type: CcParamTy {
                         snippet: CcSnippet::new(self_cpp_ty),
                         is_lifetime_bound: false,
                     },
-                    ty: sugar_self_ty,
+                    ty: core.self_ty,
                 }],
             )
             .expect("Self type of `Into` impl should be bridgeable");
@@ -524,19 +635,310 @@ fn generate_into_impls<'tcx>(
         .collect()
 }
 
+fn generate_constructor_impls<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    core: &AdtCoreBindings<'tcx>,
+) -> ApiSnippets<'tcx> {
+    let tcx = db.tcx();
+    let cc_struct_name = &core.cc_short_name;
+
+    // We need there to be a `def_id` to generate a constructor from.
+    let def_id = core.def_id.expect("ADT must have a def_id");
+
+    // Find From impls from the selected ADT
+    let from_trait = tcx.get_diagnostic_item(sym::From).expect("Could not find From trait");
+    let from_impls = tcx.non_blanket_impls_for_ty(from_trait, core.self_ty).filter_map(|impl_id| {
+        let trait_ref = get_trait_ref_from_impl_id(tcx, impl_id);
+        let src_ty = trait_ref.args.type_at(1);
+        if src_ty.flags().intersects(has_type_or_const_vars()) {
+            return None;
+        }
+        // Skip if source type is Self or a reference to Self (e.g. &Self)
+        let src_referent_ty = match src_ty.kind() {
+            ty::TyKind::Ref(_, referent_ty, _) => *referent_ty,
+            _ => src_ty,
+        };
+        if src_referent_ty == core.self_ty {
+            return None;
+        }
+        let cc_ty = db
+            .format_ty_for_cc(
+                src_ty,
+                TypeLocation::FnParam { is_self_param: false, elided_is_output: false },
+            )
+            .ok()?;
+
+        Some((src_ty, cc_ty, impl_id, /*is_from=*/ true))
+    });
+
+    // Find Into impls to the selected ADT
+    let into_map = db.into_trait_impls_by_destination(def_id.krate);
+    let into_impls =
+        into_map.get(&core.self_ty).into_iter().flat_map(|vec| vec.iter()).filter_map(|impl_id| {
+            let trait_ref = get_trait_ref_from_impl_id(tcx, *impl_id);
+            let src_ty = trait_ref.args.type_at(0);
+            if src_ty.flags().intersects(has_type_or_const_vars()) {
+                return None;
+            }
+            // Skip if source type is Self or a reference to Self (e.g. &Self)
+            let src_referent_ty = match src_ty.kind() {
+                ty::TyKind::Ref(_, referent_ty, _) => *referent_ty,
+                _ => src_ty,
+            };
+            if src_referent_ty == core.self_ty {
+                return None;
+            }
+            let cc_ty = db
+                .format_ty_for_cc(
+                    src_ty,
+                    TypeLocation::FnParam { is_self_param: false, elided_is_output: false },
+                )
+                .ok()?;
+
+            Some((src_ty, cc_ty, *impl_id, /*is_from=*/ false))
+        });
+
+    from_impls
+        .chain(into_impls)
+        .filter_map(|(src_ty, cc_ty, impl_id, is_from)| {
+            let mut prereqs = CcPrerequisites::default();
+            let cc_ty = cc_ty.into_tokens(&mut prereqs);
+            // Generate thunk names, declarations, and implementations.
+            // `From` and `Into` are handled differently Self is different for both
+            let (thunk_name, cc_thunk_decls, rs_details) = if is_from {
+                // The ADT is the Self in the From impl case so we just use generate_trait_thunks
+                let TraitThunks {
+                    method_name_to_cc_thunk_name,
+                    cc_thunk_decls,
+                    rs_thunk_impls: rs_details,
+                } = generate_trait_thunks(
+                    db,
+                    from_trait,
+                    &[src_ty],
+                    core.self_ty,
+                    core.def_id,
+                    core.rs_fully_qualified_name.clone(),
+                    /*is_constructor=*/ true,
+                )
+                .ok()?;
+                let thunk_name = method_name_to_cc_thunk_name
+                    .into_values()
+                    .exactly_one()
+                    .expect("Expecting a single `from` method");
+                (thunk_name, cc_thunk_decls, rs_details)
+            } else {
+                // Since self is not necessarily the ADT, we need to manually construct the thunk
+                let into_trait =
+                    tcx.get_diagnostic_item(sym::Into).expect("Could not find Into trait");
+                let into_trait_assoc_fn = tcx
+                    .associated_items(into_trait)
+                    .in_definition_order()
+                    .find(|item| matches!(item.kind, ty::AssocKind::Fn { .. }))
+                    .expect("Into should have a method");
+
+                let trait_args = tcx.mk_args_trait(src_ty, once(core.self_ty.into()));
+                let sig = tcx.fn_sig(into_trait_assoc_fn.def_id).instantiate(tcx, trait_args);
+
+                let sig = liberate_and_deanonymize_late_bound_regions(
+                    tcx,
+                    sig,
+                    into_trait_assoc_fn.def_id,
+                );
+                let sig = try_normalize(
+                    tcx,
+                    ty::PseudoCanonicalInput {
+                        typing_env: TypingEnv::fully_monomorphized(),
+                        value: sig,
+                    },
+                )
+                .ok()?;
+
+                // Just a small unique name for the custom Into thunk
+                let thunk_name = if db.is_golden_test() {
+                    format!(
+                        "__crubit_thunk_into_{}_as_{}",
+                        code_gen_utils::escape_non_identifier_chars(&format!("{}", src_ty)),
+                        code_gen_utils::escape_non_identifier_chars(&format!("{}", core.self_ty))
+                    )
+                } else {
+                    format!(
+                        "__crubit_thunk_{:x}_into_{}_as_{}",
+                        tcx.stable_crate_id(db.source_crate_num()),
+                        code_gen_utils::escape_non_identifier_chars(&format!("{}", src_ty)),
+                        code_gen_utils::escape_non_identifier_chars(&format!("{}", core.self_ty))
+                    )
+                };
+                let thunk_name_cc_ident = format_cc_ident(db, &thunk_name).ok()?;
+                let cc_thunk_decls = generate_thunk_decl(
+                    db,
+                    &sig,
+                    &thunk_name_cc_ident,
+                    /*has_self_param=*/ true,
+                    /*is_constructor=*/ true,
+                )
+                .ok()?;
+                let static_src_ty = replace_all_regions_with_static(tcx, src_ty);
+                let src_rs = db.format_ty_for_rs(static_src_ty).ok()?;
+                let foo_rs = &core.rs_fully_qualified_name;
+                let fully_qualified_fn_name =
+                    quote! { <#src_rs as ::core::convert::Into<#foo_rs>>::into };
+                let rs_details = generate_thunk_impl(
+                    db,
+                    into_trait_assoc_fn.def_id,
+                    &sig,
+                    &thunk_name,
+                    fully_qualified_fn_name,
+                    /*is_constructor=*/ true,
+                )
+                .ok()?;
+                (thunk_name_cc_ident, cc_thunk_decls, rs_details)
+            };
+            let cc_thunk_decls = cc_thunk_decls.into_tokens(&mut prereqs);
+            let doc_comment = generate_doc_comment(db, impl_id);
+            let mut statements = quote! {};
+            let c_abi_expression = cc_param_to_c_abi(
+                db,
+                format_ident!("value"),
+                src_ty,
+                ty::TypingEnv::fully_monomorphized(),
+                &mut prereqs.includes,
+                &mut statements,
+            )
+            .ok()?;
+
+            let returns_by_value = is_c_abi_compatible_by_value(tcx, core.self_ty);
+            let impl_body_tokens = if returns_by_value {
+                quote! {
+                    #statements
+                    *this = __crubit_internal::#thunk_name(#c_abi_expression);
+                }
+            } else {
+                quote! {
+                    #statements
+                    __crubit_internal::#thunk_name(#c_abi_expression, this);
+                }
+            };
+            prereqs.move_defs_to_fwd_decls();
+            Some(ApiSnippets {
+                main_api: CcSnippet {
+                    tokens: quote! {
+                        __NEWLINE__ #doc_comment
+                        explicit #cc_struct_name ( #cc_ty value ) ; __NEWLINE__
+                        __NEWLINE__
+                    },
+                    prereqs,
+                },
+                cc_details: CcSnippet::new(quote! {
+                    #cc_thunk_decls
+                    inline #cc_struct_name :: #cc_struct_name ( #cc_ty value ) {
+                        #impl_body_tokens
+                    }
+                }),
+                rs_details,
+            })
+        })
+        .collect()
+}
+
+fn generate_trait_operator_impls<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    core: &AdtCoreBindings<'tcx>,
+) -> ApiSnippets<'tcx> {
+    let tcx = db.tcx();
+
+    let query_trait_impls = |trait_def_id: DefId,
+                             method_name: &str,
+                             operator_name: &'static str|
+     -> Vec<ApiSnippets<'_>> {
+        let trait_name = tcx.item_name(trait_def_id).to_string();
+
+        tcx.non_blanket_impls_for_ty(trait_def_id, core.self_ty)
+            .map(|impl_id| {
+                let trait_ref = get_trait_ref_from_impl_id(tcx, impl_id);
+                // Index 0 of our trait ref is the self type, so index 1 is the real type arg
+                // (e.g. `T` in `Index<T>` or in `IndexMut<T>`).
+                let trait_args = trait_ref.args;
+                let trait_arg_ty = trait_args.type_at(1);
+                (impl_id, trait_arg_ty)
+            })
+            .avoid_colliding_types(tcx, |(_impl_id, trait_arg_ty)| *trait_arg_ty)
+            .into_iter()
+            .map(|res| {
+                res.map_err(|TypeCollisionRisk { item: (impl_id, _), key_type, preferred_type }| {
+                    let err = anyhow!(
+                        "{trait_name} implementation for `{key_type}` is not supported when \
+                         `{trait_name}<{preferred_type}>` is implemented as it may overlap."
+                    );
+                    (err, impl_id)
+                })
+                .and_then(|(impl_id, trait_arg_ty)| {
+                    if trait_arg_ty.flags().intersects(has_type_or_const_vars()) {
+                        let err = anyhow!(
+                            "{trait_name} impl has uninstantiated generic parameters, \
+                                   which is not yet supported {trait_arg_ty}"
+                        );
+                        return Err((err, impl_id));
+                    }
+
+                    let assoc_fn_id = tcx
+                        .associated_items(impl_id)
+                        .in_definition_order()
+                        .find(|item| {
+                            item.name().as_str() == method_name
+                                && matches!(item.kind, AssocKind::Fn { .. })
+                        })
+                        .unwrap_or_else(|| {
+                            panic!("Caller should ensure {trait_name} has method {method_name}");
+                        })
+                        .def_id;
+                    db.generate_function(assoc_fn_id, Some(operator_name), StaticMethodMode::Infer)
+                        .map_err(|e| (e, assoc_fn_id))
+                })
+                .unwrap_or_else(|(err, def_id)| {
+                    generate_unsupported_def(db, def_id, err).into_main_api()
+                })
+            })
+            .collect()
+    };
+
+    [
+        query_trait_impls(
+            tcx.lang_items().index_trait().expect("Could not find Index trait"),
+            "index",
+            "operator[]",
+        ),
+        query_trait_impls(
+            tcx.lang_items().index_mut_trait().expect("Could not find IndexMut trait"),
+            "index_mut",
+            "operator[]",
+        ),
+        query_trait_impls(
+            tcx.get_diagnostic_item(sym::PartialEq).expect("Could not find PartialEq trait"),
+            "eq",
+            "operator==",
+        ),
+        // TODO(b/483382648): Add support for other traits / operators - e.g. `PartialOrd`,
+        // (`operator<`, `operator<=`, etc., `operator<=>` seems hard), `Add`, `AddAssign`, etc.
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
 /// Formats an algebraic data type (an ADT - a struct, an enum, or a union)
 /// represented by `core`.  This function is infallible - after
 /// `generate_adt_core` returns success we have committed to emitting C++
 /// bindings for the ADT.
 pub fn generate_adt<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     core: Rc<AdtCoreBindings<'tcx>>,
-) -> ApiSnippets {
+) -> ApiSnippets<'tcx> {
     let tcx = db.tcx();
     let adt_cc_name = &core.cc_short_name;
 
     // Handle `cpp_enum` structs.
-    let crubit_attrs = crubit_attr::get_attrs(tcx, core.def_id).unwrap_or_default();
+    let crubit_attrs =
+        core.def_id.and_then(|id| crubit_attr::get_attrs(tcx, id).ok()).unwrap_or_default();
     if crubit_attrs.cpp_enum.is_some() {
         return generate_cpp_enum(db, core);
     }
@@ -550,8 +952,16 @@ pub fn generate_adt<'tcx>(
             method_name_to_cc_thunk_name,
             mut cc_thunk_decls,
             rs_thunk_impls: rs_details,
-        } = generate_trait_thunks(db, drop_trait_id, &[], &core)
-            .expect("`generate_adt_core` should have already validated `Drop` support");
+        } = generate_trait_thunks(
+            db,
+            drop_trait_id,
+            &[],
+            core.self_ty,
+            core.def_id,
+            core.rs_fully_qualified_name.clone(),
+            /*is_constructor=*/ false,
+        )
+        .expect("`generate_adt_core` should have already validated `Drop` support");
         // Don't introduce additional feature prerequisites for the `Drop` trait impl, as this
         // will cause type generation to fail based on an API that isn't even user-accessible.
         cc_thunk_decls.prereqs.required_features = flagset::FlagSet::empty();
@@ -582,7 +992,7 @@ pub fn generate_adt<'tcx>(
             ~#adt_cc_name() = default; __NEWLINE__
         });
         let cc_details = CcSnippet::with_include(
-            quote! { static_assert(std::is_trivially_destructible_v<#adt_cc_name>); },
+            quote! { static_assert(::std::is_trivially_destructible_v<#adt_cc_name>); },
             CcInclude::type_traits(),
         );
         ApiSnippets { main_api, cc_details, ..Default::default() }
@@ -595,21 +1005,32 @@ pub fn generate_adt<'tcx>(
         .generate_move_ctor_and_assignment_operator(core.clone())
         .unwrap_or_else(|err| err.explicitly_deleted);
 
-    let relocating_ctor_snippets = generate_relocating_ctor(db, core.clone());
-
-    let tuple_struct_ctor = generate_tuple_struct_ctor(db, core.clone()).unwrap_or_default();
+    let relocating_ctor_snippets = generate_relocating_ctor(db, &core.cc_short_name);
 
     let mut member_function_names = HashSet::<String>::new();
-    let impl_items_snippets = tcx
-        .inherent_impls(core.def_id)
+    let impl_items_snippets = core
+        .def_id
+        .map(|id| tcx.inherent_impls(id))
+        .unwrap_or_default()
         .iter()
         .copied()
         .sorted_by_def(tcx)
         .flat_map(|impl_id| tcx.associated_items(impl_id).in_definition_order())
-        .flat_map(|assoc_item| generate_associated_item(db, assoc_item, &mut member_function_names))
+        .flat_map(|assoc_item| {
+            generate_associated_item(
+                db,
+                assoc_item,
+                &mut member_function_names,
+                None,
+                StaticMethodMode::Infer,
+            )
+        })
         .collect();
 
+    let adt_based_ctors = generate_adt_based_ctors(db, core.clone(), &mut member_function_names);
     let into_operator_snippets = generate_into_impls(db, core.as_ref());
+    let trait_operator_snippets = generate_trait_operator_impls(db, core.as_ref());
+    let constructor_operator_snippets = generate_constructor_impls(db, core.as_ref());
 
     let ApiSnippets {
         main_api: public_functions_main_api,
@@ -617,22 +1038,37 @@ pub fn generate_adt<'tcx>(
         rs_details: public_functions_rs_details,
     } = [
         default_ctor_snippets,
-        tuple_struct_ctor,
+        adt_based_ctors,
         destructor_snippets,
         move_ctor_and_assignment_snippets,
         copy_ctor_and_assignment_snippets,
         relocating_ctor_snippets,
         impl_items_snippets,
         into_operator_snippets,
+        trait_operator_snippets,
+        constructor_operator_snippets,
     ]
     .into_iter()
     .collect();
 
+    let repr_attrs = core.def_id.map(|id| db.repr_attrs(id)).unwrap_or_default();
+
     let ApiSnippets {
-        main_api: fields_main_api,
+        main_api: mut fields_main_api,
         cc_details: fields_cc_details,
         rs_details: fields_rs_details,
-    } = generate_fields(db, &core, &member_function_names);
+    } = generate_fields(
+        db,
+        core.self_ty,
+        &core.cc_short_name,
+        &core.rs_fully_qualified_name,
+        &repr_attrs,
+        core.size_in_bytes,
+        core.alignment_in_bytes,
+        &member_function_names,
+    );
+
+    fields_main_api.prereqs.forward_declare_type(core.self_ty);
 
     let alignment = Literal::u64_unsuffixed(core.alignment_in_bytes);
     let size = Literal::u64_unsuffixed(core.size_in_bytes);
@@ -643,8 +1079,10 @@ pub fn generate_adt<'tcx>(
             quote! {alignas(#alignment)},
             quote! {[[clang::trivial_abi]]},
         ];
-        if db
-            .repr_attrs(core.def_id)
+        if core
+            .def_id
+            .map(|id| db.repr_attrs(id).to_vec())
+            .unwrap_or_default()
             .iter()
             .any(|repr| matches!(repr, rustc_hir::attrs::ReprPacked { .. }))
         {
@@ -652,27 +1090,37 @@ pub fn generate_adt<'tcx>(
         }
 
         // Additional attributes
-        if let Some(tag) = generate_must_use_tag(tcx, core.def_id) {
-            attributes.push(tag);
-        }
-        if let Some(tag) = generate_deprecated_tag(tcx, core.def_id) {
-            attributes.push(tag);
+        if let Some(def_id) = core.def_id {
+            if let Some(tag) = generate_must_use_tag(tcx, def_id) {
+                attributes.push(tag);
+            }
+            if let Some(tag) = generate_deprecated_tag(tcx, def_id) {
+                attributes.push(tag);
+            }
         }
 
-        let doc_comment = generate_doc_comment(db, core.def_id);
+        let doc_comment = core.def_id.map(|id| generate_doc_comment(db, id)).unwrap_or_default();
         let keyword = &core.keyword;
 
         let mut prereqs = CcPrerequisites::default();
         prereqs.includes.insert(db.support_header("annotations_internal.h"));
         let public_functions_main_api = public_functions_main_api.into_tokens(&mut prereqs);
         let fields_main_api = fields_main_api.into_tokens(&mut prereqs);
-        prereqs.fwd_decls.remove(&core.def_id);
+        if let Some(def_id) = core.def_id {
+            prereqs.fwd_decls.remove(&def_id);
+        }
+
+        let bracketed_adt_cc_name = if db.kythe_annotations() {
+            quote! { __CAPTURE_BEGIN__ #adt_cc_name __CAPTURE_END__ }
+        } else {
+            quote! { #adt_cc_name }
+        };
 
         CcSnippet {
             prereqs,
             tokens: quote! {
                 __NEWLINE__ #doc_comment
-                #keyword #(#attributes)* #adt_cc_name final {
+                #keyword #(#attributes)* #bracketed_adt_cc_name final {
                     public: __NEWLINE__
                         #public_functions_main_api
                     #fields_main_api
@@ -685,7 +1133,9 @@ pub fn generate_adt<'tcx>(
         let mut prereqs = CcPrerequisites::default();
         let public_functions_cc_details = public_functions_cc_details.into_tokens(&mut prereqs);
         let fields_cc_details = fields_cc_details.into_tokens(&mut prereqs);
-        prereqs.defs.insert(core.def_id);
+        if let Some(def_id) = core.def_id {
+            prereqs.defs.insert(def_id);
+        }
         CcSnippet {
             prereqs,
             tokens: quote! {
@@ -721,16 +1171,56 @@ pub fn generate_adt<'tcx>(
     ApiSnippets { main_api, cc_details, rs_details }
 }
 
+/// Implementation of `BindingsGenerator::adt_needs_bindings`.
+pub fn adt_needs_bindings<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    def_id: DefId,
+) -> Result<Rc<AdtCoreBindings<'tcx>>> {
+    let tcx = db.tcx();
+    let attributes = crubit_attr::get_attrs(tcx, def_id).unwrap();
+
+    let fully_qualified_name = db
+        .symbol_canonical_name(def_id)
+        .ok_or_else(|| anyhow!("No public path could be found for type {def_id:?}"))?;
+    if let Some(cpp_type) = fully_qualified_name.unqualified.cpp_type {
+        let item_name = tcx.def_path_str(def_id);
+        bail!(
+            "Type bindings for {item_name} suppressed due to being mapped to \
+                    an existing C++ type ({cpp_type})"
+        );
+    }
+
+    let has_composable_bridging_attrs = matches!(
+        attributes.get_bridging_attrs()?,
+        Some(crubit_attr::BridgingAttrs::Composable { .. })
+    );
+
+    if !has_composable_bridging_attrs
+        && BridgedBuiltin::new(db, tcx.adt_def(def_id)).is_none()
+        && query_compiler::has_non_lifetime_generics(tcx, def_id)
+    {
+        bail!("Generic types are not supported yet (b/259749095)");
+    }
+
+    db.generate_adt_core(def_id)
+}
+
 /// Implementation of `BindingsGenerator::generate_adt_core`.
 pub fn generate_adt_core<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     def_id: DefId,
 ) -> Result<Rc<AdtCoreBindings<'tcx>>> {
     let tcx = db.tcx();
     // Note: we erase regions in order to get bindings regardless of what lifetime parameters are
     // present. We want to generate bindings for functions regardless of their lifetime bounds, as
     // C++ cannot special-case the availability of a function based on lifetimes.
+    #[rustversion::before(2026-04-19)]
     let self_ty = erase_regions(tcx, tcx.type_of(def_id).instantiate_identity());
+    #[rustversion::since(2026-04-19)]
+    let self_ty = erase_regions(
+        tcx,
+        crate::normalize_ty(tcx, tcx.param_env(def_id), tcx.type_of(def_id).instantiate_identity()),
+    );
     assert!(self_ty.is_adt());
     assert!(db.symbol_canonical_name(def_id).is_some(), "Caller should verify");
 
@@ -747,7 +1237,7 @@ pub fn generate_adt_core<'tcx>(
     // succeeds, but this would lead to infinite recursion, so we only replicate
     // `format_ty_for_cc` / `TyKind::Adt` checks that are outside of
     // `generate_adt_core`.
-    fully_qualified_name.format_for_cc(db).with_context(|| {
+    let cc_fully_qualified_name = fully_qualified_name.format_for_cc(db).with_context(|| {
         format!("Error formatting the fully-qualified C++ name of `{cpp_name}`")
     })?;
 
@@ -795,132 +1285,135 @@ pub fn generate_adt_core<'tcx>(
     ensure!(size_in_bytes != 0, "Zero-sized types (ZSTs) are not supported (b/258259459)");
 
     Ok(Rc::new(AdtCoreBindings {
-        def_id,
+        def_id: Some(def_id),
         keyword,
         cc_short_name: cpp_name,
         rs_fully_qualified_name,
+        cc_fully_qualified_name,
         self_ty,
         alignment_in_bytes,
         size_in_bytes,
     }))
 }
 
-fn hir_fields_per_variant<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    local_def_id: LocalDefId,
-) -> Vec<&'tcx [hir::FieldDef<'tcx>]> {
-    let hir::Node::Item(item) = tcx.hir_node_by_def_id(local_def_id) else {
-        panic!("internal error: def_id referring to an ADT was not a HIR Item.");
-    };
-
-    match &item.kind {
-        hir::ItemKind::Struct(_, _, variant) | hir::ItemKind::Union(_, _, variant) => {
-            vec![variant.fields()]
-        }
-        hir::ItemKind::Enum(_, _, enum_info) => {
-            enum_info.variants.iter().map(|variant| variant.data.fields()).collect()
-        }
-        _ => {
-            panic!("internal error: def_id referring to a non-enum ADT was not a struct or union.")
-        }
-    }
-}
-
 struct IndexedVariantField<'tcx> {
     index: usize,
     field_def: &'tcx ty::FieldDef,
-    hir_field_ty: Option<&'tcx hir::Ty<'tcx>>,
 }
 
 /// Given ADT bindings, iterates over the variants of that ADT and the fields of each variant.
 /// For each field, iteration always provides the middle FieldDef and it's index within it's variant.
 /// The hir type of the field will optionally be included if it is available.
 fn variant_fields_iter<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    core: &AdtCoreBindings<'tcx>,
+    self_ty: Ty<'tcx>,
 ) -> impl Iterator<Item = impl Iterator<Item = IndexedVariantField<'tcx>>> {
-    // If our underlying iterator is None, we produce an infinite stream of None.
-    // This exists to present one type with the desired behavior without boxing.
-    struct RepeatedNone<'tcx> {
-        underlying: Option<std::vec::IntoIter<&'tcx [hir::FieldDef<'tcx>]>>,
-    }
-    impl<'tcx> Iterator for RepeatedNone<'tcx> {
-        type Item = Option<&'tcx [hir::FieldDef<'tcx>]>;
-
-        fn next(&mut self) -> Option<Self::Item> {
-            match self.underlying {
-                Some(ref mut variant_iter) => Some(variant_iter.next()),
-                // If we don't have a variant iterator, we just want to produce an infinite stream of None, so we don't limit our zip below.
-                None => Some(None),
-            }
-        }
-    }
-    let hir_fields = core
-        .def_id
-        .as_local()
-        .map(|local_def_id| hir_fields_per_variant(tcx, local_def_id).into_iter());
-    core.self_ty
-        .ty_adt_def()
-        .expect("`core.def_id` needs to identify an ADT")
-        .variants()
-        .iter()
-        .zip(RepeatedNone { underlying: hir_fields })
-        .map(|(variant, hir_fields)| {
-            variant.fields.iter().enumerate().map(move |(index, field_def)| {
-                let hir_field_ty = hir_fields.map(|hir_fields| {
-                    let hir_field = hir_fields
-                        .get(index)
-                        .expect("HIR ADT had fewer fields than rustc_middle for this variant");
-                    assert!(field_def.did == hir_field.def_id.to_def_id());
-                    hir_field.ty
-                });
-                IndexedVariantField { index, field_def, hir_field_ty }
-            })
-        })
+    self_ty.ty_adt_def().expect("`core.def_id` needs to identify an ADT").variants().iter().map(
+        |variant| {
+            variant
+                .fields
+                .iter()
+                .enumerate()
+                .map(move |(index, field_def)| IndexedVariantField { index, field_def })
+        },
+    )
 }
 
 fn anonymous_field_ident(index: usize) -> Ident {
     format_ident!("__field{index}")
 }
 
-fn generate_tuple_struct_ctor<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+/// Generates C++ bindings that are equivalent to using Rust constructors.
+///
+/// For example:
+/// * `MyTupleStruct(1,2,3)` is exposed as a C++ constructor that takes field values as arguments.
+/// * crubit.rs-enum-ctor-name-and-shape discusses provoding bindings for
+///   `MyEnum::NoPayloadVariant` (b/487399481) and
+///   `MyEnum::TuplePayloadVariant(1, 2, 3)` (b/487356976)
+fn generate_adt_based_ctors<'tcx>(
+    db: &BindingsGenerator<'tcx>,
     core: Rc<AdtCoreBindings<'tcx>>,
-) -> Option<ApiSnippets> {
-    let tcx = db.tcx();
-    let TyKind::Adt(adt_def, adt_generic_args) = core.self_ty.kind() else {
+    member_function_names: &mut HashSet<String>,
+) -> ApiSnippets<'tcx> {
+    let TyKind::Adt(adt_def, _) = core.self_ty.kind() else {
         panic!("Attempted to generate constructor for a non-ADT type: {:?}", core.self_ty)
     };
 
-    if !adt_def.has_ctor() {
-        // If this is not a struct with a constructor, don't generate a C++ constructor.
-        return None;
-    }
+    // Silently suppress errors for synthesized constructors (e.g. a tuple struct constructor
+    // doesn't really correspond to an explicit Rust API, so we don't report errors about
+    // generating bindings for such "API").
+    let should_suppress_errors =
+        matches!(adt_def.adt_kind(), ty::AdtKind::Struct | ty::AdtKind::Union);
 
-    if tcx
-        .get_all_attrs(core.def_id)
-        .iter()
-        .any(|attr| matches!(attr, Attribute::Parsed(AttributeKind::NonExhaustive(_))))
-    {
+    adt_def
+        .variants()
+        .iter_enumerated()
+        .map(|(variant_index, variant)| {
+            generate_variant_ctor(db, core.clone(), member_function_names, variant_index, variant)
+                .unwrap_or_else(|err| {
+                    if should_suppress_errors {
+                        Default::default()
+                    } else {
+                        generate_unsupported_def(db, variant.def_id, err).into_main_api()
+                    }
+                })
+        })
+        .collect()
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum EnumKind {
+    /// Enum with `#[repr(C)]` where bindings get `tag` and "payload" fields.
+    ReprC,
+    /// Enums (e.g. `#[repr(Rust)]` and `#[repr(u32)]`) that are represented as a blob of bytes
+    /// (i.e. bindings only have a single, private `__opaque_blob_of_bytes` field).
+    OpaqueBlobOfBytes,
+}
+fn get_enum_kind<'tcx>(db: &BindingsGenerator<'tcx>, ty: Ty<'tcx>) -> Option<EnumKind> {
+    let enum_adt_def = ty.ty_adt_def().filter(|adt_def| adt_def.is_enum())?;
+    let repr_attrs = db.repr_attrs(enum_adt_def.did());
+    if repr_attrs.contains(&rustc_hir::attrs::ReprC) {
+        Some(EnumKind::ReprC)
+    } else {
+        Some(EnumKind::OpaqueBlobOfBytes)
+    }
+}
+
+fn generate_variant_ctor<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    core: Rc<AdtCoreBindings<'tcx>>,
+    member_function_names: &mut HashSet<String>,
+    variant_index: VariantIdx,
+    variant: &'tcx ty::VariantDef,
+) -> Result<ApiSnippets<'tcx>> {
+    let tcx = db.tcx();
+
+    if variant.is_field_list_non_exhaustive() {
         // If the definition is marked #[non_exhaustive], don't generate a C++ constructor.
         // #[non_exhaustive] tuple structs do not have a public synthesized constructor.
-        return None;
+        bail!("`#[non_exhaustive]` structs don't get public constructors");
     }
+
+    let TyKind::Adt(adt_def, adt_generic_args) = core.self_ty.kind() else {
+        panic!("Attempted to generate constructor for a non-ADT type: {:?}", core.self_ty)
+    };
 
     let default_trait_id = tcx.get_diagnostic_item(sym::Default).expect("Default trait not found");
     let clone_trait_id = tcx.lang_items().copy_trait().expect("Copy trait not found");
     let unpin_trait_id = tcx.lang_items().unpin_trait().expect("Unpin trait not found");
 
-    let field_tys = variant_fields_iter(tcx, core.as_ref())
-        .next()
-        .expect("Tuple structs must have one variant")
-        .map(|IndexedVariantField { field_def, hir_field_ty, .. }| {
-            if field_def.vis != ty::Visibility::Public {
-                // If our synthesized constructor would have a non public visibility, don't generate it as
-                // we can't mirror that visibility in C++.
-                return None;
+    let field_tys = variant
+        .fields
+        .iter()
+        .map(|field_def| {
+            if let Err(private_or_unstable) = crate::field_def_is_pub_and_stable(tcx, field_def) {
+                // If our synthesized constructor would have a non public
+                // visibility, don't generate it as we can't mirror that
+                // visibility in C++.
+                bail!("Field `{}` is {private_or_unstable}", field_def.name)
             }
             let ty = field_def.ty(tcx, adt_generic_args);
+            #[rustversion::since(2026-05-13)]
+            let ty = crate::normalize_ty(tcx, tcx.param_env(field_def.did), ty);
 
             let is_default =
                 query_compiler::does_type_implement_trait(tcx, ty, default_trait_id, []);
@@ -929,30 +1422,18 @@ fn generate_tuple_struct_ctor<'tcx>(
             let is_movable_in_cpp = (is_default && is_unpin) || is_clone;
             if !is_movable_in_cpp {
                 // If one of our fields isn't movable in C++, we can't generate a C++ constructor.
-                return None;
+                bail!("Field `{}` is not movable in C++", field_def.name)
             }
 
-            if db.enable_hir_types() {
-                Some(SugaredTy::new(ty, hir_field_ty))
-            } else {
-                Some(SugaredTy::missing_hir(ty))
-            }
+            Ok(ty)
         })
-        .collect::<Option<Vec<_>>>()?;
-
-    let explicit = (field_tys.len() == 1).then_some(quote! { explicit });
-
-    let mut main_api_prereqs = CcPrerequisites::default();
-    let adt_cc_name = &core.cc_short_name;
-    let initializer_list = (0..field_tys.len()).map(|i| {
-        let cc_name = anonymous_field_ident(i);
-        quote! { #cc_name ( std::move ( #cc_name ) ) }
-    });
+        .collect::<Result<Vec<Ty<'tcx>>>>()?;
 
     // If we fail to convert a field type, don't generate a constructor.
     // Our uncovertible fields will be replaced by a blob of bytes that we do not want to appear
     // in our API, so opt to avoid presenting a constructor for types that contain a blob of
     // bytes.
+    let mut main_api_prereqs = CcPrerequisites::default();
     let main_api_params = field_tys
         .into_iter()
         .enumerate()
@@ -962,46 +1443,168 @@ fn generate_tuple_struct_ctor<'tcx>(
             let cpp_type = cpp_type.into_tokens(&mut main_api_prereqs);
             Ok(quote! { #cpp_type #cc_name })
         })
-        .collect::<Result<Vec<TokenStream>>>()
-        .ok()?;
+        .collect::<Result<Vec<TokenStream>>>()?;
 
     let mut prereqs = main_api_prereqs.clone();
     prereqs.move_defs_to_fwd_decls();
 
-    Some(ApiSnippets {
-        main_api: CcSnippet {
-            prereqs,
-            tokens: quote! {
-              __NEWLINE__ __COMMENT__ "Synthesized tuple constructor"
-              #explicit #adt_cc_name (
-                  #( #main_api_params ),*
-              ) : #( #initializer_list ),* { }
-              __NEWLINE__
-            },
-        },
-        ..Default::default()
-    })
+    let Some(ctor_def_id) = variant.ctor_def_id() else {
+        bail!("Constructing non-tuple, struct-like enum variants is not supported: b/487357254");
+    };
+
+    let adt_cc_name = &core.cc_short_name;
+    match adt_def.adt_kind() {
+        ty::AdtKind::Struct => {
+            let explicit = (main_api_params.len() == 1).then_some(quote! { explicit });
+            let initializer_list = (0..main_api_params.len()).map(|i| {
+                let cc_name = anonymous_field_ident(i);
+                quote! { #cc_name ( ::std::move ( #cc_name ) ) }
+            });
+            Ok(ApiSnippets {
+                main_api: CcSnippet {
+                    prereqs,
+                    tokens: quote! {
+                    __NEWLINE__ __COMMENT__ "Synthesized tuple constructor"
+                    #explicit #adt_cc_name (
+                        #( #main_api_params ),*
+                    ) : #( #initializer_list ),* { }
+                    __NEWLINE__
+                    },
+                },
+                ..Default::default()
+            })
+        }
+        ty::AdtKind::Enum => {
+            let method_name = format_variant_ctor_cc_name(variant.name.as_str());
+            if member_function_names.contains(&method_name) {
+                bail!("Conflicting member function name: {method_name}");
+            }
+            let mut mark_method_name_as_used = || {
+                let was_inserted = member_function_names.insert(method_name.clone());
+                assert!(was_inserted, "Conflicting names rejected earlier (above)");
+            };
+            if !main_api_params.is_empty() {
+                let result = db.generate_function(ctor_def_id, None, StaticMethodMode::Infer);
+                if result.is_ok() {
+                    mark_method_name_as_used();
+                }
+                return result;
+            }
+            let enum_kind = get_enum_kind(db, core.self_ty).expect("AtdKindEnum implied EnumKind");
+            let body = match enum_kind {
+                EnumKind::ReprC => {
+                    let discr = core
+                        .self_ty
+                        .discriminant_for_variant(tcx, variant_index)
+                        .expect("Invalid VariantIdx");
+                    let (discr_size, _signed) = discr.ty.int_size_and_signed(tcx);
+                    let (scalar_int, _) = ty::ScalarInt::truncate_from_uint(discr.val, discr_size);
+                    let tag_literal =
+                        scalar_value_to_string(tcx, Scalar::Int(scalar_int), *discr.ty.kind())
+                            .expect("tag to be a valid scalar constant")
+                            .parse::<TokenStream>()
+                            .expect("tag string to consist of valid scalar tokens");
+                    quote! {
+                        return #adt_cc_name(PrivateTagCtorTag{}, Tag { #tag_literal });
+                    }
+                }
+                EnumKind::OpaqueBlobOfBytes => {
+                    let (tag_val, tag_size) = {
+                        let typing_env = post_analysis_typing_env(
+                            tcx,
+                            core.def_id.expect("Enums must have a DefId"),
+                        );
+                        let tag = tcx.tag_for_variant(typing_env.as_query_input((
+                            tcx.erase_and_anonymize_regions(core.self_ty),
+                            variant_index,
+                        )));
+                        match tag {
+                            Some(tag) => (tag.to_bits(tag.size()), tag.size()),
+                            None => (0, rustc_abi::Size::ZERO),
+                        }
+                    };
+                    let tag_offset = {
+                        let layout =
+                            get_layout(tcx, core.self_ty).expect("Should verify layout earlier");
+                        use rustc_abi::Variants::*;
+                        let tag_field = match layout.variants() {
+                            Empty => unreachable!("Uninhabited types should be rejected earlier"),
+                            Single { .. } => unreachable!("Single+NoPayload=ZST=rejected earlier"),
+                            Multiple { tag_field, .. } => tag_field,
+                        };
+                        layout.fields().offset(tag_field.as_usize()).bytes() as usize
+                    };
+                    let adt_size = core.size_in_bytes as usize;
+                    let discr_bytesize = (adt_size - tag_offset).min(tag_size.bytes() as usize);
+                    let tag_bytes = match tcx.sess.target.endian {
+                        Endian::Little => &tag_val.to_le_bytes()[..discr_bytesize],
+                        Endian::Big => {
+                            &tag_val.to_be_bytes()[std::mem::size_of::<u128>() - discr_bytesize..]
+                        }
+                    };
+                    let bytes = {
+                        let mut bytes = vec![0; adt_size];
+                        bytes[tag_offset..tag_offset + tag_bytes.len()].copy_from_slice(tag_bytes);
+                        bytes.into_iter().map(Literal::u8_unsuffixed).collect_vec()
+                    };
+                    quote! {
+                        return #adt_cc_name(PrivateBytesTag{}, { #( #bytes ),* });
+                    }
+                }
+            };
+            let constexpr = if adt_core_bindings_needs_drop(&core, tcx) {
+                // TODO(b/489085607): If we can make destructor `constexpr` (see bug for ideas)
+                // then `constexpr` *here* can be used unconditionally.
+                quote! {}
+            } else {
+                quote! { constexpr }
+            };
+            let doc_comment = generate_doc_comment(db, variant.def_id);
+            let method_name = format_cc_ident(db, &method_name)?;
+            mark_method_name_as_used();
+            Ok(ApiSnippets {
+                main_api: CcSnippet {
+                    prereqs,
+                    tokens: quote! {
+                        __NEWLINE__ #doc_comment
+                        static #constexpr #adt_cc_name #method_name();
+                        __NEWLINE__
+                    },
+                },
+                cc_details: CcSnippet::new(quote! {
+                    __NEWLINE__
+                    __COMMENT__ "`static` constructor"
+                    inline #constexpr #adt_cc_name #adt_cc_name::#method_name() { #body }
+                    __NEWLINE__
+                }),
+                ..Default::default()
+            })
+        }
+        ty::AdtKind::Union => bail!("Crubit doesn't provide bindings for constructing unions"),
+    }
 }
 
 /// Returns the body of the C++ struct that represents the given ADT.
-fn generate_fields<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
-    core: &AdtCoreBindings<'tcx>,
+pub(crate) fn generate_fields<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    self_ty: Ty<'tcx>,
+    cc_short_name: &Ident,
+    rs_fully_qualified_name: &TokenStream,
+    repr_attrs: &[rustc_hir::attrs::ReprAttr],
+    size_in_bytes: u64,
+    alignment_in_bytes: u64,
     member_function_names: &HashSet<String>,
-) -> ApiSnippets {
+) -> ApiSnippets<'tcx> {
     let tcx = db.tcx();
-    let TyKind::Adt(adt_def, adt_generic_args) = core.self_ty.kind() else {
-        panic!("Attempted to generate fields for a non-ADT type: {:?}", core.self_ty)
+    let TyKind::Adt(adt_def, adt_generic_args) = self_ty.kind() else {
+        panic!("Attempted to generate fields for a non-ADT type: {:?}", self_ty)
     };
-
-    let repr_attrs = db.repr_attrs(core.def_id);
-
-    struct FieldTypeInfo {
+    struct FieldTypeInfo<'tcx> {
         size: u64,
-        cpp_type: CcSnippet,
+        cpp_type: CcSnippet<'tcx>,
     }
-    struct Field {
-        type_info: Result<FieldTypeInfo>,
+    struct Field<'tcx> {
+        type_info: Result<FieldTypeInfo<'tcx>>,
         cc_name: Ident,
         rs_name: TokenStream,
         is_public: bool,
@@ -1011,7 +1614,7 @@ fn generate_fields<'tcx>(
         doc_comment: TokenStream,
         attributes: Vec<TokenStream>,
     }
-    impl Field {
+    impl<'a> Field<'a> {
         fn size(&self) -> u64 {
             match self.type_info {
                 Err(_) => self.offset_of_next_field - self.offset,
@@ -1020,8 +1623,8 @@ fn generate_fields<'tcx>(
         }
     }
 
-    let layout = get_layout(tcx, core.self_ty)
-        .expect("Layout should be already verified by `generate_adt_core`");
+    let layout =
+        get_layout(tcx, self_ty).expect("Layout should be already verified by `generate_adt_core`");
     let err_fields = |err| {
         vec![Field {
             type_info: Err(err),
@@ -1030,7 +1633,7 @@ fn generate_fields<'tcx>(
             is_public: false,
             index: 0,
             offset: 0,
-            offset_of_next_field: core.size_in_bytes,
+            offset_of_next_field: size_in_bytes,
             doc_comment: quote! {},
             attributes: vec![],
         }]
@@ -1042,24 +1645,33 @@ fn generate_fields<'tcx>(
     // If the ADT has multiple variants, then we need to use the layout of each
     // variant. The `layout.fields` just contains the tag.
     let fields_shape = match layout_variants {
-        Variants::Single { .. } | Variants::Empty => vec![&layout.fields],
+        Variants::Single { .. } | Variants::Empty => vec![layout.fields.clone()],
         Variants::Multiple { tag: _, tag_encoding: _, tag_field: _, variants } => {
-            variants.iter().map(|variant| &variant.fields).collect_vec()
+            #[rustversion::before(2026-05-18)]
+            let get_fields = |(_, variant): (VariantIdx, &LayoutData<FieldIdx, VariantIdx>)| {
+                variant.fields.clone()
+            };
+            #[rustversion::since(2026-05-18)]
+            let get_fields = |(i, _): (VariantIdx, &VariantLayout<FieldIdx>)| {
+                LayoutData::for_variant(&layout, i).fields
+            };
+            variants.iter_enumerated().map(get_fields).collect_vec()
         }
     };
 
     // Used for generating enum bindings.
-    let is_supported_enum = adt_def.is_enum() && repr_attrs.contains(&rustc_hir::attrs::ReprC);
-
-    let tag_size_with_padding =
-        if is_supported_enum { get_tag_size_with_padding(layout) } else { 0 };
+    let enum_kind = get_enum_kind(db, self_ty);
+    let tag_size_with_padding = match enum_kind {
+        Some(EnumKind::ReprC) => get_tag_size_with_padding(layout),
+        None | Some(EnumKind::OpaqueBlobOfBytes) => 0,
+    };
 
     let variant_sizes = match layout_variants {
         Variants::Multiple { tag: _, tag_encoding: _, tag_field: _, variants } => {
             variants.iter().map(|layout| layout.size.bytes() - tag_size_with_padding).collect_vec()
         }
         Variants::Single { .. } | Variants::Empty => {
-            vec![core.alignment_in_bytes]
+            vec![alignment_in_bytes]
         }
     };
 
@@ -1072,27 +1684,36 @@ fn generate_fields<'tcx>(
             .map(|variant| variant.size.bytes() - tag_size_with_padding)
             .collect_vec(),
     };
-    let variants_fields: Vec<Vec<Field>> = match adt_def.adt_kind() {
+    let variants_fields: Vec<Vec<Field<'tcx>>> = match adt_def.adt_kind() {
         // Handle cases of unsupported ADTs.
-        ty::AdtKind::Enum if (!repr_attrs.contains(&rustc_hir::attrs::ReprC)) => {
+        ty::AdtKind::Enum if enum_kind != Some(EnumKind::ReprC) => {
             vec![err_fields(anyhow!("No support for bindings of individual non-repr(C) `enum`s"))]
         }
 
         // Otherwise, get the fields and determine the memory layout.
         _ => {
-            let mut variants_fields = variant_fields_iter(tcx, core)
+            let mut variants_fields = variant_fields_iter(self_ty)
                 .map(|field_iter| {
                     field_iter
-                        .map(|IndexedVariantField { index, field_def, hir_field_ty }| {
-                            let ty = if db.enable_hir_types() {
-                                SugaredTy::new(field_def.ty(tcx, adt_generic_args), hir_field_ty)
-                            } else {
-                                SugaredTy::missing_hir(field_def.ty(tcx, adt_generic_args))
-                            };
-                            let size =
-                                get_layout(tcx, ty.mid()).map(|layout| layout.size().bytes());
+                        .map(|IndexedVariantField { index, field_def }| {
+                            let ty = field_def.ty(tcx, adt_generic_args);
+                            #[rustversion::since(2026-05-13)]
+                            let ty = crate::normalize_ty(tcx, tcx.param_env(field_def.did), ty);
+                            let size = get_layout(tcx, ty).map(|layout| layout.size().bytes());
                             let type_info = size.and_then(|size| {
-                                if is_bridged_type(db, ty.mid())?.is_some() {
+                                if is_bridged_type(db, ty).is_ok_and(|bridged_type| {
+                                    // Pointer-like transmute types are layout-compatible, not
+                                    // bridged by-value.
+                                    bridged_type.is_some_and(|bridged_type| {
+                                        !bridged_type.is_layout_compatible()
+                                    })
+                                }) && !ty
+                                    .ty_adt_def()
+                                    .and_then(|adt_def| BridgedBuiltin::new(db, adt_def))
+                                    .is_some_and(|builtin| {
+                                        matches!(builtin, BridgedBuiltin::Option)
+                                    })
+                                {
                                     bail!(
                                         "Field is a bridged type and might not be layout-compatible
                                     with the C++ type (b/400633609)"
@@ -1103,10 +1724,9 @@ fn generate_fields<'tcx>(
                                     size,
                                     cpp_type: db
                                         .format_ty_for_cc(ty, TypeLocation::Other)?
-                                        .resolve_feature_requirements(crate_features(
-                                            db,
-                                            db.source_crate_num(),
-                                        ))?,
+                                        .resolve_feature_requirements(
+                                            db.crate_features(db.source_crate_num()),
+                                        )?,
                                 })
                             });
                             let name = field_def.ident(tcx).to_string();
@@ -1155,7 +1775,8 @@ fn generate_fields<'tcx>(
                                 type_info,
                                 cc_name,
                                 rs_name,
-                                is_public: field_def.vis == ty::Visibility::Public,
+                                is_public: crate::field_def_is_pub_and_stable(tcx, field_def)
+                                    .is_ok(),
                                 index,
                                 offset,
                                 offset_of_next_field,
@@ -1179,7 +1800,7 @@ fn generate_fields<'tcx>(
                             // `def_span`.
                             variants_fields[variant_index][index].offset = offset.bytes();
 
-                            if is_supported_enum {
+                            if enum_kind == Some(EnumKind::ReprC) {
                                 // Find the offset for the variant, and take it into
                                 // account.
                                 variants_fields[variant_index][index].offset -=
@@ -1195,11 +1816,12 @@ fn generate_fields<'tcx>(
                             (field.offset, field_size, field.index)
                         });
                     }
-                    FieldsShape::Union(num_fields) => {
+                    FieldsShape::Union { .. } => {
                         // Compute the offset of each field
-                        for index in 0..num_fields.get() {
-                            variants_fields[variant_index][index].offset =
-                                layout.fields().offset(index).bytes();
+                        for (field_index, field) in
+                            variants_fields[variant_index].iter_mut().enumerate()
+                        {
+                            field.offset = layout.fields().offset(field_index).bytes();
                         }
                     }
                     unexpected => panic!("Unexpected FieldsShape: {unexpected:?}"),
@@ -1224,7 +1846,7 @@ fn generate_fields<'tcx>(
     let cc_details = if variants_fields.is_empty() {
         CcSnippet::default()
     } else {
-        let adt_cc_name = &core.cc_short_name;
+        let adt_cc_name = cc_short_name;
         let cc_assertions: TokenStream = match adt_def.adt_kind() {
             ty::AdtKind::Struct | ty::AdtKind::Union => {
                 variants_fields
@@ -1238,9 +1860,10 @@ fn generate_fields<'tcx>(
                     })
                     .collect()
             }
-            ty::AdtKind::Enum => {
-                // Check if each variant has the tag (and appropriate padding) in the front.
-                if !is_supported_enum {
+            // Check if each variant has the tag (and appropriate padding) in the front.
+            ty::AdtKind::Enum => match enum_kind {
+                None => unreachable!("ty::AdtKind::Enum with no enum_kind is impossible"),
+                Some(EnumKind::OpaqueBlobOfBytes) => {
                     variants_fields
                         .iter()
                         .flatten()
@@ -1251,7 +1874,8 @@ fn generate_fields<'tcx>(
                             quote! { static_assert(#offset == offsetof(#adt_cc_name, #cc_name)); }
                         })
                         .collect()
-                } else {
+                }
+                Some(EnumKind::ReprC) => {
                     let variant_offset_assertions: TokenStream = adt_def.variants().iter_enumerated().map(|(variant_index, variant_def)| {
                         let cc_variant_struct_name = format_cc_ident(db, variant_def.ident(tcx).as_str())
                             .unwrap_or_else(|_err| format_ident!("err_field"));
@@ -1285,7 +1909,7 @@ fn generate_fields<'tcx>(
                     }).collect();
                     quote! {#variant_offset_assertions #variant_field_assertions }
                 }
-            }
+            },
         };
 
         CcSnippet::with_include(
@@ -1298,7 +1922,7 @@ fn generate_fields<'tcx>(
         )
     };
 
-    let rs_details: RsSnippet = if is_supported_enum {
+    let rs_details: RsSnippet = if enum_kind == Some(EnumKind::ReprC) {
         // Offsets for enums is an experimental feature.
         // TODO(b/355642210): Add these assertions once they're not
         // experiemtnal. let adt_rs_name =
@@ -1324,7 +1948,7 @@ fn generate_fields<'tcx>(
         //     .collect()
         RsSnippet::default()
     } else {
-        let adt_rs_name = &core.rs_fully_qualified_name;
+        let adt_rs_name = rs_fully_qualified_name;
         variants_fields
             .iter()
             .flatten()
@@ -1393,11 +2017,16 @@ fn generate_fields<'tcx>(
         }
 
         // Takes a field and converts it to a token stream.
-        let get_field_tokens = |field: Field,
-                                prereqs: &mut CcPrerequisites,
+        let get_field_tokens = |field: Field<'tcx>,
+                                prereqs: &mut CcPrerequisites<'tcx>,
                                 current_visibility: &mut CcFieldVisState|
          -> TokenStream {
             let cc_name = &field.cc_name;
+            let bracketed_cc_name = if db.kythe_annotations() {
+                quote! { __CAPTURE_BEGIN__ #cc_name __CAPTURE_END__ }
+            } else {
+                quote! { #cc_name }
+            };
             match field.type_info {
                 Err(ref err) => {
                     let size = field.size();
@@ -1410,8 +2039,9 @@ fn generate_fields<'tcx>(
                         let tokens = quote! {
                             #visibility __NEWLINE__
                                 __COMMENT__ #msg
-                                unsigned char #cc_name[#size];
+                                ::std::array<unsigned char, #size> #cc_name;
                         };
+                        prereqs.includes.insert(CcInclude::array());
                         tokens
                     } else {
                         // TODO(b/258259459): Generate bindings for ZST fields.
@@ -1466,7 +2096,7 @@ fn generate_fields<'tcx>(
                                     union {  __NEWLINE__
                                         #doc_comment
                                         #(#attributes)*
-                                        #cpp_type #cc_name;
+                                        #cpp_type #bracketed_cc_name;
                                     };
                                 #padding
                             }
@@ -1476,7 +2106,7 @@ fn generate_fields<'tcx>(
                                 quote! {
                                     #visibility __NEWLINE__
                                     #doc_comment
-                                    #cpp_type #cc_name;
+                                    #cpp_type #bracketed_cc_name;
                                 }
                             } else {
                                 let internal_padding = if field.offset == 0 {
@@ -1492,11 +2122,13 @@ fn generate_fields<'tcx>(
                                     struct {
                                         #internal_padding
                                         #cpp_type value;
-                                    } #cc_name;
+                                    } #bracketed_cc_name;
                                 }
                             }
                         }
                         ty::AdtKind::Enum => {
+                            // TODO(b/460420108) : Why is there no #doc_comment here? We need one
+                            // for __CAPTURE_BEGIN__ et al to work properly.
                             quote! {
                                 #visibility __NEWLINE__ #cpp_type #cc_name;
                             }
@@ -1509,6 +2141,7 @@ fn generate_fields<'tcx>(
 
         // For structs and unions, we can just flatten the fields variant. For enums, we
         // need to handle each variant separately.
+        let adt_size = Literal::u64_unsuffixed(layout.size().bytes());
         let fields = match adt_def.adt_kind() {
             ty::AdtKind::Struct | ty::AdtKind::Union => {
                 let mut current_visibility = CcFieldVisState::public();
@@ -1518,7 +2151,7 @@ fn generate_fields<'tcx>(
                     .map(|field| get_field_tokens(field, &mut prereqs, &mut current_visibility))
                     .collect()
             }
-            ty::AdtKind::Enum if !is_supported_enum => variants_fields
+            ty::AdtKind::Enum if enum_kind != Some(EnumKind::ReprC) => variants_fields
                 .into_iter()
                 .flatten()
                 .map(|field| get_field_tokens(field, &mut prereqs, &mut Default::default()))
@@ -1543,7 +2176,7 @@ fn generate_fields<'tcx>(
                             .format_ty_for_cc(
                                 // An enum cannot have repr(c_char), or any other alias, so there's
                                 // never sugar.
-                                SugaredTy::missing_hir(tag_ty),
+                                tag_ty,
                                 TypeLocation::Other,
                             )
                             .expect("discriminant should be a integer type.")
@@ -1590,13 +2223,20 @@ fn generate_fields<'tcx>(
                 // We need to get the alignment of each variant struct.
                 let variant_alignments = match layout_variants {
                     Variants::Multiple { tag: _, tag_encoding: _, tag_field: _, variants } => {
-                        variants
-                            .iter()
-                            .map(|layout| layout.align.abi.bytes() - tag_size_with_padding)
-                            .collect_vec()
+                        #[rustversion::before(2026-05-18)]
+                        let get_align =
+                            |(_, layout): (VariantIdx, &LayoutData<FieldIdx, VariantIdx>)| {
+                                layout.align.abi.bytes() - tag_size_with_padding
+                            };
+                        #[rustversion::since(2026-05-18)]
+                        let get_align = |(i, _): (VariantIdx, &VariantLayout<FieldIdx>)| {
+                            LayoutData::for_variant(&layout, i).align.abi.bytes()
+                                - tag_size_with_padding
+                        };
+                        variants.iter_enumerated().map(get_align).collect_vec()
                     }
                     Variants::Single { .. } | Variants::Empty => {
-                        vec![core.alignment_in_bytes]
+                        vec![alignment_in_bytes]
                     }
                 };
 
@@ -1690,11 +2330,27 @@ fn generate_fields<'tcx>(
                 }
             }
         };
-
+        let enum_opaque_bytes_ctor = match enum_kind {
+            Some(EnumKind::OpaqueBlobOfBytes) => quote! {
+                private:
+                    struct PrivateBytesTag {};
+                    constexpr #cc_short_name(PrivateBytesTag,
+                                             ::std::array<unsigned char, #adt_size> bytes)
+                        : __opaque_blob_of_bytes(bytes) {}
+            },
+            Some(EnumKind::ReprC) => quote! {
+                private:
+                    struct PrivateTagCtorTag {};
+                    constexpr #cc_short_name(PrivateTagCtorTag, Tag tag)
+                        : tag(tag) {}
+            },
+            _ => quote! {},
+        };
         CcSnippet {
             prereqs,
             tokens: quote! {
                 #fields
+                #enum_opaque_bytes_ctor
                 #assertions_method_decl
             },
         }
@@ -1704,12 +2360,11 @@ fn generate_fields<'tcx>(
 }
 
 /// Generates the `(UnsafeRelocateTag, T&&)` constructor for the given ADT.
-fn generate_relocating_ctor<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
-    core: Rc<AdtCoreBindings<'tcx>>,
-) -> ApiSnippets {
-    let adt_cc_name = &core.cc_short_name;
-    let main_api = CcSnippet::with_include(
+pub(crate) fn generate_relocating_ctor<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    adt_cc_name: &Ident,
+) -> ApiSnippets<'tcx> {
+    let mut main_api = CcSnippet::with_include(
         quote! {
             #adt_cc_name(::crubit::UnsafeRelocateTag, #adt_cc_name&& value) {
                 // This is a bit tricky. Note that the lifetime of `this` has already begun,
@@ -1722,10 +2377,12 @@ fn generate_relocating_ctor<'tcx>(
                 // union.)
                 //
                 // So while `memcpy` doesn't usually work, it does here.
-                memcpy(this, &value, sizeof(value));
+                ::std::memcpy(this, &value, sizeof(value));
             }
         },
         db.support_header("internal/slot.h"),
     );
-    ApiSnippets { main_api, ..Default::default() }
+    // We include this for `std::memcpy`.
+    main_api.prereqs.includes.insert(CcInclude::cstring());
+    main_api.into_main_api()
 }

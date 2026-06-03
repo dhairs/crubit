@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:bitfields_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
@@ -20,12 +21,12 @@
 pub struct WithBitfields {
     // f1 : 2 bits
     __bitfields0: [::core::mem::MaybeUninit<u8>; 1],
-    pub f2: ::core::ffi::c_int,
+    pub f2: ::ffi_11::c_int,
     // f3 : 4 bits
     // f4 : 8 bits
     //  : 45 bits
     __bitfields2: [::core::mem::MaybeUninit<u8>; 10],
-    pub f5: ::core::ffi::c_int,
+    pub f5: ::ffi_11::c_int,
     // f6 : 23 bits
     __bitfields4: [::core::mem::MaybeUninit<u8>; 3],
     /// Reason for representing this field as a blob of bytes:
@@ -52,26 +53,14 @@ impl Default for WithBitfields {
     }
 }
 
-// Error while generating bindings for constructor 'WithBitfields::WithBitfields':
-// Can't generate bindings for WithBitfields::WithBitfields, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for WithBitfields::WithBitfields (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for constructor 'WithBitfields::WithBitfields':
-// Can't generate bindings for WithBitfields::WithBitfields, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for WithBitfields::WithBitfields (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'WithBitfields::operator=':
-// Can't generate bindings for WithBitfields::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for WithBitfields::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for WithBitfields::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'WithBitfields::operator=':
-// Can't generate bindings for WithBitfields::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for WithBitfields::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for WithBitfields::operator= (the type of __param_0 (parameter #1): references are not supported)
-
 /// This is a regression test for b/283835873 where the alignment of the
 /// generated struct was wrong/missing.
+///
+/// # Safety
+///
+/// To call a function that accepts this type, you must uphold these requirements:
+/// * Document why the following public unsafe fields of this type cannot be misused by callee:
+///   * `status`: Rust type is unknown; safety requirements cannot be automatically generated: Unsupported type 'enum AlignmentRegressionTest::(unnamed at ./rs_bindings_from_cc/test/golden/bitfields.h:25:3)': No generated bindings found for ''
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C, align(4))]
 ///CRUBIT_ANNOTATE: cpp_type=AlignmentRegressionTest
@@ -98,26 +87,11 @@ impl Default for AlignmentRegressionTest {
     }
 }
 
-// Error while generating bindings for constructor 'AlignmentRegressionTest::AlignmentRegressionTest':
-// Can't generate bindings for AlignmentRegressionTest::AlignmentRegressionTest, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for AlignmentRegressionTest::AlignmentRegressionTest (the type of __param_0 (parameter #1): references are not supported)
+pub mod alignment_regression_test {
+    pub const ok: u32 = 0;
 
-// Error while generating bindings for constructor 'AlignmentRegressionTest::AlignmentRegressionTest':
-// Can't generate bindings for AlignmentRegressionTest::AlignmentRegressionTest, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for AlignmentRegressionTest::AlignmentRegressionTest (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'AlignmentRegressionTest::operator=':
-// Can't generate bindings for AlignmentRegressionTest::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for AlignmentRegressionTest::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for AlignmentRegressionTest::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'AlignmentRegressionTest::operator=':
-// Can't generate bindings for AlignmentRegressionTest::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for AlignmentRegressionTest::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:bitfields_cc needs [//features:experimental] for AlignmentRegressionTest::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for enum 'AlignmentRegressionTest::(unnamed enum at ./rs_bindings_from_cc/test/golden/bitfields.h:26:3)':
-// Unnamed enums are not supported yet
+    pub const error: u32 = 1;
+}
 
 mod detail {
     #[allow(unused_imports)]

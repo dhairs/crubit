@@ -2,7 +2,8 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #![feature(rustc_private)]
-#![deny(rustc::internal)]
+#![feature(stmt_expr_attributes)]
+#![feature(proc_macro_hygiene)]
 
 //! Query the rust compiler.
 
@@ -17,11 +18,14 @@ extern crate rustc_trait_selection;
 
 use arc_anyhow::Result;
 use error_report::anyhow;
+#[rustversion::before(2026-05-18)]
+use rustc_abi::FieldsShape;
 use rustc_abi::IntegerType;
-use rustc_abi::{FieldIdx, FieldsShape, Integer, Layout, Primitive, Scalar, Variants};
+use rustc_abi::{FieldIdx, Integer, Layout, Primitive, Scalar, Variants};
 use rustc_ast::ast::{IntTy as IntT, UintTy as UintT};
 use rustc_hir::attrs::IntType;
 use rustc_infer::infer::TyCtxtInferExt;
+use rustc_middle::ty::solve::NoSolution;
 use rustc_middle::ty::{
     self, GenericArg, GenericArgKind, GenericParamDefKind, IntTy, Region, Ty, TyCtxt, UintTy,
 };
@@ -33,7 +37,7 @@ use std::rc::Rc;
 
 /// Whether functions using `extern "C"` ABI can safely handle values of type
 /// `ty` (e.g. when passing by value arguments or return values of such type).
-pub fn is_c_abi_compatible_by_value(tcx: TyCtxt<'_>, ty: Ty) -> bool {
+pub fn is_c_abi_compatible_by_value<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> bool {
     match ty.kind() {
         // `improper_ctypes_definitions` warning doesn't complain about the following types:
         ty::TyKind::Bool
@@ -50,14 +54,6 @@ pub fn is_c_abi_compatible_by_value(tcx: TyCtxt<'_>, ty: Ty) -> bool {
         // See `rust_builtin_type_abi_assumptions.md` for more details.
         ty::TyKind::Char => true,
 
-        // TODO(b/271016831): When launching `&[T]` (not just `*const T`), consider returning
-        // `true` for `TyKind::Ref` and document the rationale for such decision - maybe
-        // something like this will be sufficient:
-        // - In general `TyKind::Ref` should have the same ABI as `TyKind::RawPtr`
-        // - References to slices (`&[T]`) or strings (`&str`) rely on assumptions
-        //   spelled out in `rust_builtin_type_abi_assumptions.md`.
-        ty::TyKind::Slice { .. } => false,
-
         // Crubit's C++ bindings for tuples, structs, and other ADTs may not preserve
         // their ABI (even if they *do* preserve their memory layout).  For example:
         // - In System V ABI replacing a field with a fixed-length array of bytes may affect
@@ -73,7 +69,7 @@ pub fn is_c_abi_compatible_by_value(tcx: TyCtxt<'_>, ty: Ty) -> bool {
         // - `#[repr(C)]` structs and unions,
         // - Discriminant-only enums (b/259984090).
         ty::TyKind::Tuple { .. } => false, // An empty tuple (`()` - the unit type) is handled above.
-        ty::TyKind::Adt(adt, _) => {
+        ty::TyKind::Adt(adt, substs) => {
             if !adt.repr().transparent() {
                 // If our adt is not transparent, it is not abi compatible by value.
                 return false;
@@ -82,16 +78,29 @@ pub fn is_c_abi_compatible_by_value(tcx: TyCtxt<'_>, ty: Ty) -> bool {
                 // TODO: b/258259459 - Support zero sized types.
                 return false;
             };
-            is_c_abi_compatible_by_value(tcx, tcx.type_of(field.did).instantiate_identity())
+            #[rustversion::before(2026-04-19)]
+            let mut ty = tcx.type_of(field.did).instantiate(tcx, substs);
+            #[rustversion::since(2026-04-19)]
+            let mut ty = tcx.type_of(field.did).instantiate(tcx, substs).skip_normalization();
+
+            // Pattern types can be considered by value when they're embedded within an ADT.
+            // We dont' want to do that for pattern types at large because they might mean they're
+            // in a function signature, and we cannot uphold a pattern types invariants across the
+            // FFI boundary leading to UB.
+            if let ty::TyKind::Pat(pat_ty, _) = ty.kind() {
+                ty = *pat_ty;
+            }
+            is_c_abi_compatible_by_value(tcx, ty)
         }
+        ty::TyKind::Pat(_, _) => false,
 
         // Arrays are explicitly not ABI-compatible (though they are layout-compatible).
         ty::TyKind::Array { .. } => false,
         ty::TyKind::Alias { .. } => false,
 
-        // These kinds of reference-related types are not implemented yet - `is_c_abi_compatible_by_value`
-        // should never need to handle them, because `format_ty_for_cc` fails for such types.
-        ty::TyKind::Str => unimplemented!(),
+        // Slice references (`&[T]`, `&str`) are not guaranteed to be ABI-compatible when passed
+        // by-value.
+        ty::TyKind::Slice { .. } | ty::TyKind::Str => false,
 
         // `format_ty_for_cc` is expected to fail for other kinds of types
         // and therefore `is_c_abi_compatible_by_value` should never be called for
@@ -124,15 +133,24 @@ pub fn count_regions<'tcx>(sig_mid: &ty::FnSig<'tcx>) -> HashMap<Region<'tcx>, u
 /// The prefix for deanonymized region names.
 pub const ANON_REGION_PREFIX: &str = "'__anon";
 
+#[rustversion::before(2026-04-19)]
+pub type PolyFnSig<'tcx> = ty::PolyFnSig<'tcx>;
+
+#[rustversion::since(2026-04-19)]
+pub type PolyFnSig<'tcx> = ty::Unnormalized<'tcx, ty::PolyFnSig<'tcx>>;
+
 /// Similar to `TyCtxt::liberate_and_name_late_bound_regions` but also replaces
 /// anonymous regions with new names.
 pub fn liberate_and_deanonymize_late_bound_regions<'tcx>(
     tcx: TyCtxt<'tcx>,
-    sig: ty::PolyFnSig<'tcx>,
+    sig: PolyFnSig<'tcx>,
     fn_def_id: DefId,
 ) -> ty::FnSig<'tcx> {
+    #[rustversion::since(2026-04-19)]
+    let sig = sig.skip_normalization();
     let mut anon_count: u32 = 0;
     let mut translated_kinds: HashMap<ty::BoundVar, ty::BoundRegionKind> = HashMap::new();
+    #[rustversion::all(before(1.95), before(2026-01-29))]
     let region_f = |br: ty::BoundRegion| {
         let new_kind: &ty::BoundRegionKind = translated_kinds.entry(br.var).or_insert_with(|| {
             if br.kind.is_named(tcx) {
@@ -150,7 +168,45 @@ pub fn liberate_and_deanonymize_late_bound_regions<'tcx>(
             ty::LateParamRegionKind::from_bound(br.var, *new_kind),
         )
     };
+    #[rustversion::any(since(1.95), since(2026-01-29))]
+    let region_f = |br: ty::BoundRegion<'tcx>| {
+        let new_kind: &ty::BoundRegionKind = translated_kinds.entry(br.var).or_insert_with(|| {
+            if br.kind.is_named(tcx) {
+                let id = br.kind.get_id().unwrap_or(fn_def_id);
+                ty::BoundRegionKind::Named(id)
+            } else {
+                anon_count += 1;
+                let name = Symbol::intern(&format!("{ANON_REGION_PREFIX}{anon_count}"));
+                ty::BoundRegionKind::NamedForPrinting(name)
+            }
+        });
+        ty::Region::new_late_param(
+            tcx,
+            fn_def_id,
+            ty::LateParamRegionKind::from_bound(br.var, *new_kind),
+        )
+    };
     tcx.instantiate_bound_regions_uncached(sig, region_f)
+}
+
+/// This is mirroring the logic of TyCtxt::try_normalize_after_erasing_regions except it does not
+/// erase regions. Because we emit lifetime annotations it's important that we do not erase
+/// regions.
+pub fn try_normalize<'tcx, T: ty::TypeFoldable<TyCtxt<'tcx>> + PartialEq + Copy>(
+    tcx: TyCtxt<'tcx>,
+    goal: ty::PseudoCanonicalInput<'tcx, T>,
+) -> Result<T, NoSolution> {
+    use rustc_trait_selection::traits::query::normalize::QueryNormalizeExt;
+    use rustc_trait_selection::traits::{Normalized, ObligationCause};
+    let ty::PseudoCanonicalInput { typing_env, value } = goal;
+    let (infcx, param_env) = tcx.infer_ctxt().build_with_typing_env(typing_env);
+    let cause = ObligationCause::dummy(); // RESPECTFUL_TERMS_EXCEPTION: rustc code we don't own.
+    infcx
+        .at(&cause, param_env)
+        .query_normalize(value)
+        // We ignore obligations, since we know this code already type checks.
+        // We're only interested in expanding projections of associated types.
+        .map(|Normalized { value, .. }| value)
 }
 
 pub fn has_non_lifetime_generics<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool {
@@ -161,15 +217,23 @@ pub fn has_non_lifetime_generics<'tcx>(tcx: TyCtxt<'tcx>, def_id: DefId) -> bool
 }
 
 pub fn post_analysis_typing_env(tcx: TyCtxt, def_id: DefId) -> ty::TypingEnv {
-    ty::TypingEnv { typing_mode: ty::TypingMode::PostAnalysis, param_env: tcx.param_env(def_id) }
+    ty::TypingEnv::post_analysis(tcx, def_id)
 }
 
 /// Returns whether `ty` is copyable inside the given environment (e.g. fn or type def).
-pub fn is_copy<'tcx>(tcx: TyCtxt<'tcx>, environment_id: DefId, ty: Ty<'tcx>) -> bool {
+pub fn is_copy<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    environment_id: impl Into<Option<DefId>>,
+    ty: Ty<'tcx>,
+) -> bool {
     // TODO(b/259749095): Once generic ADTs are supported, `is_copy_modulo_regions`
     // might need to be replaced with a more thorough check - see
     // b/258249993#comment4.
-    tcx.type_is_copy_modulo_regions(post_analysis_typing_env(tcx, environment_id), ty)
+    let typing_env = environment_id
+        .into()
+        .map(|id| post_analysis_typing_env(tcx, id))
+        .unwrap_or_else(ty::TypingEnv::fully_monomorphized);
+    tcx.type_is_copy_modulo_regions(typing_env, ty)
 }
 
 /// Like `TyCtxt::is_directly_public`, but works not only with `LocalDefId`, but
@@ -217,7 +281,10 @@ fn convert_interger_type_to_int_type(input: IntegerType) -> IntType {
 /// Implementation of `BindingsGenerator::repr_attrs`.
 pub fn repr_attrs(tcx: TyCtxt, def_id: DefId) -> Rc<[rustc_hir::attrs::ReprAttr]> {
     let mut result = Vec::new();
+    #[rustversion::before(2026-04-19)]
     let ty = tcx.type_of(def_id).instantiate_identity();
+    #[rustversion::since(2026-04-19)]
+    let ty = tcx.type_of(def_id).instantiate_identity().skip_normalization();
     match ty.kind() {
         ty::TyKind::Adt(adt_def, _) => {
             let repr = adt_def.repr();
@@ -270,7 +337,9 @@ pub fn get_scalar_int_type<'tcx>(tcx: TyCtxt<'tcx>, scalar: Scalar) -> Ty<'tcx> 
                 (Integer::I128, true) => Ty::new_int(tcx, IntTy::I128),
             }
         }
-        _ => panic!("Internal error: integer scalar is not valid."),
+        _ => {
+            panic!("Internal error: integer scalar is not valid.")
+        }
     }
 }
 
@@ -280,6 +349,7 @@ pub fn get_tag_size_with_padding(layout: Layout<'_>) -> u64 {
     match layout.variants() {
         Variants::Single { .. } | Variants::Empty => 0,
         Variants::Multiple { tag: _, tag_encoding: _, tag_field: _, variants } => {
+            #[rustversion::before(2026-05-18)]
             let mut variant_offsets = variants.iter().map(|variant| match &variant.fields {
                 FieldsShape::Arbitrary { offsets, .. } => {
                     if offsets.is_empty() {
@@ -290,6 +360,15 @@ pub fn get_tag_size_with_padding(layout: Layout<'_>) -> u64 {
                     }
                 }
                 _ => panic!("Internal Error - Detected an enum with non-arbitrary field"),
+            });
+
+            #[rustversion::since(2026-05-18)]
+            let mut variant_offsets = variants.iter().map(|variant| {
+                if variant.field_offsets.is_empty() {
+                    variant.size.bytes()
+                } else {
+                    variant.field_offsets[FieldIdx::from_usize(0)].bytes()
+                }
             });
 
             // There are two equivalent ways to express a rust enum:

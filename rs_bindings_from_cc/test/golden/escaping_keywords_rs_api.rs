@@ -6,19 +6,20 @@
 // //rs_bindings_from_cc/test/golden:escaping_keywords_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=type
 pub struct r#type {
-    pub r#dyn: ::core::ffi::c_int,
+    pub r#dyn: ::ffi_11::c_int,
 }
 impl !Send for r#type {}
 impl !Sync for r#type {}
@@ -38,34 +39,16 @@ impl Default for r#type {
     }
 }
 
-// Error while generating bindings for constructor 'type::type':
-// Can't generate bindings for type::type, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:escaping_keywords_cc needs [//features:experimental] for type::type (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for constructor 'type::type':
-// Can't generate bindings for type::type, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:escaping_keywords_cc needs [//features:experimental] for type::type (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'type::operator=':
-// Can't generate bindings for type::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:escaping_keywords_cc needs [//features:experimental] for type::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:escaping_keywords_cc needs [//features:experimental] for type::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'type::operator=':
-// Can't generate bindings for type::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:escaping_keywords_cc needs [//features:experimental] for type::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:escaping_keywords_cc needs [//features:experimental] for type::operator= (the type of __param_0 (parameter #1): references are not supported)
-
 #[inline(always)]
-pub fn r#impl(r#match: ::core::ffi::c_int) {
+pub fn r#impl(r#match: ::ffi_11::c_int) {
     unsafe { crate::detail::__rust_thunk___Z4impli(r#match) }
 }
 
-// Error while generating bindings for class 'await':
-// Class templates are not supported yet
+// error: class `await` could not be bound
+//   Class templates are not yet supported
 
-// Error while generating bindings for function 'become':
-// Function templates are not supported yet
+// error: function `become` could not be bound
+//   Function templates are not yet supported
 
 mod detail {
     #[allow(unused_imports)]
@@ -73,7 +56,7 @@ mod detail {
     unsafe extern "C" {
         pub(crate) unsafe fn __rust_thunk___ZN4typeC1Ev(__this: *mut ::core::ffi::c_void);
         #[link_name = "_Z4impli"]
-        pub(crate) unsafe fn __rust_thunk___Z4impli(r#match: ::core::ffi::c_int);
+        pub(crate) unsafe fn __rust_thunk___Z4impli(r#match: ::ffi_11::c_int);
     }
 }
 

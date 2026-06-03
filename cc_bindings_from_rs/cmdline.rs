@@ -24,6 +24,10 @@ pub struct Cmdline {
     #[clap(long, value_parser, value_name = "FILE")]
     pub h_out: PathBuf,
 
+    /// Output path for C++ implementation file with bindings.
+    #[clap(long, value_parser, value_name = "FILE")]
+    pub cpp_out: Option<PathBuf>,
+
     /// Include guard for the C++ header file with bindings.
     #[clap(long, value_parser, value_name = "STRING")]
     pub h_out_include_guard: Option<String>,
@@ -117,10 +121,12 @@ pub struct Cmdline {
     #[clap(long, value_parser, value_name = "FILE")]
     pub error_report_out: Option<PathBuf>,
 
-    /// This is for golden tests only. Using this in production may cause
-    /// undefined behavior.
-    #[clap(long, value_parser, value_name = "BOOL")]
-    pub no_thunk_name_mangling: bool,
+    /// If true, unnecessary information (such as source locations) is
+    /// omitted from the generated bindings to reduce noise in golden tests.
+    /// Additionally, thunk names are not mangled. Using this in production
+    /// may cause undefined behavior.
+    #[clap(long, value_parser, value_name = "BOOL", default_value_t = false)]
+    pub is_golden_test: bool,
 
     /// The top level namespace of the C++ bindings for a given crate. Keys are
     /// crate names, and values are namespaces. Example:
@@ -142,11 +148,6 @@ pub struct Cmdline {
     /// compiled via the provided `rustc_args`.
     #[clap(long, value_parser, value_name = "STRING")]
     pub source_crate_name: Option<String>,
-
-    /// Feature flag for HIR types. When enabled, we will query the HIR for type sugar that does
-    /// not appear in MIR types and use it to generate bindings.
-    #[clap(long, value_parser, value_name = "BOOL", default_value_t = false)]
-    pub enable_hir_types: bool,
 
     /// Emit extra source information for generating cross-references.
     #[clap(long, value_parser, value_name = "BOOL", default_value_t = false)]
@@ -177,8 +178,21 @@ pub struct Cmdline {
     pub library_dirs: Vec<String>,
 
     /// Enables new command line interface that uses .rmeta files to generate bindings.
-    #[clap(long = "enable-rmeta-interface", value_parser, value_name = "BOOL")]
+    #[clap(
+        long = "enable-rmeta-interface", 
+        action = clap::ArgAction::Set,
+        value_parser,
+        value_name = "BOOL",
+        default_value_t = false,
+        default_missing_value = "true",
+        num_args = 0..=1,
+        require_equals = false,
+    )]
     pub enable_rmeta_interface: bool,
+
+    /// List of source files whose symbols should be excluded from the generated bindings.
+    #[clap(long = "ignore-symbols-from-files", value_parser, value_name = "FILE")]
+    pub ignore_symbols_from_files: Vec<PathBuf>,
 }
 
 impl Cmdline {
@@ -312,6 +326,7 @@ mod tests {
     fn test_happy_path() {
         let cmdline = new_cmdline([
             "--h-out=foo.h",
+            "--cpp-out=foo_impl.cc",
             "--rs-out=foo_impl.rs",
             "--crubit-support-path-format=<crubit/support/{header}>",
             "--clang-format-exe-path=clang-format.exe",
@@ -320,6 +335,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(Path::new("foo.h"), cmdline.h_out);
+        assert_eq!(Some(PathBuf::from("foo_impl.cc")), cmdline.cpp_out);
         assert_eq!(Path::new("foo_impl.rs"), cmdline.rs_out);
         assert_eq!(
             Format::parse_with_metavars("<crubit/support/{header}>", &["header"]).unwrap(),
@@ -331,6 +347,18 @@ mod tests {
         assert!(cmdline.rustfmt_config_path.is_none());
         // Ignoring `rustc_args` in this test - they are covered in a separate
         // test below: `test_rustc_args_happy_path`.
+    }
+
+    #[test]
+    fn test_cpp_out_is_optional() {
+        let cmdline = new_cmdline([
+            "--h-out=foo.h",
+            "--rs-out=foo_impl.rs",
+            "--crubit-support-path-format=<crubit/support/{header}>",
+        ])
+        .unwrap();
+
+        assert_eq!(None, cmdline.cpp_out);
     }
 
     #[test]
@@ -455,9 +483,7 @@ mod tests {
         assert_eq!(3, cmdline.crate_features.len());
         assert_eq!("dep1", cmdline.crate_features[0].0);
         assert_eq!(
-            flagset::FlagSet::<crubit_feature::CrubitFeature>::from(
-                crubit_feature::CrubitFeature::Supported
-            ),
+            crubit_feature::CrubitFeature::Supported | crubit_feature::CrubitFeature::Types,
             cmdline.crate_features[0].1
         );
         assert_eq!("dep1", cmdline.crate_features[1].0);
@@ -482,9 +508,7 @@ mod tests {
             parse_crate_feature("foo=supported").unwrap(),
             (
                 "foo".into(),
-                flagset::FlagSet::<crubit_feature::CrubitFeature>::from(
-                    crubit_feature::CrubitFeature::Supported
-                )
+                crubit_feature::CrubitFeature::Supported | crubit_feature::CrubitFeature::Types,
             ),
         );
         assert_eq!(
@@ -509,6 +533,7 @@ mod tests {
     fn test_omit_rustfmt_exe_path() {
         let cmdline = new_cmdline([
             "--h-out=foo.h",
+            "--cpp-out=foo_impl.cc",
             "--rs-out=foo_impl.rs",
             "--crubit-support-path-format=<crubit/support/{header}>",
             "--clang-format-exe-path=clang-format.exe",
@@ -545,5 +570,68 @@ mod tests {
         assert_eq!(None, cmdline.clang_format_exe_path);
         assert_eq!(Some(PathBuf::from("rustfmt.exe")), cmdline.rustfmt_exe_path);
         assert_eq!(true, cmdline.kythe_annotations);
+    }
+
+    #[test]
+    fn test_ignore_symbols_from_files() {
+        let cmdline = new_cmdline([
+            "--h-out=foo.h",
+            "--rs-out=foo_impl.rs",
+            "--crubit-support-path-format=<crubit/support/{header}>",
+            "--ignore-symbols-from-files=foo.rs",
+            "--ignore-symbols-from-files=bar.rs",
+        ])
+        .unwrap();
+        assert_eq!(
+            vec![PathBuf::from("foo.rs"), PathBuf::from("bar.rs")],
+            cmdline.ignore_symbols_from_files
+        );
+    }
+
+    #[test]
+    fn test_enable_rmeta_interface() {
+        let cmdline = new_cmdline([
+            "--h-out=foo.h",
+            "--rs-out=foo_impl.rs",
+            "--crubit-support-path-format=<crubit/support/{header}>",
+            "--enable-rmeta-interface",
+        ])
+        .unwrap();
+        assert_eq!(true, cmdline.enable_rmeta_interface);
+    }
+
+    #[test]
+    fn test_enable_rmeta_interface_default() {
+        let cmdline = new_cmdline([
+            "--h-out=foo.h",
+            "--rs-out=foo_impl.rs",
+            "--crubit-support-path-format=<crubit/support/{header}>",
+        ])
+        .unwrap();
+        assert_eq!(false, cmdline.enable_rmeta_interface);
+    }
+
+    #[test]
+    fn test_enable_rmeta_interface_explicit() {
+        let cmdline = new_cmdline([
+            "--h-out=foo.h",
+            "--rs-out=foo_impl.rs",
+            "--crubit-support-path-format=<crubit/support/{header}>",
+            "--enable-rmeta-interface=true",
+        ])
+        .unwrap();
+        assert_eq!(true, cmdline.enable_rmeta_interface);
+    }
+
+    #[test]
+    fn test_enable_rmeta_interface_disabled() {
+        let cmdline = new_cmdline([
+            "--h-out=foo.h",
+            "--rs-out=foo_impl.rs",
+            "--crubit-support-path-format=<crubit/support/{header}>",
+            "--enable-rmeta-interface=false",
+        ])
+        .unwrap();
+        assert_eq!(false, cmdline.enable_rmeta_interface);
     }
 }

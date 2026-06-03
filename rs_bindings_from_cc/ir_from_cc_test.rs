@@ -7,19 +7,76 @@ use arc_anyhow::Result;
 use googletest::prelude::*;
 use ir::*;
 use ir_matchers::{assert_ir_matches, assert_ir_not_matches, assert_items_match};
-use ir_testing::{ir_id, retrieve_func, retrieve_record, DEPENDENCY_TARGET, TESTING_TARGET};
+use ir_testing::{
+    ir_id, retrieve_func, retrieve_record, with_full_lifetime_macros, DEPENDENCY_TARGET,
+    TESTING_TARGET,
+};
 use itertools::Itertools;
 use quote::quote;
 use std::collections::{HashMap, HashSet};
 use std::iter::Iterator;
 use std::rc::Rc;
 
+// TODO(b/492229823): This trait is a temporary artifact for refactoring. Remove this trait and
+// update the tests in this file.
+trait IrTestingExt {
+    fn find_untyped_decl(&self, decl_id: ir::ItemId) -> &ir::Item;
+    fn find_decl<'a, T>(&'a self, decl_id: ir::ItemId) -> Result<&'a T>
+    where
+        &'a T: TryFrom<&'a ir::Item>;
+}
+
+impl IrTestingExt for IR {
+    #[track_caller]
+    fn find_untyped_decl(&self, decl_id: ir::ItemId) -> &ir::Item {
+        let Some(idx) = self.item_id_to_item_idx().get(&decl_id) else {
+            panic!("Couldn't find decl_id {:?} in the IR:\n{:#?}", decl_id, self.flat_ir())
+        };
+        let Some(item) = self.flat_ir().items.get(*idx) else {
+            panic!("Couldn't find an item at idx {} in IR:\n{:#?}", idx, self.flat_ir())
+        };
+        item
+    }
+
+    #[track_caller]
+    fn find_decl<'a, T>(&'a self, decl_id: ir::ItemId) -> Result<&'a T>
+    where
+        &'a T: TryFrom<&'a ir::Item>,
+    {
+        self.find_untyped_decl(decl_id).try_into().map_err(|_| {
+            arc_anyhow::anyhow!(
+                "DeclId {:?} doesn't refer to a {}",
+                decl_id,
+                std::any::type_name::<T>()
+            )
+        })
+    }
+}
+
 fn ir_from_cc(header: &str) -> Result<IR> {
     ir_testing::ir_from_cc(multiplatform_testing::test_platform(), header)
 }
 
 fn ir_from_cc_dependency(header: &str, dep_header: &str) -> Result<IR> {
-    ir_testing::ir_from_cc_dependency(multiplatform_testing::test_platform(), header, dep_header)
+    ir_testing::ir_from_cc_dependency(
+        multiplatform_testing::test_platform(),
+        header,
+        dep_header,
+        None,
+        /*kythe_annotations=*/ false,
+    )
+}
+
+fn ir_from_assumed_lifetimes_cc(program: &str) -> Result<IR> {
+    let mut full_program = with_full_lifetime_macros();
+    full_program.push_str(program);
+    ir_testing::ir_from_cc_dependency(
+        multiplatform_testing::test_platform(),
+        &full_program,
+        "// empty header",
+        Some("assume_lifetimes"),
+        /*kythe_annotations=*/ false,
+    )
 }
 
 #[gtest]
@@ -31,6 +88,7 @@ fn test_function() {
             Func {
                 cc_name: "f",
                 rs_name: "f",
+                unique_name: "c:@F@f#I#I#",
                 owning_target: BazelLabel("//test:testing_target"),
                 mangled_name: "_Z1fii",
                 doc_comment: None,
@@ -45,6 +103,7 @@ fn test_function() {
                             is_const: false, ...
                         },
                         identifier: "a",
+                        ...
                         unknown_attr: None,
                     },
                     FuncParam {
@@ -53,12 +112,13 @@ fn test_function() {
                             is_const: false, ...
                         },
                         identifier: "b",
+                        ...
                         unknown_attr: None,
                     },
                 ],
                 lifetime_params: [],
                 is_inline: false,
-                member_func_metadata: None,
+                instance_method_metadata: None,
                 is_extern_c: false,
                 is_noreturn: false,
                 is_variadic: false,
@@ -74,6 +134,7 @@ fn test_function() {
                 enclosing_item_id: None,
                 adl_enclosing_record: None,
                 must_bind: false,
+                lifetime_inputs: [],
             }
         }
     );
@@ -194,7 +255,7 @@ fn test_unescapable_rust_keywords_in_enumerator_name() {
         quote! { UnsupportedItem {
             name: "SomeEnum", ...
             errors: [FormattedError {
-                ..., message: "Enumerator name is not supported: Unescapable identifier: self", ...
+                ... message: "Enumerator name is not supported: Unescapable identifier: self", ...
             }], ...
         }}
     );
@@ -208,7 +269,7 @@ fn test_unescapable_rust_keywords_in_anonymous_struct_type_alias() {
         quote! { UnsupportedItem {
             name: "Self", ...
             errors: [FormattedError {
-                ..., message: "Record name is not supported: Unescapable identifier: Self", ...
+                ... message: "Record name is not supported: Unescapable identifier: Self", ...
             }], ...
         }}
     );
@@ -232,7 +293,7 @@ fn test_unescapable_rust_keywords_in_namespace_name() {
         quote! { UnsupportedItem {
             name: "self", ...
             errors: [FormattedError {
-                ..., message: "Namespace name is not supported: Unescapable identifier: self", ...
+                ... message: "Namespace name is not supported: Unescapable identifier: self", ...
             }], ...
         }}
     );
@@ -246,7 +307,7 @@ fn test_unescapable_rust_keywords_in_function_name() {
         quote! { UnsupportedItem {
             name: "self", ...
             errors: [FormattedError {
-                ..., message: "Function name is not supported: Unescapable identifier: self", ...
+                ... message: "Function name is not supported: Unescapable identifier: self", ...
             }], ...
         }}
     );
@@ -260,7 +321,7 @@ fn test_unescapable_rust_keywords_in_type_alias_name() {
         quote! { UnsupportedItem {
             name: "Self", ...
             errors: [FormattedError {
-                ..., message: "Type alias name is not supported: Unescapable identifier: Self", ...
+                ... message: "Type alias name is not supported: Unescapable identifier: Self", ...
             }], ...
         }}
     );
@@ -336,33 +397,22 @@ fn test_explicit_class_template_instantiation_declaration_not_supported_yet() {
     )
     .unwrap();
     assert_ir_not_matches!(ir, quote! { Record });
-    assert_ir_matches!(
-        ir,
-        quote! { UnsupportedItem {
-            name: "MyTemplate",
-            kind: Class,
-            path: Some(UnsupportedItemPath { ident: "MyTemplate", enclosing_item_id: None, }),
-            errors: [FormattedError {
-                ..., message: "Class templates are not supported yet", ...
-            }], ...
-        }}
-    );
+    let unsupported_item = ir.unsupported_items().find(|item| &*item.name == "MyTemplate").unwrap();
+    expect_eq!(unsupported_item.kind, UnsupportedItemKind::Class);
+    let path = unsupported_item.path.as_ref().unwrap();
+    expect_eq!(path.ident, "MyTemplate");
+    expect_eq!(path.enclosing_item_id, None);
 }
 
 #[gtest]
 fn test_function_template_not_supported_yet() {
     let ir = ir_from_cc("template<typename SomeParam> void SomeFunctionTemplate() {};").unwrap();
-    assert_ir_matches!(
-        ir,
-        quote! { UnsupportedItem {
-            name: "SomeFunctionTemplate",
-            kind: Func,
-            path: Some(UnsupportedItemPath { ident: "SomeFunctionTemplate", enclosing_item_id: None, }),
-            errors: [FormattedError {
-                ..., message: "Function templates are not supported yet", ...
-            }], ...
-        }}
-    );
+    let unsupported_item =
+        ir.unsupported_items().find(|item| &*item.name == "SomeFunctionTemplate").unwrap();
+    expect_eq!(unsupported_item.kind, UnsupportedItemKind::Func);
+    let path = unsupported_item.path.as_ref().unwrap();
+    expect_eq!(path.ident, "SomeFunctionTemplate");
+    expect_eq!(path.enclosing_item_id, None);
 }
 
 #[gtest]
@@ -384,19 +434,14 @@ fn test_function_template_with_deduction_guide_does_not_generate_ir() {
     )
     .unwrap();
     // We should only generate bindings for the class template, not the deduction guide.
-    assert_ir_matches!(
-        ir,
-        quote! { UnsupportedItem {
-            name: "SomeFunctionTemplateWithDeductionGuide",
-            kind: Class,
-            path: Some(UnsupportedItemPath { ident: "SomeFunctionTemplateWithDeductionGuide", enclosing_item_id: None, }),
-            errors: [FormattedError {
-                fmt: "Class templates are not supported yet",
-                message: "Class templates are not supported yet",
-            }],
-            ...
-        }}
-    );
+    let unsupported_item = ir
+        .unsupported_items()
+        .find(|item| &*item.name == "SomeFunctionTemplateWithDeductionGuide")
+        .unwrap();
+    expect_eq!(unsupported_item.kind, UnsupportedItemKind::Class);
+    let path = unsupported_item.path.as_ref().unwrap();
+    expect_eq!(path.ident, "SomeFunctionTemplateWithDeductionGuide");
+    expect_eq!(path.enclosing_item_id, None);
 }
 
 #[gtest]
@@ -495,28 +540,28 @@ fn test_bitfields() {
                 fields: [
                        Field {
                            rust_identifier: Some("b1"), ...
-                           type_: Ok(CcType { variant: Primitive(Int), ... }), ...
+                           type_: CcType { variant: Primitive(Int), ... }, ...
                            offset: 0,
                            size: 1, ...
                            is_bitfield: true, ...
                        },
                        Field {
                            rust_identifier: Some("b2"), ...
-                           type_: Ok(CcType { variant: Primitive(Int), ... }), ...
+                           type_: CcType { variant: Primitive(Int), ... }, ...
                            offset: 1,
                            size: 2, ...
                            is_bitfield: true, ...
                        },
                        Field {
                            rust_identifier: Some("b3"), ...
-                           type_: Ok(CcType { variant: Primitive(Int), ... }), ...
+                           type_: CcType { variant: Primitive(Int), ... }, ...
                            offset: 3,
                            size: 13, ...
                            is_bitfield: true, ...
                        },
                        Field {
                            rust_identifier: Some("b4"), ...
-                           type_: Ok(CcType { variant: Primitive(Int), ... }), ...
+                           type_: CcType { variant: Primitive(Int), ... }, ...
                            offset: 16,
                            size: 14, ...
                            is_bitfield: true, ...
@@ -544,7 +589,7 @@ fn test_struct_with_packed_attribute() {
         quote! { UnsupportedItem {
             name: "PackedStruct", ...
             errors: [FormattedError {
-                ..., message: "Records with packed layout are not supported", ...
+                ... message: "Records with packed layout are not supported", ...
             }], ...
         }}
     );
@@ -567,7 +612,7 @@ fn test_struct_with_packed_field() {
         quote! { UnsupportedItem {
             name: "PackedStruct", ...
             errors: [FormattedError {
-                ..., message: "Records with packed layout are not supported", ...
+                ... message: "Records with packed layout are not supported", ...
             }], ...
         }}
     );
@@ -601,34 +646,6 @@ fn test_struct_with_unnamed_bitfield_member() {
 }
 
 #[gtest]
-fn test_struct_with_bridge_type_annotation() {
-    let ir = ir_from_cc(
-        r#"
-        struct [[clang::annotate("crubit_bridge_type", "SomeBridgeType"),
-                 clang::annotate("crubit_bridge_type_rust_to_cpp_converter", "rust_to_cpp_converter"),
-                 clang::annotate("crubit_bridge_type_cpp_to_rust_converter", "cpp_to_rust_converter")]]
-                RecordWithBridgeType {
-            int foo;
-        };"#,
-    )
-    .unwrap();
-
-    assert_ir_matches!(
-        ir,
-        quote! {
-            Record {
-                rs_name: "RecordWithBridgeType", ...
-                bridge_type: Some(BridgeVoidConverters {
-                  rust_name: "SomeBridgeType",
-                  rust_to_cpp_converter: "rust_to_cpp_converter",
-                  cpp_to_rust_converter: "cpp_to_rust_converter", ...
-                }), ...
-            }
-        }
-    );
-}
-
-#[gtest]
 fn test_struct_with_owned_ptr_type_annotation() -> googletest::Result<()> {
     let ir = ir_from_cc(
         r#"
@@ -641,8 +658,8 @@ fn test_struct_with_owned_ptr_type_annotation() -> googletest::Result<()> {
 
     let record =
         ir.records().find(|record| record.rs_name == "RecordWithOwnedPtrType").or_fail()?;
-    let owned_ptr_type = &record.owned_ptr_type.clone().or_fail()?;
-    expect_that!(&**owned_ptr_type, eq("SomeOwnedPtrType"));
+    let owned_ptr_config = record.owned_ptr_config.as_ref().or_fail()?;
+    expect_that!(&*owned_ptr_config.owned_ptr_type, eq("SomeOwnedPtrType"));
     Ok(())
 }
 
@@ -707,6 +724,122 @@ fn test_struct_with_trait_derive_annotation() {
 }
 
 #[gtest]
+fn test_crubit_internal_rust_type_annotation() {
+    let ir = ir_from_cc(
+        r#"
+        struct [[clang::annotate("crubit_internal_rust_type", "MyRustType")]]
+                MyCppType {
+            int foo;
+        };"#,
+    )
+    .unwrap();
+
+    assert_ir_matches!(
+        ir,
+        quote! {
+            ExistingRustType {
+                rs_name: "MyRustType", ...
+                cc_name: "MyCppType", ...
+            }
+        }
+    );
+}
+
+#[gtest]
+fn test_crubit_internal_rust_type_annotation_with_template_args() {
+    let ir = ir_from_cc(
+        r#"
+        namespace crubit::rust_type {
+        template <typename...>
+        struct Args {};
+        }
+
+        template <typename T>
+        struct [[clang::annotate("crubit_internal_rust_type", "RustPtr", crubit::rust_type::Args<T>())]]
+                CppPtr {
+              T* ptr;
+        };
+        
+        CppPtr<int> instantiate();
+        "#,
+    )
+    .unwrap();
+
+    assert_ir_matches!(
+        ir,
+        quote! {
+            ExistingRustType {
+                rs_name: "RustPtr",
+                cc_name: "CppPtr<int>", ...
+                template_args: [Type(CcType {
+                  variant: Primitive(Int), ...
+                })], ...
+            }
+        }
+    );
+}
+
+#[gtest]
+fn test_crubit_internal_rust_type_annotation_with_const_generic() {
+    let ir = ir_from_cc(
+        r#"
+        namespace crubit::rust_type {
+        template <typename...>
+        struct Args {};
+        template <auto>
+        struct Const {};
+        }
+
+        struct [[clang::annotate("crubit_internal_rust_type", "MyType",
+               crubit::rust_type::Args<crubit::rust_type::Const<true>, int>())]] MyType {};
+        "#,
+    )
+    .unwrap();
+
+    let ty = ir.existing_rust_types().find(|t| t.rs_name.as_ref() == "MyType").unwrap();
+    let template_args = &ty.template_args;
+    assert!(matches!(
+        &template_args[..],
+        &[
+            TemplateArg::Bool(true),
+            TemplateArg::Type(CcType { variant: CcTypeVariant::Primitive(Primitive::Int), .. })
+        ]
+    ));
+}
+
+#[gtest]
+fn test_crubit_internal_rust_type_annotation_with_templates() {
+    let ir = ir_from_cc(
+        r#"
+        namespace crubit::rust_type {
+        template <typename...>
+        struct Args {};
+        }
+
+        template <typename T>
+        struct [[clang::annotate("crubit_internal_rust_type", "MyType",
+               crubit::rust_type::Args<T>())]] MyType {};
+
+        MyType<int> Instantiate();
+        "#,
+    )
+    .unwrap();
+
+    assert_ir_matches!(
+        ir,
+        quote! {
+            ExistingRustType {
+                rs_name: "MyType",
+                cc_name: "MyType<int>", ...
+                template_args: [Type(CcType {
+                  variant: Primitive(Int), ...
+                })], ...
+            }
+        }
+    );
+}
+
+#[gtest]
 fn test_struct_with_unsafe_annotation() {
     let ir = ir_from_cc(
         r#"
@@ -722,7 +855,7 @@ fn test_struct_with_unsafe_annotation() {
         quote! {
             Record {
                 rs_name: "UnsafeType", ...
-                is_unsafe_type: true, ...
+                safety_annotation: Unsafe, ...
             }
         }
     );
@@ -745,12 +878,56 @@ fn test_conflicting_unsafe_annotation() {
         ir,
         quote! { UnsupportedItem {
             name: "S",
+            unique_name: Some ("c:@S@S"),
             kind: Struct,
             path: Some(UnsupportedItemPath { ident: "S", enclosing_item_id: None, }),
             errors: [FormattedError {
-                ..., message: "Different declarations have inconsistent `crubit_override_unsafe` annotations.", ...
+                ... message: "Different declarations have inconsistent `crubit_override_unsafe` annotations.", ...
             }], ...
         }}
+    );
+}
+
+#[gtest]
+fn test_struct_with_thread_safe_annotation() {
+    let ir = ir_from_cc(
+        r#"
+        struct [[clang::annotate("crubit_thread_safe")]]
+                ThreadSafeType {
+            int foo;
+        };"#,
+    )
+    .unwrap();
+
+    assert_ir_matches!(
+        ir,
+        quote! {
+            Record {
+                rs_name: "ThreadSafeType", ...
+                is_thread_safe: true, ...
+            }
+        }
+    );
+}
+
+#[gtest]
+fn test_struct_without_thread_safe_annotation() {
+    let ir = ir_from_cc(
+        r#"
+        struct NotThreadSafe {
+            int foo;
+        };"#,
+    )
+    .unwrap();
+
+    assert_ir_matches!(
+        ir,
+        quote! {
+            Record {
+                rs_name: "NotThreadSafe", ...
+                is_thread_safe: false, ...
+            }
+        }
     );
 }
 
@@ -786,12 +963,12 @@ fn test_struct_with_unnamed_struct_and_union_members() {
                 fields: [
                     Field {
                         rust_identifier: None, ...
-                        type_ : Err(...), ...
+                        type_ : CcType {variant: Error(...), ...}, ...
                         offset: 0, ...
                     } ...
                     Field {
                         rust_identifier: None, ...
-                        type_ : Err(...), ...
+                        type_ : CcType {variant: Error(...), ...}, ...
                         offset: 64, ...
                     } ...
                 ], ...
@@ -914,16 +1091,16 @@ fn test_pointer_member_variable() {
         ir,
         quote! {
             Field {
-                rust_identifier: Some("ptr") ...
-                type_: Ok(CcType {
+                rust_identifier: Some("ptr"), ...
+                type_: CcType {
                     variant: Pointer(PointerType {
                         kind: Nullable,
                         lifetime: None,
                         pointee_type: CcType {
-                            variant: Decl(...), ...
+                            variant: Decl{...}, ...
                         }, ...
                     }), ...
-                }) ...
+                } ...
             }
         }
     );
@@ -1061,6 +1238,15 @@ fn test_must_bind_annotation_on_unbindable_type_produces_must_bind_error() -> go
 }
 
 #[gtest]
+fn test_must_bind_annotation_on_unbindable_function_produces_must_bind_error(
+) -> googletest::Result<()> {
+    let ir = ir_from_cc(r#"[[clang::annotate("crubit_must_bind")]] inline void f();"#).or_fail()?;
+    let func = ir.unsupported_items().find(|item| &*item.name == "f").or_fail()?;
+    expect_that!(&**func, field!(&UnsupportedItem.must_bind, eq(true)));
+    Ok(())
+}
+
+#[gtest]
 fn test_typedef() -> Result<()> {
     let ir = ir_from_cc(
         r#"
@@ -1084,14 +1270,17 @@ fn test_typedef() -> Result<()> {
           TypeAlias {
             cc_name: "MyTypedefDecl",
             rs_name: "MyTypedefDecl",
+            unique_name: "c:ir_from_cc_virtual_header.h@T@MyTypedefDecl",
             id: ItemId(...),
             owning_target: BazelLabel("//test:testing_target"),
             doc_comment: Some("Doc comment for MyTypedefDecl."),
             unknown_attr: None,
             underlying_type: #int,
-            source_loc: ...
+            ...
             enclosing_item_id: None,
             must_bind: false,
+            deprecated: None,
+            lifetime_inputs: [],
           }
         }
     );
@@ -1101,14 +1290,17 @@ fn test_typedef() -> Result<()> {
           TypeAlias {
             cc_name: "MyTypeAliasDecl",
             rs_name: "MyTypeAliasDecl",
+            unique_name: "c:@MyTypeAliasDecl",
             id: ItemId(...),
             owning_target: BazelLabel("//test:testing_target"),
             doc_comment: Some("Doc comment for MyTypeAliasDecl."),
             unknown_attr: None,
             underlying_type: #int,
-            source_loc: ...,
+            ...
             enclosing_item_id: None,
             must_bind: false,
+            deprecated: None,
+            lifetime_inputs: [],
           }
         }
     );
@@ -1168,7 +1360,7 @@ fn test_typedef_duplicate() -> Result<()> {
 #[gtest]
 fn test_typedef_of_full_template_specialization() -> Result<()> {
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             namespace test_namespace_bindings {
                 // Doc comment of MyStruct template.
                 template <typename T>
@@ -1189,14 +1381,15 @@ fn test_typedef_of_full_template_specialization() -> Result<()> {
         ir,
         quote! {
           Record {
-            rs_name: "__CcTemplateInstN23test_namespace_bindings8MyStructIiEE", ...
-            cc_name: "test_namespace_bindings::MyStruct<int>", ...
+            rs_name: "__CcTemplateInstN23test_namespace_bindings8MyStructIiEE",
+            cc_name: "test_namespace_bindings::MyStruct<int>",
+            unique_name: "c:@N@test_namespace_bindings@S@MyStruct>#I", ...
             owning_target: BazelLabel("//test:testing_target"), ...
             doc_comment: Some("Doc comment of MyStruct template."), ...
             fields: [Field {
                 rust_identifier: Some("value"), ...
                 doc_comment: Some("Doc comment of `value` field."), ...
-                type_: Ok(CcType { variant: Primitive(Int), ... }),
+                type_: CcType { variant: Primitive(Int), ... },
                 access: Public,
                 offset: 0, ...
             }], ...
@@ -1214,10 +1407,11 @@ fn test_typedef_of_full_template_specialization() -> Result<()> {
         quote! {
           TypeAlias {
             cc_name: "MyTypeAlias", ...
+            unique_name: "c:@N@test_namespace_bindings@MyTypeAlias", ...
             owning_target: BazelLabel("//test:testing_target"), ...
             doc_comment: Some("Doc comment of MyTypeAlias."), ...
             underlying_type: CcType {
-              variant: Decl(ItemId(#record_id)), ...
+              variant: Decl{id: ItemId(#record_id) ... }, ...
             }, ...
           }
         }
@@ -1229,14 +1423,13 @@ fn test_typedef_of_full_template_specialization() -> Result<()> {
           Func {
             cc_name: "GetValue",
             rs_name: "GetValue",
+            unique_name: "c:@N@test_namespace_bindings@S@MyStruct>#I@F@GetValue#1",
             owning_target: BazelLabel("//test:testing_target"),
             mangled_name: "_ZNK23test_namespace_bindings8MyStructIiE8GetValueEv", ...
             doc_comment: Some("Doc comment of GetValue method."), ...
             is_inline: true, ...
-            member_func_metadata: Some(MemberFuncMetadata {
-                record_id: ItemId(#record_id),
-                instance_method_metadata: Some(InstanceMethodMetadata { ... }), ...
-            }), ...
+            instance_method_metadata: Some(InstanceMethodMetadata { ... }), ...
+            enclosing_item_id: Some(ItemId(#record_id)), ...
           }
         }
     );
@@ -1250,6 +1443,7 @@ fn test_typedef_of_full_template_specialization() -> Result<()> {
           Func {
               cc_name: "operator=",
               rs_name: "operator=",
+              unique_name: "c:@N@test_namespace_bindings@S@MyStruct>#I@F@operator=#&1$@N@test_namespace_bindings@S@MyStruct>#I#",
               owning_target: BazelLabel("//test:testing_target"),
               mangled_name: "_ZN23test_namespace_bindings8MyStructIiEaSERKS1_", ...
               doc_comment: None, ...
@@ -1262,7 +1456,7 @@ fn test_typedef_of_full_template_specialization() -> Result<()> {
 #[gtest]
 fn test_typedef_for_explicit_template_specialization() -> Result<()> {
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             namespace test_namespace_bindings {
                 template <typename T>
                 struct MyStruct final {};
@@ -1271,7 +1465,7 @@ fn test_typedef_for_explicit_template_specialization() -> Result<()> {
                 template<>
                 struct MyStruct<int> final {
                   // Doc comment of the GetValue method specialization for T=int.
-                  const int& GetValue() const { return value * 42; }
+                  const int& GetValue() const { return value; }
 
                   // Doc comment of the `value` field specialization for T=int.
                   int value;
@@ -1286,8 +1480,9 @@ fn test_typedef_for_explicit_template_specialization() -> Result<()> {
         ir,
         quote! {
           Record {
-            rs_name: "__CcTemplateInstN23test_namespace_bindings8MyStructIiEE", ...
-            cc_name: "test_namespace_bindings::MyStruct<int>", ...
+            rs_name: "__CcTemplateInstN23test_namespace_bindings8MyStructIiEE",
+            cc_name: "test_namespace_bindings::MyStruct<int>",
+            unique_name: "c:@N@test_namespace_bindings@S@MyStruct>#I", ...
             owning_target: BazelLabel("//test:testing_target"),
             template_specialization: Some(TemplateSpecialization { ...
                 defining_target: BazelLabel("//test:testing_target"), ...
@@ -1296,7 +1491,7 @@ fn test_typedef_for_explicit_template_specialization() -> Result<()> {
             fields: [Field {
                 rust_identifier: Some("value"), ...
                 doc_comment: Some("Doc comment of the `value` field specialization for T=int."), ...
-                type_: Ok(CcType { variant: Primitive(Int), ... }),
+                type_: CcType { variant: Primitive(Int), ... },
                 access: Public,
                 offset: 0, ...
             }], ...
@@ -1320,14 +1515,13 @@ fn test_typedef_for_explicit_template_specialization() -> Result<()> {
           Func {
             cc_name: "GetValue",
             rs_name: "GetValue",
+            unique_name: "c:@N@test_namespace_bindings@S@MyStruct>#I@F@GetValue#1",
             owning_target: BazelLabel("//test:testing_target"),
             mangled_name: "_ZNK23test_namespace_bindings8MyStructIiE8GetValueEv", ...
             doc_comment: Some("Doc comment of the GetValue method specialization for T=int."), ...
             is_inline: true, ...
-            member_func_metadata: Some(MemberFuncMetadata {
-                record_id: ItemId(#record_id),
-                instance_method_metadata: Some(InstanceMethodMetadata { ... }), ...
-            }), ...
+            instance_method_metadata: Some(InstanceMethodMetadata { ... }), ...
+            enclosing_item_id: Some(ItemId(#record_id)), ...
           }
         }
     );
@@ -1337,7 +1531,7 @@ fn test_typedef_for_explicit_template_specialization() -> Result<()> {
 #[gtest]
 fn test_multiple_typedefs_to_same_specialization() -> Result<()> {
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             template <typename T>
             struct MyStruct {
               void MyMethod() {}
@@ -1365,8 +1559,8 @@ fn test_multiple_typedefs_to_same_specialization() -> Result<()> {
 
     // Verify that there is only 1 function per instantiation.
     assert_eq!(2, functions.len());
-    let rec_id1 = functions[0].member_func_metadata.as_ref().unwrap().record_id;
-    let rec_id2 = functions[1].member_func_metadata.as_ref().unwrap().record_id;
+    let rec_id1 = functions[0].enclosing_item_id.unwrap();
+    let rec_id2 = functions[1].enclosing_item_id.unwrap();
     assert_ne!(rec_id1, rec_id2);
     Ok(())
 }
@@ -1374,7 +1568,7 @@ fn test_multiple_typedefs_to_same_specialization() -> Result<()> {
 #[gtest]
 fn test_implicit_specialization_items_are_deterministically_ordered() -> Result<()> {
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             template <typename T>
             struct MyStruct {
               void MyMethod();
@@ -1440,7 +1634,7 @@ fn test_implicit_specialization_items_are_deterministically_ordered() -> Result<
 #[gtest]
 fn test_templates_inheritance() -> Result<()> {
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             template <typename T>
             class BaseTemplate {
              protected:
@@ -1489,7 +1683,7 @@ fn test_aliased_class_template_instantiated_in_header() -> Result<()> {
     // that is present in the header. We should not corrupt the AST by
     // instantiating again.
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             template <typename T>
             struct MyTemplate {
                 const T& GetValue() { return field; }
@@ -1523,7 +1717,7 @@ fn test_aliased_class_template_partially_instantiated_in_header() -> Result<()> 
     // Similar to `test_aliased_class_template_instantiated_in_header`, but doesn't
     // instantiate all members.
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             template <typename T>
             struct MyTemplate {
                 const T& GetValue() { return field; }
@@ -1554,7 +1748,7 @@ fn test_aliased_class_template_partially_instantiated_in_header() -> Result<()> 
 #[gtest]
 fn test_subst_template_type_parm_pack_type() -> Result<()> {
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             template <typename... TArgs>
             struct MyStruct {
                 static int GetSum(TArgs... my_args) { return (0 + ... + my_args); }
@@ -1580,11 +1774,13 @@ fn test_subst_template_type_parm_pack_type() -> Result<()> {
                     FuncParam {
                         type_: CcType { variant: Primitive(Int), ... },
                         identifier: "__my_args_0",
+                        ...
                         unknown_attr: None,
                     },
                     FuncParam {
                         type_: CcType { variant: Primitive(Int), ... },
                         identifier: "__my_args_1",
+                        ...
                         unknown_attr: None,
                     },
                 ], ...
@@ -1597,8 +1793,7 @@ fn test_subst_template_type_parm_pack_type() -> Result<()> {
 #[gtest]
 fn test_fully_instantiated_template_in_function_return_type() -> Result<()> {
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
-
+        r#"
             template <typename T>
             struct MyStruct { T value; };
 
@@ -1609,8 +1804,9 @@ fn test_fully_instantiated_template_in_function_return_type() -> Result<()> {
         ir,
         quote! {
           Record {
-            rs_name: "__CcTemplateInst8MyStructIiE", ...
-            cc_name: "MyStruct<int>", ...
+            rs_name: "__CcTemplateInst8MyStructIiE",
+            cc_name: "MyStruct<int>",
+            unique_name: "c:@S@MyStruct>#I", ...
             owning_target: BazelLabel("//test:testing_target"), ...
           }
         }
@@ -1623,13 +1819,14 @@ fn test_fully_instantiated_template_in_function_return_type() -> Result<()> {
           Func {
             cc_name: "MyFunction",
             rs_name: "MyFunction",
+            unique_name: "c:@F@MyFunction#",
             owning_target: BazelLabel("//test:testing_target"), ...
             return_type: CcType {
-                variant: Decl(ItemId(#record_id)), ...
+                variant: Decl{ id: ItemId(#record_id) ...}, ...
             },
             params: [], ...
             is_inline: false, ...
-            member_func_metadata: None, ...
+            instance_method_metadata: None, ...
             has_c_calling_convention: true, ...
             is_member_or_descendant_of_class_template: false, ...
           }
@@ -1640,9 +1837,8 @@ fn test_fully_instantiated_template_in_function_return_type() -> Result<()> {
 
 #[gtest]
 fn test_fully_instantiated_template_in_function_param_type() -> Result<()> {
-    let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
-
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
             template <typename T>
             struct MyStruct { T value; };
 
@@ -1667,23 +1863,25 @@ fn test_fully_instantiated_template_in_function_param_type() -> Result<()> {
           Func {
             cc_name: "MyFunction",
             rs_name: "MyFunction",
+            unique_name: "c:@F@MyFunction#&1$@S@MyStruct>#I#",
             owning_target: BazelLabel("//test:testing_target"), ...
             params: [FuncParam {
                 type_: CcType {
                     variant: Pointer(PointerType {
                         kind: LValueRef,
-                        lifetime: Some(...),
+                        lifetime: None,
                         pointee_type: CcType {
-                            variant: Decl(ItemId(#record_id)), ...
+                            variant: Decl{ id: ItemId(#record_id), ...}, ...
                         }, ...
                     }),
                     is_const: false, ...
                 },
                 identifier: "my_param",
+                ...
                 unknown_attr: None,
             }], ...
             is_inline: false, ...
-            member_func_metadata: None, ...
+            instance_method_metadata: None, ...
             has_c_calling_convention: true, ...
             is_member_or_descendant_of_class_template: false, ...
           }
@@ -1695,7 +1893,7 @@ fn test_fully_instantiated_template_in_function_param_type() -> Result<()> {
 #[gtest]
 fn test_fully_instantiated_template_in_public_field() -> Result<()> {
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             template <typename T>
             struct MyTemplate { T field; };
 
@@ -1726,9 +1924,9 @@ fn test_fully_instantiated_template_in_public_field() -> Result<()> {
                    owning_target: BazelLabel("//test:testing_target"), ...
                    fields: [Field {
                        rust_identifier: Some("public_field"), ...
-                       type_: Ok(CcType {
-                           variant: Decl(ItemId(#record_id)), ...
-                       }),
+                       type_: CcType {
+                           variant: Decl{ id: ItemId(#record_id), ... }, ...
+                       },
                        access: Public,
                        offset: 0,
                        size: 32,
@@ -1736,6 +1934,7 @@ fn test_fully_instantiated_template_in_public_field() -> Result<()> {
                        is_no_unique_address: false,
                        is_bitfield: false,
                        is_inheritable: true,
+                       deprecated: None,
                    }], ...
                }
         }
@@ -1746,7 +1945,7 @@ fn test_fully_instantiated_template_in_public_field() -> Result<()> {
 #[gtest]
 fn test_fully_instantiated_template_in_private_field() -> Result<()> {
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             template <typename T>
             struct MyTemplate { T field; };
 
@@ -1763,22 +1962,29 @@ fn test_fully_instantiated_template_in_private_field() -> Result<()> {
     assert_ir_matches!(
         ir,
         quote! {
-               Record {
-                   rs_name: "MyStruct",
-                   cc_name: "MyStruct", ...
-                   owning_target: BazelLabel("//test:testing_target"), ...
-                   fields: [Field {
-                       rust_identifier: Some("private_field_"), ...
-                       type_: Err("Types of non-public C++ fields can be elided away"), ...
-                       access: Private,
-                       offset: 0,
-                       size: 32,
-                       unknown_attr: Ok(None),
-                       is_no_unique_address: false,
-                       is_bitfield: false,
-                       is_inheritable: false,
-                   }], ...
-               }
+            Record {
+                rs_name: "MyStruct",
+                cc_name: "MyStruct", ...
+                owning_target: BazelLabel("//test:testing_target"), ...
+                fields: [Field {
+                    rust_identifier: Some("private_field_"), ...
+                    type_: CcType {
+                        variant: Error(
+                            FormattedError {
+                                fmt: "Types of non-public C++ fields can be elided away",
+                                ... }),
+                        ...
+                    }, ...
+                    access: Private,
+                    offset: 0,
+                    size: 32,
+                    unknown_attr: Ok(None),
+                    is_no_unique_address: false,
+                    is_bitfield: false,
+                    is_inheritable: false,
+                    deprecated: None,
+                }], ...
+            }
         }
     );
     Ok(())
@@ -1787,7 +1993,7 @@ fn test_fully_instantiated_template_in_private_field() -> Result<()> {
 #[gtest]
 fn test_template_with_decltype_and_with_auto() -> Result<()> {
     let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             template <typename T1, typename T2>
             struct MyTemplate {
                 static decltype(auto) TemplatedAdd(T1 a, T2 b) { return a + b; }
@@ -1816,8 +2022,8 @@ fn test_subst_template_type_parm_type_vs_const_when_non_const_template_param() -
     // 1) SubstTemplateTypeParm (i.e. the template *argument* has `const`:
     // `MyTemplate<const int>`) 2) TemplateTypeParmType used inside the template
     // definition: `const T& GetConstRef()`
-    let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
             template <typename T>
             struct MyTemplate {
                 const T& GetConstRef() const { return value; }
@@ -1838,7 +2044,7 @@ fn test_subst_template_type_parm_type_vs_const_when_non_const_template_param() -
                 return_type: CcType {
                     variant: Pointer(PointerType {
                         kind: LValueRef,
-                        lifetime: Some(...),
+                        lifetime: None,
                         pointee_type: CcType {
                             variant: Primitive(Int),
                             is_const: true, ...
@@ -1858,7 +2064,7 @@ fn test_subst_template_type_parm_type_vs_const_when_non_const_template_param() -
                 return_type: CcType {
                     variant: Pointer(PointerType {
                         kind: LValueRef,
-                        lifetime: Some(...),
+                        lifetime: None,
                         pointee_type: CcType {
                             variant: Primitive(Int),
                             is_const: false, ...
@@ -1881,8 +2087,8 @@ fn test_subst_template_type_parm_type_vs_const_when_const_template_param() -> Re
     // 1) SubstTemplateTypeParm (i.e. the template *argument* has `const`:
     // `MyTemplate<const int>`) 2) TemplateTypeParmType used inside the template
     // definition: `const T& GetConstRef()`
-    let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
             template <typename T>
             struct MyTemplate {
                 const T& GetConstRef() const { return value; }
@@ -1903,7 +2109,7 @@ fn test_subst_template_type_parm_type_vs_const_when_const_template_param() -> Re
                 return_type: CcType {
                     variant: Pointer(PointerType {
                         kind: LValueRef,
-                        lifetime: Some(...),
+                        lifetime: None,
                         pointee_type: CcType {
                             variant: Primitive(Int),
                             is_const: true, ...
@@ -1923,7 +2129,7 @@ fn test_subst_template_type_parm_type_vs_const_when_const_template_param() -> Re
                 return_type: CcType {
                     variant: Pointer(PointerType {
                         kind: LValueRef,
-                        lifetime: Some(...),
+                        lifetime: None,
                         pointee_type: CcType {
                             variant: Primitive(Int),
                             is_const: true, ...
@@ -1941,7 +2147,7 @@ fn test_subst_template_type_parm_type_vs_const_when_const_template_param() -> Re
 fn test_template_and_alias_are_both_in_dependency() -> Result<()> {
     // See also the `test_template_in_dependency_and_alias_in_current_target` test.
     let ir = {
-        let dependency_src = r#" #pragma clang lifetime_elision
+        let dependency_src = r#"
                 template <typename T>
                 struct MyTemplate {
                     T GetValue();
@@ -1949,7 +2155,7 @@ fn test_template_and_alias_are_both_in_dependency() -> Result<()> {
                 };
                 using MyAliasOfTemplate = MyTemplate<int>;
                 struct StructInDependency {}; "#;
-        let current_target_src = r#" #pragma clang lifetime_elision
+        let current_target_src = r#"
                 /* no references to MyTemplate or MyAliasOfTemplate */
                 struct StructInCurrentTarget {}; "#;
         ir_from_cc_dependency(current_target_src, dependency_src)?
@@ -2052,14 +2258,14 @@ fn test_template_and_alias_are_both_in_dependency() -> Result<()> {
 fn test_template_in_dependency_and_alias_in_current_target() -> Result<()> {
     // See also the `test_template_and_alias_are_both_in_dependency` test.
     let ir = {
-        let dependency_src = r#" #pragma clang lifetime_elision
+        let dependency_src = r#"
                 template <typename T>
                 struct MyTemplate {
                     T GetValue();
                     T field;
                 };
                 struct StructInDependency{}; "#;
-        let current_target_src = r#" #pragma clang lifetime_elision
+        let current_target_src = r#"
                 using MyAliasOfTemplate = MyTemplate<int>;
                 struct StructInCurrentTarget{}; "#;
         ir_from_cc_dependency(current_target_src, dependency_src)?
@@ -2172,8 +2378,9 @@ fn test_well_known_types_check_namespaces() -> Result<()> {
             rs_name: "f", ...
             params: [
              FuncParam {
-              type_: CcType { variant: Decl(...), ... },
+              type_: CcType { variant: Decl{...}, ... },
               identifier: "i",
+              ...
               unknown_attr: None,
              }], ...
           }
@@ -2329,19 +2536,22 @@ fn test_record_with_unsupported_field_type() -> Result<()> {
                cc_name: "StructWithUnsupportedField",
                ...
                fields: [Field {
-                   rust_identifier: Some("my_field"),
-                   cpp_identifier: Some("my_field"),
-                   doc_comment: Some("Doc comment for `my_field`."),
-                   type_: Err(
-                       "Unsupported type 'Packed': No generated bindings found for 'Packed'",
-                   ),
-                   access: Public,
-                   offset: 0,
-                   size: 8,
-                   unknown_attr: Ok(None),
-                   is_no_unique_address: false,
-                   is_bitfield: false,
-                   is_inheritable: false,
+                  rust_identifier: Some("my_field"),
+                  cpp_identifier: Some("my_field"),
+                  doc_comment: Some("Doc comment for `my_field`."),
+                  type_: CcType {
+                      variant: Error(FormattedError {
+                          fmt: "Unsupported type '$0': $1",
+                          message: "Unsupported type 'Packed': No generated bindings found for 'Packed'",
+                      }), ... },
+                  access: Public,
+                  offset: 0,
+                  size: 8,
+                  unknown_attr: Ok(None),
+                  is_no_unique_address: false,
+                  is_bitfield: false,
+                  is_inheritable: false,
+                  deprecated: None,
                }],
                ...
                 size_align: SizeAlign {
@@ -2366,7 +2576,7 @@ fn test_record_with_unsupported_field_type() -> Result<()> {
 #[gtest]
 fn test_record_with_unsupported_base() -> Result<()> {
     let ir = ir_from_cc(
-        r#" 
+        r#"
             struct __attribute__((packed)) IllegalBaseClass {
               // Having a field here avoids empty base class optimization
               // and forces `derived_field` to be at a non-zero offset.
@@ -2390,6 +2600,7 @@ fn test_record_with_unsupported_base() -> Result<()> {
            Record {
               rs_name: "DerivedClass",
               cc_name: "DerivedClass",
+              unique_name: "c:@S@DerivedClass",
               mangled_cc_name: "12DerivedClass",
               id: ItemId(...),
               owning_target: BazelLabel("//test:testing_target"),
@@ -2492,8 +2703,9 @@ fn test_integer_typedef_usage() -> Result<()> {
          rs_name: "f", ...
          params: [
            FuncParam {
-            type_: CcType { variant: Decl(...), ... },
+            type_: CcType { variant: Decl{...}, ... },
             identifier: "my_typedef",
+            ...
             unknown_attr: None,
            }], ...
         } }
@@ -2515,14 +2727,14 @@ fn test_struct() {
                 fields: [
                     Field {
                         rust_identifier: Some("first_field"), ...
-                        type_: Ok(CcType { variant: Primitive(Int), ... }), ...
+                        type_: CcType { variant: Primitive(Int), ... }, ...
                         offset: 0, ...
                         size: 32, ...
                         is_bitfield: false, ...
                     },
                     Field {
                         rust_identifier: Some("second_field"), ...
-                        type_: Ok(CcType { variant: Primitive(Int), ... }), ...
+                        type_: CcType { variant: Primitive(Int), ... }, ...
                         offset: 32, ...
                         size: 32, ...
                         is_bitfield: false, ...
@@ -2613,14 +2825,14 @@ fn test_union() {
                 fields: [
                     Field {
                         rust_identifier: Some("first_field"), ...
-                        type_: Ok(CcType { variant: Primitive(Int), ... }), ...
+                        type_: CcType { variant: Primitive(Int), ... }, ...
                         offset: 0, ...
                         size: 32, ...
                         is_bitfield: false, ...
                     },
                     Field {
                         rust_identifier: Some("second_field"), ...
-                        type_: Ok(CcType { variant: Primitive(Int), ... }), ...
+                        type_: CcType { variant: Primitive(Int), ... }, ...
                         offset: 0, ...
                         size: 32, ...
                         is_bitfield: false, ...
@@ -2698,14 +2910,9 @@ fn assert_member_function_with_predicate_has_instance_method_metadata<F: FnMut(&
         .records()
         .find(|r| r.rs_name.identifier.as_ref() == record_name)
         .expect("Struct not found");
-    let function = ir.functions().find(|f| func_predicate(f));
-    let meta = function
-        .expect("Function not found")
-        .member_func_metadata
-        .as_ref()
-        .expect("Member function should specify member_func_metadata");
-    assert_eq!(meta.record_id, record.id);
-    assert_eq!(&meta.instance_method_metadata, expected_metadata);
+    let function = ir.functions().find(|f| func_predicate(f)).expect("Function not found");
+    assert_eq!(function.enclosing_item_id, Some(record.id));
+    assert_eq!(&function.instance_method_metadata, expected_metadata);
 }
 
 fn assert_member_function_has_instance_method_metadata(
@@ -2803,8 +3010,8 @@ fn test_member_function_rvalue() {
 
 #[gtest]
 fn test_member_function_rvalue_ref_qualified_this_param_type() {
-    let ir = ir_from_cc(
-        r#" #pragma clang lifetime_elision
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
             struct StructWithRvalueRefQualifiedMethod final {
                 void rvalue_ref_qualified_method() &&;
                 void rvalue_ref_const_qualified_method() const &&;
@@ -2938,15 +3145,32 @@ fn test_user_of_unsupported_type_is_unsupported() -> Result<()> {
            void f(Packed n);
         "#,
     )?;
-    let names = ir.unsupported_items().map(|i| i.name.as_ref()).collect_vec();
-    assert_strings_contain(names.as_ref(), "Packed");
-    assert_strings_contain(names.as_ref(), "f");
+    assert_ir_matches!(
+        ir,
+        quote! {
+            UnsupportedItem {
+                name: "Packed",
+                ...
+                kind: Struct,
+                ...
+            }
+        }
+    );
+    assert_ir_matches!(
+        ir,
+        quote! {
+            Func {
+                cc_name: "f",
+                ...
+            }
+        }
+    );
     Ok(())
 }
 
 fn assert_strings_contain(strings: &[&str], expected_string: &str) {
     assert!(
-        strings.iter().any(|s| *s == expected_string),
+        strings.contains(&expected_string),
         "Value '{}' was unexpectedly missing from {:?}",
         expected_string,
         strings
@@ -3014,7 +3238,7 @@ fn test_operator_names() {
         r#"
         // TOOD(b/208377928): Use #include <stddef.h> instead of declaring `size_t` ourselves...
         using size_t = unsigned long;
-        #pragma clang lifetime_elision
+
         struct SomeStruct {
           // There is an implicit/default `oparator=` hidden here as well.
           void* operator new(size_t size);
@@ -3025,17 +3249,17 @@ fn test_operator_names() {
     .unwrap();
     let operator_names: HashSet<&str> = ir
         .functions()
-        .filter(|f| {
+        .filter_map(|f| {
             // Only SomeStruct member functions (excluding stddef.h stuff).
-            if let Some(Ok(r)) = ir.record_for_member_func(f).map(<&Rc<Record>>::try_from) {
-                r.rs_name.identifier.as_ref() == "SomeStruct"
-            } else {
-                false
+            let r = ir.find_decl::<Rc<Record>>(f.enclosing_item_id?).ok()?;
+            if r.rs_name.identifier.as_ref() != "SomeStruct" {
+                return None;
             }
-        })
-        .flat_map(|f| match &f.rs_name {
-            UnqualifiedIdentifier::Operator(op) => Some(op.name.as_ref()),
-            _ => None,
+
+            match &f.rs_name {
+                UnqualifiedIdentifier::Operator(op) => Some(op.name.as_ref()),
+                _ => None,
+            }
         })
         .collect();
     assert!(operator_names.contains("="));
@@ -3179,26 +3403,12 @@ fn test_c_style_struct_with_typedef_and_aligned_attr() {
 #[gtest]
 fn test_volatile_is_unsupported() {
     let ir = ir_from_cc("volatile int* foo();").unwrap();
-    let f = ir
-        .unsupported_items()
-        .find(|i| i.errors().iter().any(|e| e.to_string().contains("volatile")))
-        .unwrap();
-    assert_eq!("foo", f.name.as_ref());
-}
-
-#[gtest]
-fn test_unnamed_enum_unsupported() {
-    let ir = ir_from_cc("enum { kFoo = 1, kBar = 2 };").unwrap();
     assert_ir_matches!(
         ir,
         quote! {
-            UnsupportedItem {
-                name: "(unnamed enum at ./ir_from_cc_virtual_header.h:3:1)",
-                kind: Enum,
-                path: None,
-                errors: [FormattedError {
-                    ..., message: "Unnamed enums are not supported yet", ...
-                }], ...
+            Func {
+                cc_name: "foo",
+                ...
             }
         }
     );
@@ -3218,10 +3428,11 @@ fn test_literal_operator_unsupported() {
         quote! {
             UnsupportedItem {
                 name: "operator\"\"_foobar",
+                unique_name: Some("c:@F@operator\"\"_foobar#*1C#"),
                 kind: Func,
                 path: None,
                 errors: [FormattedError {
-                    ..., message: "Function name is not supported: Unsupported name: operator\"\"_foobar", ...
+                    ... message: "Function name is not supported: Unsupported name: operator\"\"_foobar", ...
                 }], ...
             }
         }
@@ -3373,10 +3584,11 @@ fn test_record_items() {
             quote! {
               ... UnsupportedItem {
                   name: "TopLevelStruct::operator int",
+                  ...
                   kind: Func,
                   path: None,
                   errors: [FormattedError {
-                    ..., message: "Function name is not supported: Unsupported name: operator int",
+                    ... message: "Function name is not supported: Unsupported name: operator int",
                   }],
                   ...
               }
@@ -3755,12 +3967,6 @@ fn test_function_redeclared_as_friend() {
     // The function should appear only once in IR items.  (This is a bit redundant
     // with the assert below, but double-checks that `...` didn't miss a Func
     // item.)
-    let functions = ir
-        .functions()
-        .filter(|f| f.rs_name == UnqualifiedIdentifier::Identifier(ir_id("bar")))
-        .collect_vec();
-    assert_eq!(1, functions.len());
-    let function_id = functions[0].id;
 
     // There should only be a single Func item.
     //
@@ -3782,7 +3988,6 @@ fn test_function_redeclared_as_friend() {
                         ItemId(...),
                         ItemId(...),
                         ItemId(...),
-                        ItemId(#function_id),
                     ] ...
                     enclosing_item_id: None ...
                 }),
@@ -3796,12 +4001,30 @@ fn test_function_redeclared_as_friend() {
                     cc_name: "bar",
                     rs_name: "bar" ...
                     enclosing_item_id: None ...
-                    adl_enclosing_record: Some(ItemId(...)) ...
+                    adl_enclosing_record: None ...
                 }),
             ],
-            top_level_item_ids: map! { ... BazelLabel(#TESTING_TARGET): [ItemId(...)] ... }
+            top_level_item_ids: map! { ... BazelLabel(#TESTING_TARGET): [ItemId(...), ItemId(...)] ... }
         }
     );
+}
+
+#[gtest]
+fn test_friend_not_definition_not_redeclared() {
+    let ir = ir_from_cc(
+        r#"
+            class SomeClass final {
+              friend void some_friend_func();
+            };
+        "#,
+    )
+    .unwrap();
+
+    let functions = ir
+        .functions()
+        .filter(|f| f.rs_name == UnqualifiedIdentifier::Identifier(ir_id("some_friend_func")))
+        .collect_vec();
+    assert_eq!(1, functions.len());
 }
 
 #[gtest]
@@ -3968,7 +4191,7 @@ fn test_source_location_with_macro() {
   void fun_name();
 
 NO_OP_FUNC(no_op_func_to_test_source_location_with_macro);"#,
-        quote! {Func { ..., source_loc: #loc, ... } },
+        quote! {Func { ... source_loc: #loc, ... } },
     );
 
     let loc = "Generated from: ir_from_cc_virtual_header.h;l=4\n\
@@ -3977,7 +4200,7 @@ NO_OP_FUNC(no_op_func_to_test_source_location_with_macro);"#,
         r#"
 #define TYPE_ALIAS_TO_INT(type_alias) using type_alias = int;
 TYPE_ALIAS_TO_INT(MyIntToTestSourceLocationWithMacro);"#,
-        quote! {TypeAlias { ..., source_loc: #loc, ... } },
+        quote! {TypeAlias { ... source_loc: #loc, ... } },
     );
     let loc = "Generated from: ir_from_cc_virtual_header.h;l=4\n\
         Expanded at: ir_from_cc_virtual_header.h;l=6";
@@ -3986,7 +4209,7 @@ TYPE_ALIAS_TO_INT(MyIntToTestSourceLocationWithMacro);"#,
 #define TEMPLATE_NO_OP_FUNC(func_name) \
 template <typename T> void func_name() {};
   TEMPLATE_NO_OP_FUNC(unsupported_templated_no_op_func_to_test_source_location_with_macro);"#,
-        quote! {UnsupportedItem { ..., source_loc: Some(#loc,), ... } },
+        quote! {UnsupportedItem { ... source_loc: Some(#loc,), ... } },
     );
 
     let loc = "Generated from: ir_from_cc_virtual_header.h;l=5\n\
@@ -3996,7 +4219,7 @@ template <typename T> void func_name() {};
 #define DEFINE_EMPTY_ENUM(enum_name) \
   enum enum_name {};
 DEFINE_EMPTY_ENUM(EmptyEnumToTestSourceLocationWithMacro);"#,
-        quote! {Enum { ..., source_loc: #loc, ... } },
+        quote! {Enum { ... source_loc: #loc, ... } },
     );
 
     let loc = "Generated from: ir_from_cc_virtual_header.h;l=5\n\
@@ -4006,7 +4229,7 @@ DEFINE_EMPTY_ENUM(EmptyEnumToTestSourceLocationWithMacro);"#,
 #define DEFINE_EMPTY_STRUCT(struct_name) \
   struct struct_name {};
 DEFINE_EMPTY_STRUCT(EmptyStructToTestSourceLocationWithMacro);"#,
-        quote! {Record { ..., source_loc: #loc, ... } },
+        quote! {Record { ... source_loc: #loc, ... } },
     );
 }
 
@@ -4018,23 +4241,23 @@ fn test_source_location() {
     };
     assert_matches(
         "void no_op_func_to_test_source_location();",
-        quote! {Func { ..., source_loc: "Generated from: ir_from_cc_virtual_header.h;l=3", ... } },
+        quote! {Func { ... source_loc: "Generated from: ir_from_cc_virtual_header.h;l=3", ... } },
     );
     assert_matches(
         r#"typedef float SomeTypedefToTestSourceLocation;"#,
-        quote! {TypeAlias { ..., source_loc: "Generated from: ir_from_cc_virtual_header.h;l=3", ... } },
+        quote! {TypeAlias { ... source_loc: "Generated from: ir_from_cc_virtual_header.h;l=3", ... } },
     );
     assert_matches(
         r#"  template <typename T> void unsupported_templated_func_to_test_source_location() {}"#,
-        quote! {UnsupportedItem { ..., source_loc: Some("Generated from: ir_from_cc_virtual_header.h;l=3"), ... } },
+        quote! {UnsupportedItem { ... source_loc: Some("Generated from: ir_from_cc_virtual_header.h;l=3"), ... } },
     );
     assert_matches(
         r#"enum SomeEmptyEnumToTestSourceLocation {};"#,
-        quote! {Enum { ..., source_loc: "Generated from: ir_from_cc_virtual_header.h;l=3", ... } },
+        quote! {Enum { ... source_loc: "Generated from: ir_from_cc_virtual_header.h;l=3", ... } },
     );
     assert_matches(
         r#"struct SomeEmptyStructToTestSourceLocation {};"#,
-        quote! {Record { ..., source_loc: "Generated from: ir_from_cc_virtual_header.h;l=3", ... } },
+        quote! {Record { ... source_loc: "Generated from: ir_from_cc_virtual_header.h;l=3", ... } },
     );
 }
 
@@ -4097,4 +4320,567 @@ fn test_top_level_item_ids_from_multiple_targets() {
           }
         }
     );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_function() {
+    let ir = ir_from_assumed_lifetimes_cc("void f(int& $a x);").unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            Func {
+                cc_name: "f",
+                ...
+                params: [
+                    FuncParam {
+                        type_: CcType {
+                            variant: Pointer(PointerType {
+                                kind: LValueRef,
+                                lifetime: None,
+                                pointee_type: CcType {
+                                    variant: Primitive(Int),
+                                    is_const: false,
+                                    unknown_attr: "",
+                                    explicit_lifetimes: [],
+                                },
+                            }),
+                            is_const: false,
+                            unknown_attr: "",
+                            explicit_lifetimes: ["a"],
+                        },
+                        identifier: "x",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    }
+                ],
+                ...
+                lifetime_params: [],
+                ...
+            }
+        }
+    );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_function_with_explicit_binding() {
+    let ir = ir_from_assumed_lifetimes_cc("LIFETIME_PARAMS(\"a\") void f(int& $a x);").unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            Func {
+                cc_name: "f",
+                ...
+                params: [
+                    FuncParam {
+                        type_: CcType {
+                            variant: Pointer(PointerType {
+                                kind: LValueRef,
+                                lifetime: None,
+                                pointee_type: CcType {
+                                    variant: Primitive(Int),
+                                    is_const: false,
+                                    unknown_attr: "",
+                                    explicit_lifetimes: [],
+                                },
+                            }),
+                            is_const: false,
+                            unknown_attr: "",
+                            explicit_lifetimes: ["a"],
+                        },
+                        identifier: "x",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    }
+                ],
+                ...
+                lifetime_params: [],
+                ...
+                lifetime_inputs: ["a"],
+                ...
+            }
+        }
+    );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_function_with_explicit_bindings() {
+    let ir = ir_from_assumed_lifetimes_cc(
+        "LIFETIME_PARAMS(\"a\", \"b\") LIFETIME_PARAMS(\"c\", \"d\") void f(int& $a x);",
+    )
+    .unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            Func {
+                cc_name: "f",
+                ...
+                params: [
+                    FuncParam {
+                        type_: CcType {
+                            variant: Pointer(PointerType {
+                                kind: LValueRef,
+                                lifetime: None,
+                                pointee_type: CcType {
+                                    variant: Primitive(Int),
+                                    is_const: false,
+                                    unknown_attr: "",
+                                    explicit_lifetimes: [],
+                                },
+                            }),
+                            is_const: false,
+                            unknown_attr: "",
+                            explicit_lifetimes: ["a"],
+                        },
+                        identifier: "x",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    }
+                ],
+                ...
+                lifetime_params: [],
+                ...
+                lifetime_inputs: ["a", "b", "c", "d"],
+                ...
+            }
+        }
+    );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_lifetimebound_free_function() {
+    let ir =
+        ir_from_assumed_lifetimes_cc("int& f(int& x [[clang::lifetimebound]], int& y);").unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            Func {
+                cc_name: "f",
+                ...
+                params: [
+                    FuncParam {
+                        type_: CcType {
+                            variant: Pointer(PointerType {
+                                kind: LValueRef,
+                                lifetime: None,
+                                pointee_type: CcType {
+                                    variant: Primitive(Int),
+                                    is_const: false,
+                                    unknown_attr: "",
+                                    explicit_lifetimes: [],
+                                },
+                            }),
+                            is_const: false,
+                            unknown_attr: "",
+                            explicit_lifetimes: [],
+                        },
+                        identifier: "x",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: true,
+                        unknown_attr: None,
+                    },
+                    FuncParam {
+                        type_: CcType {
+                            variant: Pointer(PointerType {
+                                kind: LValueRef,
+                                lifetime: None,
+                                pointee_type: CcType {
+                                    variant: Primitive(Int),
+                                    is_const: false,
+                                    unknown_attr: "",
+                                    explicit_lifetimes: [],
+                                },
+                            }),
+                            is_const: false,
+                            unknown_attr: "",
+                            explicit_lifetimes: [],
+                        },
+                        identifier: "y",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                ],
+                ...
+                lifetime_params: [],
+                ...
+            }
+        }
+    );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_lifetime_capture_by_free_function() {
+    let ir =
+        ir_from_assumed_lifetimes_cc("int& f(int& x [[clang::lifetime_capture_by(y)]], int& y);")
+            .unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            Func {
+                cc_name: "f",
+                ...
+                params: [
+                    FuncParam {
+                        type_: CcType {
+                            variant: Pointer(PointerType {
+                                kind: LValueRef,
+                                lifetime: None,
+                                pointee_type: CcType {
+                                    variant: Primitive(Int),
+                                    is_const: false,
+                                    unknown_attr: "",
+                                    explicit_lifetimes: [],
+                                },
+                            }),
+                            is_const: false,
+                            unknown_attr: "",
+                            explicit_lifetimes: [],
+                        },
+                        identifier: "x",
+                        clang_lifetime_capture_by: [1],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                    FuncParam {
+                        type_: CcType {
+                            variant: Pointer(PointerType {
+                                kind: LValueRef,
+                                lifetime: None,
+                                pointee_type: CcType {
+                                    variant: Primitive(Int),
+                                    is_const: false,
+                                    unknown_attr: "",
+                                    explicit_lifetimes: [],
+                                },
+                            }),
+                            is_const: false,
+                            unknown_attr: "",
+                            explicit_lifetimes: [],
+                        },
+                        identifier: "y",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                ],
+                ...
+                lifetime_params: [],
+                ...
+            }
+        }
+    );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_lifetimebound_member_function() {
+    let ir =
+        ir_from_assumed_lifetimes_cc("struct S { int& f() [[clang::lifetimebound]]; }; ").unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            ...
+            Func {
+                cc_name: "f",
+                ...
+                params: [
+                    FuncParam {
+                        ...
+                        identifier: "__this",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: true,
+                        unknown_attr: None,
+                    }
+                ],
+                ...
+            }
+            ...
+        }
+    );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_lifetimebound_internal_param_member_function() {
+    let ir =
+        ir_from_assumed_lifetimes_cc("struct S { int& f(int& x [[clang::lifetimebound]]); }; ")
+            .unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            ...
+            Func {
+                cc_name: "f",
+                ...
+                params: [
+                    FuncParam {
+                        ...
+                        identifier: "__this",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                    FuncParam {
+                        ...
+                        identifier: "x",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: true,
+                        unknown_attr: None,
+                    },
+                ],
+                ...
+            }
+            ...
+        }
+    );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_lifetimebound_member_function_with_param() {
+    let ir = ir_from_assumed_lifetimes_cc("struct S { int& f(int x) [[clang::lifetimebound]]; }; ")
+        .unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            ...
+            Func {
+                cc_name: "f",
+                ...
+                params: [
+                    FuncParam {
+                        ...
+                        identifier: "__this",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: true,
+                        unknown_attr: None,
+                    },
+                    FuncParam {
+                        ...
+                        identifier: "x",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                ],
+                ...
+            }
+            ...
+        }
+    );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_lifetime_capture_by_member_function() {
+    let ir = ir_from_assumed_lifetimes_cc(
+        "struct S { void f(int& x, int& y) [[clang::lifetime_capture_by(y)]]; }; ",
+    )
+    .unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            ...
+            Func {
+                cc_name: "f",
+                ...
+                params: [
+                    FuncParam {
+                        ...
+                        identifier: "__this",
+                        clang_lifetime_capture_by: [2],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                    FuncParam {
+                        ...
+                        identifier: "x",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                    FuncParam {
+                        ...
+                        identifier: "y",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                ],
+                ...
+            }
+            ...
+        }
+    );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_lifetime_capture_by_member_function_this() {
+    let ir =
+        ir_from_assumed_lifetimes_cc("struct S { int& f(int& x [[clang::lifetime_capture_by(this)]], int& y) [[clang::lifetimebound]]; }; ").unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            ...
+            Func {
+                cc_name: "f",
+                ...
+                params: [
+                    FuncParam {
+                        ...
+                        identifier: "__this",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: true,
+                        unknown_attr: None,
+                    },
+                    FuncParam {
+                        ...
+                        identifier: "x",
+                        clang_lifetime_capture_by: [0],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                    FuncParam {
+                        ...
+                        identifier: "y",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                ],
+                ...
+            }
+            ...
+        }
+    );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_lifetime_capture_by_multiple_params() {
+    let ir = ir_from_assumed_lifetimes_cc(
+        "void f(int& x, int& y [[clang::lifetime_capture_by(x, z)]], int& z);",
+    )
+    .unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            ...
+            Func {
+                cc_name: "f",
+                ...
+                params: [
+                    FuncParam {
+                        ...
+                        identifier: "x",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                    FuncParam {
+                        ...
+                        identifier: "y",
+                        clang_lifetime_capture_by: [0, 2],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                    FuncParam {
+                        ...
+                        identifier: "z",
+                        clang_lifetime_capture_by: [],
+                        clang_lifetimebound: false,
+                        unknown_attr: None,
+                    },
+                ],
+                ...
+            }
+            ...
+        }
+    );
+}
+
+#[gtest]
+fn test_detects_formatter() {
+    let ir = ir_from_cc(
+        r#"
+        struct Foo {
+          template <typename Sink>
+          friend void AbslStringify(Sink&, const Foo&) {}
+        };"#,
+    )
+    .unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+          ...
+          Record {
+            ...
+            cc_name: "Foo",
+            ...
+            detected_formatter: true,
+            ...
+          }
+          ...
+        }
+    );
+}
+
+#[gtest]
+fn test_assumed_lifetimes_struct_with_explicit_binding() {
+    let ir = ir_from_assumed_lifetimes_cc("struct LIFETIME_PARAMS(\"a\") S { };").unwrap();
+    assert_ir_matches!(
+        ir,
+        quote! {
+            Record {
+                ...
+                cc_name: "S",
+                ...
+                lifetime_inputs: ["a"],
+                ...
+            }
+        }
+    );
+}
+
+fn expect_constant(ir: &ir::IR) -> &ir::Constant {
+    let constant = ir.items().find_map(|item| match item {
+        Item::Constant(constant) => Some(constant),
+        _ => None,
+    });
+    let Some(constant) = constant else {
+        panic!("Expected a constant, none found in IR:\n{ir:#?}");
+    };
+    constant
+}
+
+#[gtest]
+fn test_top_level_constexpr_int() {
+    let ir = ir_from_cc("constexpr int x = 1;").unwrap();
+    let constant = expect_constant(&ir);
+    expect_eq!(constant.cc_name, "x");
+    expect_eq!(constant.value.wrapped_value, 1);
+}
+
+#[gtest]
+fn test_top_level_constexpr_bool() {
+    let ir = ir_from_cc("constexpr bool x = false;").unwrap();
+    let constant = expect_constant(&ir);
+    expect_eq!(constant.cc_name, "x");
+    expect_eq!(constant.value.wrapped_value, 0);
+}
+
+#[gtest]
+fn test_anonymous_enum() {
+    let ir = ir_from_cc("enum { kFoo = 1, kBar = 2 };").unwrap();
+    let kfoo = ir.constants().find(|c| c.cc_name == "kFoo").unwrap();
+    assert_eq!(kfoo.value.wrapped_value, 1);
+    let kbar = ir.constants().find(|c| c.cc_name == "kBar").unwrap();
+    assert_eq!(kbar.value.wrapped_value, 2);
+}
+
+#[gtest]
+fn test_anonymous_enum_in_record() {
+    let ir = ir_from_cc("struct S { enum { kFoo = 1 }; };").unwrap();
+    let record = retrieve_record(&ir, "S");
+    let constant = ir.constants().find(|c| c.cc_name == "kFoo").unwrap();
+    assert_eq!(constant.enclosing_item_id, Some(record.id));
+    assert_eq!(constant.value.wrapped_value, 1);
 }

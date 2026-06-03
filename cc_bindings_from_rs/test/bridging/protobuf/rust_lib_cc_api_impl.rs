@@ -4,12 +4,13 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // rust_lib_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #![allow(unused_unsafe, deprecated, non_snake_case, unreachable_code)]
 #![allow(improper_ctypes_definitions)]
 #![deny(warnings)]
 
+extern crate alloc;
+extern crate core;
 extern crate foo_rust_proto as foo_proto;
 const _: () = assert!(::std::mem::size_of::<::rust_lib_golden::FooService>() == 8);
 const _: () = assert!(::std::mem::align_of::<::rust_lib_golden::FooService>() == 8);
@@ -90,7 +91,11 @@ unsafe extern "C" fn __crubit_thunk_update_urequest_ustats(
         ::rust_lib_golden::FooService::update_request_stats(__self, updated_stats)
     }
 }
-extern "C" {
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_enum_uin_usignature(_e: ::foo_proto::FooEnum) -> () {
+    unsafe { ::rust_lib_golden::FooService::enum_in_signature(_e) }
+}
+unsafe extern "C" {
     fn proto2_rust_thunk_Message_foo_service_FooRequestStats_crubit_cpp_to_rust_converter(
         cpp_in: *const core::ffi::c_void,
         rs_out: *mut core::ffi::c_void,

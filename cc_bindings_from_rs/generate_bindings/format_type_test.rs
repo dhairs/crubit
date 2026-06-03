@@ -5,13 +5,12 @@
 #![feature(rustc_private)]
 
 use code_gen_utils::format_cc_includes;
-use database::{BindingsGenerator, SugaredTy, TypeLocation};
-use generate_bindings::generate_function::get_fn_sig;
+use database::TypeLocation;
 use proc_macro2::TokenStream;
+use query_compiler::liberate_and_deanonymize_late_bound_regions;
 use quote::quote;
 use run_compiler_test_support::{find_def_id_by_name, run_compiler_for_testing};
-use rustc_hir::FnRetTy;
-use rustc_middle::ty::TyCtxt;
+use rustc_middle::ty::{Ty, TyCtxt};
 use test_helpers::bindings_db_for_tests;
 use token_stream_matchers::assert_cc_matches;
 
@@ -21,18 +20,14 @@ fn test_ty<TestFn, Expectation>(
     preamble: TokenStream,
     test_fn: TestFn,
 ) where
-    TestFn: for<'tcx> Fn(
-            /* testcase_description: */ &str,
-            TyCtxt<'tcx>,
-            SugaredTy<'tcx>,
-            &Expectation,
-        ) + Sync,
+    TestFn:
+        for<'tcx> Fn(/* testcase_description: */ &str, TyCtxt<'tcx>, Ty<'tcx>, &Expectation) + Sync,
     Expectation: Sync,
 {
     fn input_to_string(input: &str, preamble: &TokenStream, type_location: TypeLocation) -> String {
         let ty_tokens: TokenStream = input.parse().unwrap();
         let input = match type_location {
-            TypeLocation::FnReturn => quote! {
+            TypeLocation::FnReturn { .. } => quote! {
                 #preamble
                 pub fn test_function() -> #ty_tokens { unimplemented!() }
             },
@@ -45,26 +40,18 @@ fn test_ty<TestFn, Expectation>(
         input.to_string()
     }
 
-    fn get_test_function_ty<'tcx>(
-        tcx: TyCtxt<'tcx>,
-        type_location: TypeLocation,
-    ) -> SugaredTy<'tcx> {
-        let (sig_mid, sig_hir_opt) =
-            get_fn_sig(tcx, find_def_id_by_name(tcx, "test_function").to_def_id());
-        let sig_hir = sig_hir_opt.unwrap();
+    fn get_test_function_ty<'tcx>(tcx: TyCtxt<'tcx>, type_location: TypeLocation) -> Ty<'tcx> {
+        let sig_mid = {
+            let def_id = find_def_id_by_name(tcx, "test_function").to_def_id();
+            liberate_and_deanonymize_late_bound_regions(
+                tcx,
+                tcx.fn_sig(def_id).instantiate_identity(),
+                def_id,
+            )
+        };
         match type_location {
-            TypeLocation::FnReturn => {
-                let FnRetTy::Return(ty_hir) = sig_hir.output else {
-                    unreachable!(
-                        "HIR return type should be fully specified, got: {:?}",
-                        sig_hir.output
-                    );
-                };
-                SugaredTy::new(sig_mid.output(), Some(ty_hir))
-            }
-            TypeLocation::FnParam { .. } => {
-                SugaredTy::new(sig_mid.inputs()[0], Some(&sig_hir.inputs[0]))
-            }
+            TypeLocation::FnReturn { .. } => sig_mid.output(),
+            TypeLocation::FnParam { .. } => sig_mid.inputs()[0],
             _ => unimplemented!(),
         }
     }
@@ -97,15 +84,22 @@ fn test_format_ret_ty_for_cc_successes() {
             "crubit :: type_identity_t < float (float , float) > &",
         ),
     ];
-    test_ty(TypeLocation::FnReturn, &testcases, quote! {}, |desc, tcx, ty, expected| {
-        let actual = {
-            let db = bindings_db_for_tests(tcx);
-            let cc_snippet = db.format_ty_for_cc(ty, TypeLocation::FnReturn).unwrap();
-            cc_snippet.tokens.to_string()
-        };
-        let expected = expected.parse::<TokenStream>().unwrap().to_string();
-        assert_eq!(actual, expected, "{desc}");
-    });
+    test_ty(
+        TypeLocation::FnReturn { is_constructor: false },
+        &testcases,
+        quote! {},
+        |desc, tcx, ty, expected| {
+            let actual = {
+                let db = bindings_db_for_tests(tcx);
+                let cc_snippet = db
+                    .format_ty_for_cc(ty, TypeLocation::FnReturn { is_constructor: false })
+                    .unwrap();
+                cc_snippet.tokens.to_string()
+            };
+            let expected = expected.parse::<TokenStream>().unwrap().to_string();
+            assert_eq!(actual, expected, "{desc}");
+        },
+    );
 }
 
 /// `test_format_ty_for_cc_successes` provides test coverage for cases where
@@ -159,34 +153,16 @@ fn test_format_ty_for_cc_successes() {
         case!(rs: "bool", cc:  "bool"),
         case!(rs: "f32", cc: "float"),
         case!(rs: "f64", cc: "double"),
-        // The ffi aliases are special-cased to refer to the C++ fundamental integer types,
-        // if the type alias information is not lost (e.g. from generics).
-        case!(rs: "std::ffi::c_char", cc:  "char"),
-        case!(rs: "::std::ffi::c_char", cc:  "char"),
-        case!(rs: "core::ffi::c_char", cc:  "char"),
-        case!(rs: "::core::ffi::c_char", cc:  "char"),
-        case!(rs: "std::ffi::c_uchar", cc: "unsigned char"),
-        case!(rs: "std::ffi::c_longlong", cc: "long long"),
-        case!(rs: "c_char", cc:  "char"),
-        // Simple pointers/references do not lose the type alias information.
-        case!(rs: "*const std::ffi::c_uchar", cc: "unsigned char const *"),
-        case!(
-            rs: "&'static std::ffi::c_uchar",
-            cc: "unsigned char const * [[clang :: annotate_type (\"lifetime\" , \"static\")]] crubit_nonnull",
-            includes: ["<crubit/support/for/tests/annotations_internal.h>"]
-        ),
-        // Generics lose type alias information.
-        case!(rs: "Identity<std::ffi::c_longlong>", cc: "std::int64_t", includes: ["<cstdint>"]),
-        case!(rs: "i8", cc: "std::int8_t", includes: ["<cstdint>"]),
-        case!(rs: "i16", cc:  "std::int16_t", includes: ["<cstdint>"]),
-        case!(rs: "i32", cc:  "std::int32_t", includes: ["<cstdint>"]),
-        case!(rs: "i64", cc:  "std::int64_t", includes: ["<cstdint>"]),
-        case!(rs: "isize", cc: "std::intptr_t", includes: ["<cstdint>"]),
-        case!(rs: "u8", cc: "std::uint8_t", includes: ["<cstdint>"]),
-        case!(rs: "u16", cc: "std::uint16_t", includes: ["<cstdint>"]),
-        case!(rs: "u32", cc: "std::uint32_t", includes: ["<cstdint>"]),
-        case!(rs: "u64", cc: "std::uint64_t", includes: ["<cstdint>"]),
-        case!(rs: "usize", cc: "std::uintptr_t", includes: ["<cstdint>"]),
+        case!(rs: "i8", cc: "::std::int8_t", includes: ["<cstdint>"]),
+        case!(rs: "i16", cc:  "::std::int16_t", includes: ["<cstdint>"]),
+        case!(rs: "i32", cc:  "::std::int32_t", includes: ["<cstdint>"]),
+        case!(rs: "i64", cc:  "::std::int64_t", includes: ["<cstdint>"]),
+        case!(rs: "isize", cc: "::std::intptr_t", includes: ["<cstdint>"]),
+        case!(rs: "u8", cc: "::std::uint8_t", includes: ["<cstdint>"]),
+        case!(rs: "u16", cc: "::std::uint16_t", includes: ["<cstdint>"]),
+        case!(rs: "u32", cc: "::std::uint32_t", includes: ["<cstdint>"]),
+        case!(rs: "u64", cc: "::std::uint64_t", includes: ["<cstdint>"]),
+        case!(rs: "usize", cc: "::std::uintptr_t", includes: ["<cstdint>"]),
         case!(
             rs: "char",
             cc: "rs_std::char_",
@@ -195,33 +171,33 @@ fn test_format_ty_for_cc_successes() {
         case!(rs: "SomeStruct", cc: "::rust_out::SomeStruct", includes: [],  prereq_def: "SomeStruct"),
         case!(rs: "SomeEnum", cc: "::rust_out::SomeEnum", includes: [], prereq_def: "SomeEnum"),
         case!(rs: "SomeUnion", cc: "::rust_out::SomeUnion", includes: [], prereq_def: "SomeUnion"),
-        case!(rs: "*const i32", cc: "std :: int32_t const *", includes: ["<cstdint>"]),
-        case!(rs: "*mut i32", cc: "std :: int32_t *", includes: ["<cstdint>"]),
+        case!(rs: "*const i32", cc: "::std :: int32_t const *", includes: ["<cstdint>"]),
+        case!(rs: "*mut i32", cc: "::std :: int32_t *", includes: ["<cstdint>"]),
         case!(
             rs: "&'static i32",
-            cc: "std :: int32_t const * [[clang :: annotate_type (\"lifetime\" , \"static\")]] crubit_nonnull",
-            includes: ["<cstdint>", "<crubit/support/for/tests/annotations_internal.h>"]
+            cc: "::std :: int32_t const * $static crubit_nonnull",
+            includes: ["<cstdint>", "<crubit/support/for/tests/annotations_internal.h>", "<crubit/support/for/tests/lifetime_annotations.h>"]
         ),
         case!(
             rs: "&'static mut i32",
-            cc: "std :: int32_t * [[clang :: annotate_type (\"lifetime\" , \"static\")]] crubit_nonnull",
-            includes: ["<cstdint>", "<crubit/support/for/tests/annotations_internal.h>"]
+            cc: "::std :: int32_t * $static crubit_nonnull",
+            includes: ["<cstdint>", "<crubit/support/for/tests/annotations_internal.h>", "<crubit/support/for/tests/lifetime_annotations.h>"]
+        ),
+        case!(
+            rs: "&'static &'static i32",
+            cc: "::std :: int32_t const * $ static crubit_nonnull const * $ static crubit_nonnull",
+            includes: ["<cstdint>", "<crubit/support/for/tests/annotations_internal.h>", "<crubit/support/for/tests/lifetime_annotations.h>"]
         ),
         // Slice pointers:
         case!(
             rs: "*const [i8]",
-            cc: "rs_std::SliceRef<const std::int8_t>",
+            cc: "rs_std::SliceRef< const ::std::int8_t>",
             includes: ["<cstdint>", "<crubit/support/for/tests/rs_std/slice_ref.h>"]
         ),
         case!(
             rs: "*mut [i64]",
-            cc: "rs_std::SliceRef<std::int64_t>",
+            cc: "rs_std::SliceRef< ::std::int64_t>",
             includes: ["<cstdint>", "<crubit/support/for/tests/rs_std/slice_ref.h>"]
-        ),
-        case!(
-            rs: "*const [c_char]",
-            cc: "rs_std::SliceRef<const char>",
-            includes: ["<crubit/support/for/tests/rs_std/slice_ref.h>"]
         ),
         case!(
             rs: "*mut [SomeStruct]",
@@ -229,6 +205,16 @@ fn test_format_ty_for_cc_successes() {
             includes: [ "<crubit/support/for/tests/rs_std/slice_ref.h>"],
             prereq_def: "SomeStruct"
 
+        ),
+        case!(
+            rs: "&'static [i32]",
+            cc: "rs_std::SliceRef< const ::std::int32_t>",
+            includes: ["<cstdint>", "<crubit/support/for/tests/rs_std/slice_ref.h>"]
+        ),
+        case!(
+            rs: "&'static mut [i32]",
+            cc: "rs_std::SliceRef< ::std::int32_t>",
+            includes: ["<cstdint>", "<crubit/support/for/tests/rs_std/slice_ref.h>"]
         ),
         // `SomeStruct` is a `fwd_decls` prerequisite (not `defs` prerequisite):
         case!(
@@ -274,44 +260,49 @@ fn test_format_ty_for_cc_successes() {
         // References to MaybeUninit:
         case!(
             rs: "*const std::mem::MaybeUninit<i32>",
-            cc: "std :: int32_t const *",
+            cc: "::std :: int32_t const *",
             includes: ["<cstdint>"]
         ),
         case!(
             rs: "&mut std::mem::MaybeUninit<i32>",
-            cc: "std :: int32_t &",
+            cc: "::std :: int32_t &",
             includes: ["<cstdint>"]
         ),
         case!(
             rs: "()",
-            cc: "std::tuple < >",
+            cc: "::std::tuple < >",
             includes: ["<tuple>"]
         ),
         case!(
             rs: "(i32,)",
-            cc: "std::tuple<std::int32_t>",
+            cc: "::std::tuple < ::std::int32_t>",
             includes: ["<cstdint>", "<tuple>"]
         ),
         case!(
             rs: "(i32, i32)",
-            cc: "std::tuple<std::int32_t, std::int32_t>",
+            cc: "::std::tuple < ::std::int32_t, ::std::int32_t>",
             includes: ["<cstdint>", "<tuple>"]
         ),
         // TyKind::Array
         case!(
             rs: "*mut [i32; 42]",
-            cc: "std::array<std::int32_t, 42> *",
+            cc: "::std::array < ::std::int32_t, 42> *",
             includes: ["<array>", "<cstdint>"]
         ),
         case!(
             rs: "*const [i32; 42]",
-            cc: "std::array<std::int32_t, 42> const *",
+            cc: "::std::array < ::std::int32_t, 42> const *",
             includes: ["<array>", "<cstdint>"]
         ),
         case!(
             rs: "[i32; 42]",
-            cc: "std::array<std::int32_t, 42>",
+            cc: "::std::array < ::std::int32_t, 42>",
             includes: ["<array>", "<cstdint>"]
+        ),
+        case!(
+            rs: "std::cmp::Ordering",
+            cc: "::rs::core::cmp::Ordering",
+            includes: ["\"fake_bindings_for_unittests/core_cc_api.h\""]
         ),
     ];
     let preamble = quote! {
@@ -334,10 +325,6 @@ fn test_format_ty_for_cc_successes() {
 
         #[allow(unused)]
         type Identity<T> = T;
-
-        pub use core::ffi::c_char;
-        // TODO(b/283258442): Correctly handle something like this:
-        // pub type MyChar = core::ffi::c_char;
     };
     test_ty(
         TypeLocation::FnParam { is_self_param: false, elided_is_output: false },
@@ -359,7 +346,7 @@ fn test_format_ty_for_cc_successes() {
                         ty,
                         TypeLocation::FnParam { is_self_param: false, elided_is_output: false },
                     )
-                    .unwrap();
+                    .unwrap_or_else(|e| panic!("Failed to format type {}: {}", ty, e));
                 (s.tokens.to_string(), s.prereqs)
             };
             let (actual_includes, actual_prereq_defs, actual_prereq_fwd_decls) =
@@ -441,21 +428,8 @@ fn test_format_ty_for_cc_failures() {
             "The never type `!` is only supported as a return type (b/254507801)",
         ),
         (
-            "&'static &'static i32", // TyKind::Ref (nested reference - referent of reference)
-            "Failed to format the referent of the reference type `&'static &'static i32`: \
-             Can't format `&'static i32`, because references are only supported \
-             in function parameter types, return types, and consts (b/286256327)",
-        ),
-        (
             "extern \"C\" fn (&i32)", // TyKind::Ref (nested reference - underneath fn ptr)
             "Generic function pointers are not supported yet (b/259749023)",
-        ),
-        (
-            // Check that the failure for slices is about not being supported and not failed
-            // asserts about ABI and layout.
-            "&'static [i32]", // TyKind::Slice (nested underneath TyKind::Ref)
-            "Failed to format the referent of the reference type `&'static [i32]`: \
-             The following Rust type is not supported yet: [i32]",
         ),
         (
             "impl Eq", // TyKind::Alias
@@ -488,20 +462,9 @@ fn test_format_ty_for_cc_failures() {
             "Generic types are not supported yet (b/259749095)",
         ),
         (
-            "std::cmp::Ordering",
-            "Type `std::cmp::Ordering` comes from the `core` crate, \
-             but no `--crate-header` was specified for this crate",
-        ),
-        (
-            // TODO(b/258261328): Once cross-crate bindings are supported we should try
-            // to test them via a test crate that we control (rather than testing via
-            // implementation details of the std crate).
             "core::alloc::LayoutError",
-            "Type `std::alloc::LayoutError` comes from the `core` crate, but no `--crate-header` was specified for this crate",
-        ),
-        (
-            "*const Option<i8>",
-            "Failed to format the pointee of the pointer type `*const std::option::Option<i8>`: Bridged types must appear in a bridgeable type location",
+            "Failed to format type for the definition of `std::alloc::LayoutError`: \
+             Zero-sized types (ZSTs) are not supported (b/258259459)",
         ),
     ];
     let preamble = quote! {
@@ -619,7 +582,7 @@ fn test_format_ty_for_rs_successes() {
         preamble,
         |desc, tcx, ty, expected_tokens| {
             let db = bindings_db_for_tests(tcx);
-            let actual_tokens = db.format_ty_for_rs(ty.mid()).unwrap().to_string();
+            let actual_tokens = db.format_ty_for_rs(ty).unwrap().to_string();
             let expected_tokens = expected_tokens.parse::<TokenStream>().unwrap().to_string();
             assert_eq!(actual_tokens, expected_tokens, "{desc}");
         },
@@ -645,7 +608,7 @@ fn test_format_ty_for_rs_failures() {
         |desc, tcx, ty, expected_err| {
             let db = bindings_db_for_tests(tcx);
             let anyhow_err =
-                db.format_ty_for_rs(ty.mid()).expect_err(&format!("Expecting error for: {desc}"));
+                db.format_ty_for_rs(ty).expect_err(&format!("Expecting error for: {desc}"));
             let actual_err = format!("{anyhow_err:#}");
             assert_eq!(&actual_err, *expected_err, "{desc}");
         },

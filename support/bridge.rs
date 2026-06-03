@@ -150,7 +150,7 @@ pub unsafe trait CrubitAbi {
     /// # Safety
     ///
     /// The caller guarantees that the buffer's current position contains a `Value` that was
-    /// encoded with this ABI (either from Rust or C++).
+    /// encoded with this ABI from C++.
     unsafe fn decode(self, decoder: &mut Decoder) -> Self::Value;
 }
 
@@ -346,26 +346,6 @@ pub mod internal {
     /// This function is intended to be used by Crubit generated code.
     pub const fn empty_buffer<const BYTES: usize>() -> [MaybeUninit<u8>; BYTES] {
         [const { MaybeUninit::uninit() }; BYTES]
-    }
-}
-
-// Temporary wrapper to migrate all callers of `encode` to the new version which
-// takes another argument.
-// TODO(b/461708400): Remove this once the migration is complete.
-#[macro_export]
-macro_rules! encode_wrapper {
-    {$crubit_abi_expr:expr, $crubit_abi:ty, $buf:expr, $expr:expr} => {
-        $crate::internal::encode::<$crubit_abi>($crubit_abi_expr, $buf, $expr)
-    }
-}
-
-// Temporary wrapper to migrate all callers of `decode` to the new version which
-// takes another argument.
-// TODO(b/461708400): Remove this once the migration is complete.
-#[macro_export]
-macro_rules! decode_wrapper {
-    {$crubit_abi_expr:expr, $crubit_abi:ty, $buf:expr} => {
-        $crate::internal::decode::<$crubit_abi>($crubit_abi_expr, $buf)
     }
 }
 

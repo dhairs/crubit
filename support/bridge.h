@@ -170,7 +170,7 @@ constexpr bool is_crubit_abi = requires {
   // # Safety
   //
   // The caller guarantees that the buffer's current position contains a
-  // `Value` that was encoded with this ABI (either from Rust or C++).
+  // `Value` that was encoded with this ABI from Rust.
   {
     std::declval<Abi&&>().Decode(std::declval<Decoder&>())
   } -> std::same_as<typename Abi::Value>;
@@ -191,10 +191,10 @@ typename Abi::Value Decode(Abi&& abi, const unsigned char* buf);
 // A wrapper around a buffer that tracks which parts of a buffer have already
 // been written to.
 class Encoder {
+ public:
   explicit Encoder(size_t remaining_bytes, unsigned char* buf)
       : remaining_bytes_(remaining_bytes), buf_(buf) {}
 
- public:
   void* Next(size_t size) & {
     remaining_bytes_ -= size;
     return buf_ + remaining_bytes_;
@@ -213,10 +213,10 @@ class Encoder {
 // A wrapper around a buffer that tracks which parts of a buffer have already
 // been read from.
 class Decoder {
+ public:
   explicit Decoder(size_t remaining_bytes, const unsigned char* buf)
       : remaining_bytes_(remaining_bytes), buf_(buf) {}
 
- public:
   const void* Next(size_t size) & {
     remaining_bytes_ -= size;
     return buf_ + remaining_bytes_;
@@ -305,9 +305,6 @@ struct PairAbi {
   std::pair<Abi1, Abi2> abis;
 };
 
-template <typename Abi1, typename Abi2>
-PairAbi(Abi1, Abi2) -> PairAbi<Abi1, Abi2>;
-
 template <typename Abi>
   requires(is_crubit_abi<Abi>)
 struct OptionAbi {
@@ -330,10 +327,6 @@ struct OptionAbi {
 
   Abi abi;
 };
-
-template <typename Abi>
-  requires(is_crubit_abi<Abi>)
-OptionAbi(Abi) -> OptionAbi<Abi>;
 
 template <typename T>
   requires(std::move_constructible<T>)
@@ -362,29 +355,11 @@ void Encode(Abi&& abi, unsigned char* buf, typename Abi::Value value) {
   std::forward<Abi>(abi).Encode(std::move(value), encoder);
 }
 
-// TODO(b/461708400): Remove this overload once deletion of
-// http://cc_bindings_from_rs/generate_bindings/generate_function.rs;l=145;rcl=843296833
-// hits crosstool.
-template <typename Abi>
-  requires(is_crubit_abi<Abi> && std::is_default_constructible_v<Abi>)
-void Encode(unsigned char* buf, typename Abi::Value value) {
-  Encode(Abi(), buf, std::move(value));
-}
-
 template <typename Abi>
   requires(is_crubit_abi<Abi>)
 typename Abi::Value Decode(Abi&& abi, const unsigned char* buf) {
   Decoder decoder(Abi::kSize, buf);
   return std::forward<Abi>(abi).Decode(decoder);
-}
-
-// TODO(b/461708400): Remove this overload once deletion of
-// http://cc_bindings_from_rs/generate_bindings/generate_function.rs;l=289;rcl=836830956
-// hits crosstool.
-template <typename Abi>
-  requires(is_crubit_abi<Abi> && std::is_default_constructible_v<Abi>)
-typename Abi::Value Decode(const unsigned char* buf) {
-  return Decode(Abi(), buf);
 }
 
 }  // namespace internal

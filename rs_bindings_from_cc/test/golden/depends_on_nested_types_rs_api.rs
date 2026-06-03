@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:depends_on_nested_types_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes)]
+#![feature(custom_inner_attributes)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 /// This should have bindings because Bar is a nested item of Foo, and the module
@@ -19,6 +20,7 @@
 pub type FooBar = ::nested_types_cc::foo::Bar;
 pub use ::nested_types_cc::foo::bar as foo_bar;
 
-// Error while generating bindings for type alias 'ConflictingSnakeCaseNamesInner':
-// Can't generate bindings for ConflictingSnakeCaseNamesInner, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:depends_on_nested_types_cc needs [//features:wrapper] for ConflictingSnakeCaseNamesInner (error: records ["ConflictingSnakeCaseNames", "ConflictingSnakeCaseNames_"] all have nested items, but all map to the same nested module name: `conflicting_snake_case_names`)
+/// This should not have bindings because Bar is a nested item of Foo, and the
+/// module "conflicting_snake_case_names" cannot be generated because it
+/// conflicts with the child module of ConflictingSnakeCaseNames_.
+pub type ConflictingSnakeCaseNamesInner = ::nested_types_cc::conflicting_snake_case_names::Inner;

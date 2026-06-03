@@ -4,22 +4,26 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // example_crate_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_EXAMPLES_RUST_UNION_EXAMPLE_CRATE_GOLDEN
 #define THIRD_PARTY_CRUBIT_EXAMPLES_RUST_UNION_EXAMPLE_CRATE_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 #include "support/internal/slot.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 namespace example_crate {
 
-// Generated from: examples/rust/union/example.rs;l=6
 union CRUBIT_INTERNAL_RUST_TYPE(
     ":: example_crate_golden :: ReprCUnion") alignas(8) [[clang::trivial_abi]]
 ReprCUnion final {
@@ -36,13 +40,9 @@ ReprCUnion final {
   ReprCUnion(const ReprCUnion&) = delete;
   ReprCUnion& operator=(const ReprCUnion&) = delete;
   ReprCUnion(::crubit::UnsafeRelocateTag, ReprCUnion&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
-  // Generated from:
-  // examples/rust/union/example.rs;l=7
-  std::int32_t a;
-  // Generated from:
-  // examples/rust/union/example.rs;l=8
+  ::std::int32_t a;
   double b;
 
  private:
@@ -58,15 +58,19 @@ static_assert(
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(::example_crate::ReprCUnion* __ret_ptr);
 }
-inline ReprCUnion::ReprCUnion() {
+inline ::example_crate::ReprCUnion::ReprCUnion() {
   __crubit_internal::__crubit_thunk_default(this);
 }
-static_assert(std::is_trivially_destructible_v<ReprCUnion>);
-static_assert(std::is_trivially_move_constructible_v<ReprCUnion>);
-static_assert(std::is_trivially_move_assignable_v<ReprCUnion>);
+static_assert(::std::is_trivially_destructible_v<ReprCUnion>);
+static_assert(
+    ::std::is_trivially_move_constructible_v<::example_crate::ReprCUnion>);
+static_assert(
+    ::std::is_trivially_move_assignable_v<::example_crate::ReprCUnion>);
 inline void ReprCUnion::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(ReprCUnion, a));
   static_assert(0 == offsetof(ReprCUnion, b));
 }
 }  // namespace example_crate
+
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_EXAMPLES_RUST_UNION_EXAMPLE_CRATE_GOLDEN

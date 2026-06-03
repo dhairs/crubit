@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:private_members_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 pub mod test_namespace_bindings {
@@ -20,7 +21,7 @@ pub mod test_namespace_bindings {
     ///CRUBIT_ANNOTATE: cpp_type=test_namespace_bindings :: SomeClass
     pub struct SomeClass {
         __non_field_data: [::core::mem::MaybeUninit<u8>; 0],
-        pub public_member_variable_: ::core::ffi::c_int,
+        pub public_member_variable_: ::ffi_11::c_int,
         /// Reason for representing this field as a blob of bytes:
         /// Types of non-public C++ fields can be elided away
         pub(crate) private_member_variable_: [::core::mem::MaybeUninit<u8>; 4],
@@ -34,17 +35,11 @@ pub mod test_namespace_bindings {
     impl SomeClass {
         #[inline(always)]
         pub fn public_method<'a>(&'a mut self) {
-            unsafe {
-                crate::detail::__rust_thunk___ZN23test_namespace_bindings9SomeClass13public_methodEv(
-                    self,
-                )
-            }
+            unsafe { self::some_class::public_method(self) }
         }
         #[inline(always)]
         pub fn public_static_method() {
-            unsafe {
-                crate::detail::__rust_thunk___ZN23test_namespace_bindings9SomeClass20public_static_methodEv()
-            }
+            unsafe { self::some_class::public_static_method() }
         }
     }
 
@@ -61,23 +56,42 @@ pub mod test_namespace_bindings {
         }
     }
 
-    // Error while generating bindings for constructor 'SomeClass::SomeClass':
-    // Can't generate bindings for SomeClass::SomeClass, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:private_members_cc needs [//features:experimental] for SomeClass::SomeClass (the type of __param_0 (parameter #1): references are not supported)
+    // error: constructor `test_namespace_bindings::SomeClass::SomeClass` could not be bound
+    //   Unsupported parameter type `const test_namespace_bindings::SomeClass& __param_0`:
+    //     references are not yet supported
 
-    // Error while generating bindings for constructor 'SomeClass::SomeClass':
-    // Can't generate bindings for SomeClass::SomeClass, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:private_members_cc needs [//features:experimental] for SomeClass::SomeClass (the type of __param_0 (parameter #1): references are not supported)
+    // error: constructor `test_namespace_bindings::SomeClass::SomeClass` could not be bound
+    //   Unsupported parameter type `test_namespace_bindings::SomeClass&& __param_0`:
+    //     references are not yet supported
 
-    // Error while generating bindings for function 'SomeClass::operator=':
-    // Can't generate bindings for SomeClass::operator=, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:private_members_cc needs [//features:experimental] for SomeClass::operator= (return type: references are not supported)
-    // //rs_bindings_from_cc/test/golden:private_members_cc needs [//features:experimental] for SomeClass::operator= (the type of __param_0 (parameter #1): references are not supported)
+    // error: function `test_namespace_bindings::SomeClass::operator=` could not be bound
+    //   Unsupported parameter type `const test_namespace_bindings::SomeClass& __param_0`:
+    //     references are not yet supported
+    //   Unsupported return type `test_namespace_bindings::SomeClass&`:
+    //     references are not yet supported
 
-    // Error while generating bindings for function 'SomeClass::operator=':
-    // Can't generate bindings for SomeClass::operator=, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/golden:private_members_cc needs [//features:experimental] for SomeClass::operator= (return type: references are not supported)
-    // //rs_bindings_from_cc/test/golden:private_members_cc needs [//features:experimental] for SomeClass::operator= (the type of __param_0 (parameter #1): references are not supported)
+    // error: function `test_namespace_bindings::SomeClass::operator=` could not be bound
+    //   Unsupported parameter type `test_namespace_bindings::SomeClass&& __param_0`:
+    //     references are not yet supported
+    //   Unsupported return type `test_namespace_bindings::SomeClass&`:
+    //     references are not yet supported
+
+    pub mod some_class {
+        #[inline(always)]
+        pub(crate) fn public_method<'a>(__this: &'a mut crate::test_namespace_bindings::SomeClass) {
+            unsafe {
+                crate::detail::__rust_thunk___ZN23test_namespace_bindings9SomeClass13public_methodEv(
+                    __this,
+                )
+            }
+        }
+        #[inline(always)]
+        pub(crate) fn public_static_method() {
+            unsafe {
+                crate::detail::__rust_thunk___ZN23test_namespace_bindings9SomeClass20public_static_methodEv()
+            }
+        }
+    }
 }
 
 // namespace test_namespace_bindings

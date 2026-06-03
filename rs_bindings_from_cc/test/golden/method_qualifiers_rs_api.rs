@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:method_qualifiers_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
@@ -27,25 +28,45 @@ unsafe impl ::cxx::ExternType for Noninline {
     type Kind = ::cxx::kind::Trivial;
 }
 impl Noninline {
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn UnqualifiedMethod(__this: *mut Self) {
-        crate::detail::__rust_thunk___ZN9Noninline17UnqualifiedMethodEv(__this)
+        unsafe { self::noninline::UnqualifiedMethod(__this) }
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn LvalueMethod(__this: *mut Self) {
-        crate::detail::__rust_thunk___ZNR9Noninline12LvalueMethodEv(__this)
+        unsafe { self::noninline::LvalueMethod(__this) }
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn LvalueMethodConst(__this: *const Self) {
-        crate::detail::__rust_thunk___ZNKR9Noninline17LvalueMethodConstEv(__this)
+        unsafe { self::noninline::LvalueMethodConst(__this) }
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn RvalueMethod(__this: *mut Self) {
-        crate::detail::__rust_thunk___ZNO9Noninline12RvalueMethodEv(__this)
+        unsafe { self::noninline::RvalueMethod(__this) }
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn RvalueMethodConst(__this: *const Self) {
-        crate::detail::__rust_thunk___ZNKO9Noninline17RvalueMethodConstEv(__this)
+        unsafe { self::noninline::RvalueMethodConst(__this) }
     }
 }
 
@@ -57,6 +78,49 @@ impl Default for Noninline {
             crate::detail::__rust_thunk___ZN9NoninlineC1Ev(&raw mut tmp as *mut _);
             tmp.assume_init()
         }
+    }
+}
+
+pub mod noninline {
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn UnqualifiedMethod(__this: *mut crate::Noninline) {
+        unsafe { crate::detail::__rust_thunk___ZN9Noninline17UnqualifiedMethodEv(__this) }
+    }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn LvalueMethod(__this: *mut crate::Noninline) {
+        unsafe { crate::detail::__rust_thunk___ZNR9Noninline12LvalueMethodEv(__this) }
+    }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn LvalueMethodConst(__this: *const crate::Noninline) {
+        unsafe { crate::detail::__rust_thunk___ZNKR9Noninline17LvalueMethodConstEv(__this) }
+    }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn RvalueMethod(__this: *mut crate::Noninline) {
+        unsafe { crate::detail::__rust_thunk___ZNO9Noninline12RvalueMethodEv(__this) }
+    }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn RvalueMethodConst(__this: *const crate::Noninline) {
+        unsafe { crate::detail::__rust_thunk___ZNKO9Noninline17RvalueMethodConstEv(__this) }
     }
 }
 
@@ -73,25 +137,45 @@ unsafe impl ::cxx::ExternType for Inline {
     type Kind = ::cxx::kind::Trivial;
 }
 impl Inline {
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn UnqualifiedMethod(__this: *mut Self) {
-        crate::detail::__rust_thunk___ZN6Inline17UnqualifiedMethodEv(__this)
+        unsafe { self::inline::UnqualifiedMethod(__this) }
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn LvalueMethod(__this: *mut Self) {
-        crate::detail::__rust_thunk___ZNR6Inline12LvalueMethodEv(__this)
+        unsafe { self::inline::LvalueMethod(__this) }
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn LvalueMethodConst(__this: *const Self) {
-        crate::detail::__rust_thunk___ZNKR6Inline17LvalueMethodConstEv(__this)
+        unsafe { self::inline::LvalueMethodConst(__this) }
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn RvalueMethod(__this: *mut Self) {
-        crate::detail::__rust_thunk___ZNO6Inline12RvalueMethodEv(__this)
+        unsafe { self::inline::RvalueMethod(__this) }
     }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
     pub unsafe fn RvalueMethodConst(__this: *const Self) {
-        crate::detail::__rust_thunk___ZNKO6Inline17RvalueMethodConstEv(__this)
+        unsafe { self::inline::RvalueMethodConst(__this) }
     }
 }
 
@@ -103,6 +187,49 @@ impl Default for Inline {
             crate::detail::__rust_thunk___ZN6InlineC1Ev(&raw mut tmp as *mut _);
             tmp.assume_init()
         }
+    }
+}
+
+pub mod inline {
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn UnqualifiedMethod(__this: *mut crate::Inline) {
+        unsafe { crate::detail::__rust_thunk___ZN6Inline17UnqualifiedMethodEv(__this) }
+    }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn LvalueMethod(__this: *mut crate::Inline) {
+        unsafe { crate::detail::__rust_thunk___ZNR6Inline12LvalueMethodEv(__this) }
+    }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn LvalueMethodConst(__this: *const crate::Inline) {
+        unsafe { crate::detail::__rust_thunk___ZNKR6Inline17LvalueMethodConstEv(__this) }
+    }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn RvalueMethod(__this: *mut crate::Inline) {
+        unsafe { crate::detail::__rust_thunk___ZNO6Inline12RvalueMethodEv(__this) }
+    }
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn RvalueMethodConst(__this: *const crate::Inline) {
+        unsafe { crate::detail::__rust_thunk___ZNKO6Inline17RvalueMethodConstEv(__this) }
     }
 }
 

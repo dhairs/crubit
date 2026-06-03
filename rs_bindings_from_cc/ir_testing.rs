@@ -1,4 +1,4 @@
-// Part of the Crubit project, under the Apache License v2.0 with LLVM
+// // Part of the Crubit project, under the Apache License v2.0 with LLVM
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
@@ -10,10 +10,19 @@ use itertools::Itertools;
 
 use ffi_types::{FfiU8Slice, FfiU8SliceBox};
 use ir::{self, make_ir_from_parts, Func, Identifier, Item, LifetimeId, LifetimeName, Record, IR};
+use protobuf::Parse;
 
 /// Generates `IR` from a header containing `header_source`.
 pub fn ir_from_cc(platform: multiplatform_testing::Platform, header_source: &str) -> Result<IR> {
-    ir_from_cc_dependency(platform, header_source, "// empty header")
+    ir_from_cc_dependency(platform, header_source, "// empty header", None, false)
+}
+
+/// Generates `IR` from a header containing `header_source` with source annotations.
+pub fn ir_from_cc_annotated(
+    platform: multiplatform_testing::Platform,
+    header_source: &str,
+) -> Result<IR> {
+    ir_from_cc_dependency(platform, header_source, "// empty header", None, true)
 }
 
 /// Prepends definitions for lifetime annotation macros to the code.
@@ -45,6 +54,7 @@ pub fn with_full_lifetime_macros() -> String {
         result.push_str(&format!("#define ${} $({})\n", l, l));
     }
     result.push_str("#define $static $(static)\n");
+    result.push_str("#define $unknown $(unknown)\n");
     result
 }
 
@@ -54,17 +64,23 @@ static TESTING_FEATURES: LazyLock<flagset::FlagSet<crubit_feature::CrubitFeature
     LazyLock::new(|| {
         crubit_feature::CrubitFeature::Experimental
             | crubit_feature::CrubitFeature::Wrapper
-            | crubit_feature::CrubitFeature::NonUnpinCtor
+            | crubit_feature::CrubitFeature::Types
             | crubit_feature::CrubitFeature::Supported
+            | crubit_feature::CrubitFeature::TemplateInstantiation
     });
 
 /// Update the IR to have common test-only items.
 ///
 /// This provides one place to update the IR that affects both
 /// `make_ir_from_items` and `ir_from_cc_dependency`.
-fn update_test_ir(ir: &mut IR) {
+fn update_test_ir(ir: &mut IR, extra_feature: Option<&str>) {
     *ir.target_crubit_features_mut(&ir.current_target().clone()) = *TESTING_FEATURES;
     *ir.target_crubit_features_mut(&ir::BazelLabel(DEPENDENCY_TARGET.into())) = *TESTING_FEATURES;
+    if let Some(s) = extra_feature {
+        let feature = crubit_feature::named_features(s.as_bytes()).unwrap();
+        *ir.target_crubit_features_mut(&ir.current_target().clone()) |= feature;
+        *ir.target_crubit_features_mut(&ir::BazelLabel(DEPENDENCY_TARGET.into())) |= feature;
+    }
 }
 
 /// Create a testing `IR` instance from given items, using mock values for other
@@ -79,7 +95,7 @@ pub fn make_ir_from_items(items: impl IntoIterator<Item = Item>) -> IR {
         /* crubit_features= */
         <BTreeMap<ir::BazelLabel, flagset::FlagSet<crubit_feature::CrubitFeature>>>::new(),
     );
-    update_test_ir(&mut ir);
+    update_test_ir(&mut ir, None);
     ir
 }
 
@@ -92,18 +108,24 @@ pub const DEPENDENCY_TARGET: &str = "//test:dependency";
 /// `header_source` of the header will be updated to contain the `#include` line
 /// for the header with `dependency_header_source`. The name of the dependency
 /// target is exposed as `DEPENDENCY_TARGET`.
+///
+/// This will eventually be replaced by `ir_proto_from_cc_dependency`.
 pub fn ir_from_cc_dependency(
     platform: multiplatform_testing::Platform,
     header_source: &str,
     dependency_header_source: &str,
+    extra_feature: Option<&str>,
+    kythe_annotations: bool,
 ) -> Result<IR> {
     const DEPENDENCY_HEADER_NAME: &str = "test/dependency_header.h";
 
-    extern "C" {
+    unsafe extern "C" {
         fn json_from_cc_dependency(
             target_triple: FfiU8Slice,
             header_source: FfiU8Slice,
             dependency_header_source: FfiU8Slice,
+            extra_feature: FfiU8Slice,
+            kythe_annotations: bool,
         ) -> FfiU8SliceBox;
     }
 
@@ -116,12 +138,64 @@ pub fn ir_from_cc_dependency(
             FfiU8Slice::from_slice(platform.target_triple().as_ref()),
             FfiU8Slice::from_slice(header_source_with_include_u8),
             FfiU8Slice::from_slice(dependency_header_source_u8),
+            extra_feature
+                .map(|s| FfiU8Slice::from_slice(s.as_bytes()))
+                .unwrap_or(FfiU8Slice::from_slice(&[])),
+            kythe_annotations,
         )
         .into_boxed_slice()
     };
-    let mut ir = ir::deserialize_ir(&*json_utf8)?;
-    update_test_ir(&mut ir);
+    let mut ir = ir::deserialize_ir(&json_utf8)?;
+    update_test_ir(&mut ir, extra_feature);
     Ok(ir)
+}
+
+pub fn ir_proto_from_cc(
+    platform: multiplatform_testing::Platform,
+    header_source: &str,
+) -> Result<ir_rust_proto::IRProto> {
+    ir_proto_from_cc_dependency(platform, header_source, "// empty header", None, false)
+}
+
+/// Generates `IR` protobuf from a header containing `header_source`.
+///
+/// `header_source` of the header will be updated to contain the `#include` line
+/// for the header with `dependency_header_source`. The name of the dependency
+/// target is exposed as `DEPENDENCY_TARGET`.
+pub fn ir_proto_from_cc_dependency(
+    platform: multiplatform_testing::Platform,
+    header_source: &str,
+    dependency_header_source: &str,
+    extra_feature: Option<&str>,
+    kythe_annotations: bool,
+) -> Result<ir_rust_proto::IRProto> {
+    const DEPENDENCY_HEADER_NAME: &str = "test/dependency_header.h";
+
+    unsafe extern "C" {
+        fn proto_from_cc_dependency(
+            target_triple: FfiU8Slice,
+            header_source: FfiU8Slice,
+            dependency_header_source: FfiU8Slice,
+            extra_feature: FfiU8Slice,
+            kythe_annotations: bool,
+        ) -> FfiU8SliceBox;
+    }
+
+    let header_source_with_include =
+        format!("#include \"{}\"\n\n{}", DEPENDENCY_HEADER_NAME, header_source);
+    let proto_bytes = unsafe {
+        proto_from_cc_dependency(
+            FfiU8Slice::from_slice(platform.target_triple().as_ref()),
+            FfiU8Slice::from_slice(header_source_with_include.as_bytes()),
+            FfiU8Slice::from_slice(dependency_header_source.as_bytes()),
+            FfiU8Slice::from_slice(extra_feature.unwrap_or_default().as_bytes()),
+            kythe_annotations,
+        )
+        .into_boxed_slice()
+    };
+
+    let proto = ir_rust_proto::IRProto::parse(&proto_bytes)?;
+    Ok(proto)
 }
 
 /// Creates an identifier
@@ -178,41 +252,39 @@ pub fn retrieve_record<'a>(ir: &'a IR, cc_name: &str) -> &'a Record {
 mod tests {
     use super::*;
     use arc_anyhow::Result;
-    use googletest::prelude::*;
+    use crubit_feature::CrubitFeature;
+    use googletest::{expect_eq, gtest};
     use ir::ItemId;
-    use ir_matchers::assert_ir_matches;
     use multiplatform_testing::Platform;
-    use quote::quote;
 
     #[gtest]
     fn test_features_ir_from_cc() -> Result<()> {
-        assert_ir_matches!(
-            ir_from_cc(multiplatform_testing::Platform::X86Linux, "")?,
-            quote! {
-                crubit_features: map! {
-                    ...
-                    BazelLabel(#TESTING_TARGET): SerializedCrubitFeatures(FlagSet(Supported|Wrapper|NonUnpinCtor|Experimental))
-                    ...
-                }
-            }
+        let ir = ir_from_cc(multiplatform_testing::Platform::X86Linux, "")?;
+        let enabled_features = ir.target_crubit_features(&ir::BazelLabel(TESTING_TARGET.into()));
+        expect_eq!(
+            enabled_features,
+            CrubitFeature::Experimental
+                | CrubitFeature::Wrapper
+                | CrubitFeature::Types
+                | CrubitFeature::Supported
+                | CrubitFeature::TemplateInstantiation
         );
         Ok(())
     }
     #[gtest]
     fn test_features_ir_from_items() -> Result<()> {
-        assert_ir_matches!(
-            make_ir_from_items([]),
-            quote! {
-                crubit_features: map! {
-                    ...
-                    BazelLabel(#TESTING_TARGET): SerializedCrubitFeatures(FlagSet(Supported|Wrapper|NonUnpinCtor|Experimental))
-                    ...
-                }
-            }
+        let ir = make_ir_from_items([]);
+        let enabled_features = ir.target_crubit_features(&ir::BazelLabel(TESTING_TARGET.into()));
+        expect_eq!(
+            enabled_features,
+            CrubitFeature::Experimental
+                | CrubitFeature::Wrapper
+                | CrubitFeature::Types
+                | CrubitFeature::Supported
+                | CrubitFeature::TemplateInstantiation
         );
         Ok(())
     }
-
     #[gtest]
     #[should_panic(expected = "Duplicate decl_id found in")]
     fn test_duplicate_decl_ids_err() {

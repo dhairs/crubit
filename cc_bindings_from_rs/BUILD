@@ -7,6 +7,7 @@ load(
 load("//common/bazel_support:external_binaries.bzl", "EXTERNAL_BINARIES")
 load(
     "//common:crubit_wrapper_macros_oss.bzl",
+    "LLVM_UNSTABLE_ONLY",
     "crubit_rust_binary",
     "crubit_rust_test",
     "crubit_sh_test",
@@ -17,13 +18,14 @@ package(
     default_visibility = ["//:__subpackages__"],
 )
 
-crubit_rust_binary(
-    name = "cc_bindings_from_rs",
-    srcs = ["cc_bindings_from_rs.rs"],
-    # Do not add a fake dependency on Crubit, because it will introduce a dependency cycle.
-    crubit_dep = False,
+rust_library(
+    name = "cpp_api_from_rust_lib",
+    srcs = ["lib.rs"],
+    proc_macro_deps = [
+        "@crate_index//:rustversion",  # v1
+    ],
     # LINT.IfChange
-    rustc_flags = ["-Zallow-features=never_type,rustc_private"],
+    rustc_flags = ["-Zallow-features=never_type,rustc_private,proc_macro_hygiene"],
     # LINT.ThenChange(//docs/overview/unstable_features.md)
     deps = [
         ":cmdline",
@@ -41,11 +43,74 @@ crubit_rust_binary(
     ],
 )
 
-crubit_rust_test(
-    name = "cc_bindings_from_rs_test",
-    crate = ":cc_bindings_from_rs",
+crubit_rust_binary(
+    name = "cargo-cpp_api_from_rust",
+    srcs = ["cargo-cpp_api_from_rust.rs"],
+    # Do not add a fake dependency on Crubit, because it will introduce a dependency cycle.
+    crubit_dep = False,
     # LINT.IfChange
     rustc_flags = ["-Zallow-features=never_type,rustc_private"],
+    # LINT.ThenChange(//docs/overview/unstable_features.md)
+    deps = [
+        ":cmdline",
+        ":cpp_api_from_rust_lib",
+        ":toposort",
+        "//common:arc_anyhow",
+        "@crate_index//:cargo_metadata",  # v0_23
+        "@crate_index//:clap",  # v4
+        "@crate_index//:clap_cargo",  # v0_12
+    ],
+)
+
+crubit_rust_binary(
+    name = "cc_bindings_from_rs",
+    srcs = ["cc_bindings_from_rs.rs"],
+    # Do not add a fake dependency on Crubit, because it will introduce a dependency cycle.
+    crubit_dep = False,
+    # LINT.IfChange
+    rustc_flags = ["-Zallow-features=never_type,rustc_private"],
+    # LINT.ThenChange(//docs/overview/unstable_features.md)
+    # This is built by cargo on presubmit, so should not go stale.
+    # It doesn't work in Bazel because a cargo-clap feature we need is not enabled.
+    tags = [
+        "manual",
+        "norapid",
+        "not_run",
+        "notap",
+    ],
+    deps = [
+        ":cmdline",
+        ":cpp_api_from_rust_lib",
+        "//common:arc_anyhow",
+        "@crate_index//:clap",  # v4
+        "@crate_index//:itertools",  # v0_13
+    ],
+)
+
+# This target exists to add the correct [dev-dependencies] to the cargo-cpp_api_from_rust's
+# Cargo.toml.
+crubit_rust_test(
+    name = "cargo_cpp_api_from_rust_test",
+    crate = ":cargo-cpp_api_from_rust",
+    # LINT.IfChange
+    rustc_flags = ["-Zallow-features=never_type,rustc_private"],
+    # LINT.ThenChange(//docs/overview/unstable_features.md)
+    tags = [
+        "manual",
+        "norapid",
+        "not_run",
+        "notap",
+    ],
+    deps = [
+        "@crate_index//:tempfile",  # v3
+    ],
+)
+
+crubit_rust_test(
+    name = "cc_bindings_from_rs_test",
+    crate = ":cpp_api_from_rust_lib",
+    # LINT.IfChange
+    rustc_flags = ["-Zallow-features=never_type,rustc_private,proc_macro_hygiene"],
     # LINT.ThenChange(//docs/overview/unstable_features.md)
     # We don't yet support running cc_bindings_from_rs itself on macOS (we only target macOS).
     tags = ["not_run:mac"],

@@ -1,0 +1,176 @@
+# Part of the Crubit project, under the Apache License v2.0 with LLVM
+# Exceptions. See /LICENSE for license information.
+# SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+# Automatically @generated BUILD.gn.
+
+import("../../crubit.gni")
+import("//build/rust/rust_static_library.gni")
+
+source_set("char") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "char.h",
+  ]
+  sources = [
+    "char.cc",
+  ]
+  deps = [
+    "$crubit_src_dir/support/rs_std:str_ref",
+    "$crubit_src_dir/support:annotations",
+    "$crubit_absl_dep_target",
+  ]
+}
+
+source_set("dyn_callable") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "dyn_callable.h",
+  ]
+  deps = [
+    "$crubit_src_dir/support:bridge_cpp",
+    "$crubit_absl_dep_target",
+  ]
+}
+
+source_set("iterator_adapter") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "iterator_adapter.h",
+  ]
+  deps = [
+    "$crubit_src_dir/support/rs_std:traits",
+  ]
+}
+
+source_set("option") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "option.h",
+  ]
+}
+
+source_set("result") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "result.h",
+  ]
+}
+
+source_set("slice_ref") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "slice_ref.h",
+  ]
+  deps = [
+    "$crubit_src_dir/support:annotations_internal",
+    "$crubit_src_dir/support/internal:bindings_support",
+    "$crubit_absl_dep_target",
+  ]
+}
+
+source_set("str_ref") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "str_ref.h",
+  ]
+  deps = [
+    "$crubit_src_dir/support/rs_std:slice_ref",
+    "$crubit_src_dir/support:annotations_internal",
+    "$crubit_src_dir/support/internal:bindings_support",
+    "$crubit_src_dir/support/rs_std/internal:is_utf8",
+    "$crubit_absl_dep_target",
+  ]
+}
+
+source_set("traits") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "traits.h",
+  ]
+}
+
+source_set("tuple") {
+  public_configs = [ "$crubit_src_dir:config" ]
+  if (defined(crubit_gn_configs_to_remove)) {
+    configs -= crubit_gn_configs_to_remove
+  }
+  if (defined(crubit_gn_support_configs_to_add)) {
+    configs += crubit_gn_support_configs_to_add
+  }
+
+  public = [
+    "tuple.h",
+  ]
+}
+
+group("rs_std_cpp") {
+  public_deps = [
+    ":char",
+    ":dyn_callable",
+    ":iterator_adapter",
+    ":option",
+    ":result",
+    ":slice_ref",
+    ":str_ref",
+    ":traits",
+    ":tuple",
+  ]
+}
+

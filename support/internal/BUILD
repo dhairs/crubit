@@ -1,4 +1,5 @@
 load("@rules_cc//cc:cc_test.bzl", "cc_test")
+load("//build_integration:build_integration.bzl", "bazel_to_builds")
 load("//common:crubit_wrapper_macros_oss.bzl", "crubit_cc_test")
 
 package(default_applicable_licenses = ["//:license"])
@@ -7,15 +8,18 @@ cc_library(
     name = "bindings_support",
     srcs = ["check_no_mutable_aliasing.cc"],
     hdrs = [
+        "check.h",
         "check_no_mutable_aliasing.h",
         "cxx20_backports.h",
-        "lazy_init.h",
+        "fmt.h",
         "memswap.h",
+        "move_assign.h",
         "offsetof.h",
         "sizeof.h",
         "slot.h",
     ],
     compatible_with = ["//buildenv/target:non_prod"],
+    copts = ["-Wshadow"],
     visibility = [
         "//visibility:public",
     ],
@@ -26,7 +30,10 @@ cc_library(
     # we can't rely on an exact version and/or exact absl/base/options.h).
     deps = [
         "@abseil-cpp//absl/base:core_headers",
-        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/base:nullability",
+        "@abseil-cpp//absl/log:absl_check",
+        "@abseil-cpp//absl/strings",
+        "@abseil-cpp//absl/strings:has_ostream_operator",
         "@abseil-cpp//absl/types:span",
     ],
 )
@@ -65,7 +72,7 @@ crubit_cc_test(
         ":bindings_support",
         "//testing/base/public:gunit_main",
         "@abseil-cpp//absl/base:core_headers",
-        "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/log:absl_check",
     ],
 )
 
@@ -75,5 +82,14 @@ crubit_cc_test(
     deps = [
         ":bindings_support",
         "//testing/base/public:gunit_main",
+    ],
+)
+
+bazel_to_builds(
+    name = "generate_builds",
+    cmake = "CMakeLists.txt",
+    gn = "BUILD.gn",
+    targets = [
+        ":bindings_support",
     ],
 )

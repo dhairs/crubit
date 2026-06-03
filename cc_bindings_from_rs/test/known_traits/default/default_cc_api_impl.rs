@@ -4,12 +4,13 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // rs_default_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #![allow(unused_unsafe, deprecated, non_snake_case, unreachable_code)]
 #![allow(improper_ctypes_definitions)]
 #![deny(warnings)]
 
+extern crate alloc;
+extern crate core;
 const _: () = assert!(::std::mem::size_of::<::rs_default_golden::derived_impl::SomeStruct>() == 4);
 const _: () = assert!(::std::mem::align_of::<::rs_default_golden::derived_impl::SomeStruct>() == 4);
 #[unsafe(no_mangle)]
@@ -29,6 +30,8 @@ unsafe extern "C" fn __crubit_thunk_extract_uint(
         ::rs_default_golden::derived_impl::SomeStruct::extract_int(s)
     }
 }
+const _: () =
+    assert!(::core::mem::offset_of!(::rs_default_golden::derived_impl::SomeStruct, 0) == 0);
 const _: () = assert!(::std::mem::size_of::<::rs_default_golden::explicit_impl::SomeStruct>() == 4);
 const _: () =
     assert!(::std::mem::align_of::<::rs_default_golden::explicit_impl::SomeStruct>() == 4);
@@ -49,6 +52,8 @@ unsafe extern "C" fn __crubit_thunk_extract_uint(
         ::rs_default_golden::explicit_impl::SomeStruct::extract_int(s)
     }
 }
+const _: () =
+    assert!(::core::mem::offset_of!(::rs_default_golden::explicit_impl::SomeStruct, 0) == 0);
 const _: () = assert!(
     ::std::mem::size_of::<::rs_default_golden::field_with_no_default::StructWithFieldWithNoDefault>(
     ) == 4
@@ -78,6 +83,12 @@ unsafe extern "C" fn __crubit_thunk_extract_uint(
     }
 }
 const _: () = assert!(
+    ::core::mem::offset_of!(
+        ::rs_default_golden::field_with_no_default::StructWithFieldWithNoDefault,
+        field
+    ) == 0
+);
+const _: () = assert!(
     ::std::mem::size_of::<::rs_default_golden::field_with_no_default::StructWithoutDefault>() == 4
 );
 const _: () = assert!(
@@ -85,6 +96,7 @@ const _: () = assert!(
 );
 const _: () = assert!(::std::mem::size_of::<::rs_default_golden::no_impl::SomeStruct>() == 4);
 const _: () = assert!(::std::mem::align_of::<::rs_default_golden::no_impl::SomeStruct>() == 4);
+const _: () = assert!(::core::mem::offset_of!(::rs_default_golden::no_impl::SomeStruct, 0) == 0);
 const _: () =
     assert!(::std::mem::size_of::<::rs_default_golden::transparent_struct::SomeStruct>() == 4);
 const _: () =
@@ -102,3 +114,5 @@ unsafe extern "C" fn __crubit_thunk_extract_uint(
 ) -> i32 {
     unsafe { ::rs_default_golden::transparent_struct::SomeStruct::extract_int(__self) }
 }
+const _: () =
+    assert!(::core::mem::offset_of!(::rs_default_golden::transparent_struct::SomeStruct, 0) == 0);

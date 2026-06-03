@@ -4,23 +4,26 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/templates/regression_401857961:repro
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 pub mod repro {
-    // Generated from: rs_bindings_from_cc/test/templates/regression_401857961/repro.h;l=10
-    // Error while generating bindings for class 'repro::optional':
-    // Class templates are not supported yet
+    // error: class `repro::optional` could not be bound
+    //   Class templates are not yet supported
 
-    /// Generated from: rs_bindings_from_cc/test/templates/regression_401857961/repro.h;l=15
+    /// # Safety
+    ///
+    /// To call a function that accepts this type, you must uphold these requirements:
+    /// * Document why the following public unsafe fields of this type cannot be misused by callee:
+    ///   * `nanos`: Rust type is unknown; safety requirements cannot be automatically generated: Unsupported type 'char[1]': Unsupported clang::Type class 'ConstantArray'
     #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
     #[repr(C)]
     ///CRUBIT_ANNOTATE: cpp_type=repro :: Interval
@@ -36,7 +39,6 @@ pub mod repro {
         type Kind = ::cxx::kind::Trivial;
     }
 
-    /// Generated from: rs_bindings_from_cc/test/templates/regression_401857961/repro.h;l=15
     impl Default for Interval {
         #[inline(always)]
         fn default() -> Self {
@@ -48,33 +50,23 @@ pub mod repro {
         }
     }
 
-    // Generated from: rs_bindings_from_cc/test/templates/regression_401857961/repro.h;l=19
-    // Error while generating bindings for class 'repro::Nullable':
-    // Class templates are not supported yet
+    // error: class `repro::Nullable` could not be bound
+    //   Class templates are not yet supported
 
-    // Generated from: rs_bindings_from_cc/test/templates/regression_401857961/repro.h;l=24
-    // Error while generating bindings for function 'crash':
-    // Can't generate bindings for crash, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/templates/regression_401857961:repro needs [//features:wrapper] for crash (the type of __param_0 (parameter #0): error: Can't generate bindings for repro::Nullable<repro::Interval>, because of missing required features (<internal link>):
-    // //rs_bindings_from_cc/test/templates/regression_401857961:repro needs [//features:wrapper] for repro::Nullable<repro::Interval> (crate::__CcTemplateInstN5repro8NullableINS_8IntervalEEE is a template instantiation)
-    // //rs_bindings_from_cc/test/templates/regression_401857961:repro needs [//features:wrapper] for repro::Nullable<repro::Interval> (crate::__CcTemplateInstN5repro8NullableINS_8IntervalEEE is a template instantiation))
+    // error: function `repro::crash` could not be bound
+    //   Unsupported parameter type `repro::Nullable<repro::Interval> __param_0`:
+    //     template instantiation is not yet supported
 }
 
 // namespace repro
 
 // THIRD_PARTY_CRUBIT_RS_BINDINGS_FROM_CC_TEST_TEMPLATES_REGRESSION_401857961_REPRO_H_
 
-// Generated from: rs_bindings_from_cc/test/templates/regression_401857961/repro.h;l=11
-// Error while generating bindings for struct 'repro::optional<repro::Interval>':
-// Can't generate bindings for repro::optional<repro::Interval>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/templates/regression_401857961:repro needs [//features:wrapper] for repro::optional<repro::Interval> (crate::__CcTemplateInstN5repro8optionalINS_8IntervalEEE is a template instantiation)
-// //rs_bindings_from_cc/test/templates/regression_401857961:repro needs [//features:wrapper] for repro::optional<repro::Interval> (crate::__CcTemplateInstN5repro8optionalINS_8IntervalEEE is a template instantiation)
+// error: struct `repro::optional<repro::Interval>` could not be bound
+//   template instantiation is not yet supported
 
-// Generated from: rs_bindings_from_cc/test/templates/regression_401857961/repro.h;l=20
-// Error while generating bindings for struct 'repro::Nullable<repro::Interval>':
-// Can't generate bindings for repro::Nullable<repro::Interval>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/templates/regression_401857961:repro needs [//features:wrapper] for repro::Nullable<repro::Interval> (crate::__CcTemplateInstN5repro8NullableINS_8IntervalEEE is a template instantiation)
-// //rs_bindings_from_cc/test/templates/regression_401857961:repro needs [//features:wrapper] for repro::Nullable<repro::Interval> (crate::__CcTemplateInstN5repro8NullableINS_8IntervalEEE is a template instantiation)
+// error: struct `repro::Nullable<repro::Interval>` could not be bound
+//   template instantiation is not yet supported
 
 mod detail {
     #[allow(unused_imports)]

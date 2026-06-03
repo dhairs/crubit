@@ -6,9 +6,8 @@
 
 use arc_anyhow::Result;
 use database::code_snippet;
-use database::{BindingsGenerator, Database};
-use error_report::{ErrorReport, FatalErrors};
-use ffi_types::Environment;
+use database::BindingsGenerator;
+use error_report::{ErrorReport, FatalErrors, SourceLanguage};
 use generate_bindings::new_database;
 use generate_comment::{generate_doc_comment, generate_unsupported};
 use googletest::prelude::gtest;
@@ -20,13 +19,13 @@ use token_stream_matchers::assert_rs_matches;
 
 #[gtest]
 fn test_generate_doc_comment_with_no_comment_with_no_source_loc_with_environment_production() {
-    let actual = generate_doc_comment(None, None, Environment::Production);
+    let actual = generate_doc_comment(None, None, None, false, false);
     assert!(actual.is_none());
 }
 
 #[gtest]
 fn test_generate_doc_comment_with_no_comment_with_source_loc_with_environment_production() {
-    let actual = generate_doc_comment(None, Some("some/header;l=11"), Environment::Production);
+    let actual = generate_doc_comment(None, None, Some("some/header;l=11"), false, false);
     assert_rs_matches!(quote! { #actual }, quote! {#[doc = " some/header;l=11"]});
 }
 
@@ -34,8 +33,10 @@ fn test_generate_doc_comment_with_no_comment_with_source_loc_with_environment_pr
 fn test_generate_doc_comment_with_comment_with_source_loc_with_environment_production() {
     let actual = generate_doc_comment(
         Some("Some doc comment"),
+        None,
         Some("some/header;l=12"),
-        Environment::Production,
+        false,
+        false,
     );
     assert_rs_matches!(
         quote! { #actual },
@@ -45,36 +46,43 @@ fn test_generate_doc_comment_with_comment_with_source_loc_with_environment_produ
 
 #[gtest]
 fn test_generate_doc_comment_with_comment_with_no_source_loc_with_environment_production() {
-    let actual = generate_doc_comment(Some("Some doc comment"), None, Environment::Production);
+    let actual = generate_doc_comment(Some("Some doc comment"), None, None, false, false);
     assert_rs_matches!(quote! { #actual }, quote! {#[doc = " Some doc comment"]});
 }
 
 #[gtest]
 fn test_no_generate_doc_comment_with_no_comment_with_no_source_loc_with_environment_golden_test() {
-    let actual = generate_doc_comment(None, None, Environment::GoldenTest);
+    let actual = generate_doc_comment(None, None, None, true, false);
     assert!(actual.is_none());
 }
 
 #[gtest]
 fn test_no_generate_doc_comment_with_no_comment_with_source_loc_with_environment_golden_test() {
-    let actual = generate_doc_comment(None, Some("some/header;l=13"), Environment::GoldenTest);
+    let actual = generate_doc_comment(None, None, Some("some/header;l=13"), true, false);
     assert!(actual.is_none());
 }
 
 #[gtest]
 fn test_no_generate_doc_comment_with_comment_with_source_loc_with_environment_golden_test() {
-    let actual = generate_doc_comment(
-        Some("Some doc comment"),
-        Some("some/header;l=14"),
-        Environment::GoldenTest,
-    );
+    let actual =
+        generate_doc_comment(Some("Some doc comment"), None, Some("some/header;l=14"), true, false);
     assert_rs_matches!(quote! { #actual }, quote! {#[doc = " Some doc comment"]});
 }
 
 #[gtest]
 fn test_no_generate_doc_comment_with_comment_with_no_source_loc_with_environment_golden_test() {
-    let actual = generate_doc_comment(Some("Some doc comment"), None, Environment::GoldenTest);
+    let actual = generate_doc_comment(Some("Some doc comment"), None, None, true, false);
     assert_rs_matches!(quote! { #actual }, quote! {#[doc = " Some doc comment"]});
+}
+
+#[gtest]
+fn test_generate_doc_comment_with_safety() {
+    let actual =
+        generate_doc_comment(Some("Some doc comment"), Some("Some safety doc"), None, true, false);
+    assert_rs_matches!(
+        quote! { #actual },
+        quote! {#[doc = " Some doc comment\n \n # Safety\n \n Some safety doc"]}
+    );
 }
 
 struct TestItem {
@@ -87,11 +95,11 @@ impl ir::GenericItem for TestItem {
     fn id(&self) -> ItemId {
         TEST_ITEM_ID
     }
-    fn owning_target(&self) -> Option<BazelLabel> {
+    fn unique_name(&self) -> Option<Rc<str>> {
         None
     }
-    fn debug_name(&self, _: &IR) -> Rc<str> {
-        "test_item".into()
+    fn owning_target(&self) -> Option<BazelLabel> {
+        None
     }
     fn source_loc(&self) -> Option<Rc<str>> {
         self.source_loc.clone()
@@ -114,25 +122,54 @@ struct TestDbFactory {
 }
 impl TestDbFactory {
     fn new() -> Self {
+        let test_item = UnsupportedItem::new_raw(
+            "test_item".into(),
+            None,
+            UnsupportedItemKind::Other,
+            TEST_ITEM_ID,
+            Some("Generated from: some/header;l=1".into()),
+            None,
+            false,
+            /* path= */ None,
+            Some(Rc::new(ir::FormattedError {
+                fmt: "unsupported_message".into(),
+                message: "unsupported_message".into(),
+            })),
+            None,
+        );
         Self {
-            ir: make_ir_from_items([]),
-            errors: ErrorReport::new(),
+            ir: make_ir_from_items([test_item.into()]),
+            errors: ErrorReport::new(SourceLanguage::Cpp),
             fatal_errors: FatalErrors::new(),
         }
     }
-    fn make_db(&self, environment: Environment) -> Database {
-        new_database(&self.ir, &self.errors, &self.fatal_errors, environment)
+    fn make_db(&self, is_golden_test: bool) -> BindingsGenerator {
+        new_database(
+            &self.ir,
+            &self.errors,
+            &self.fatal_errors,
+            is_golden_test,
+            /*kythe_annotations=*/ false,
+        )
     }
 }
 
 #[gtest]
 fn test_generate_unsupported_item_with_environment_production() -> Result<()> {
     let factory = TestDbFactory::new();
-    let db = factory.make_db(Environment::Production);
+    let db = factory.make_db(false);
+    let _scope = error_report::ItemScope::new(
+        db.errors(),
+        error_report::ItemName {
+            name: "test_item".into(),
+            id: TEST_ITEM_ID.as_u64(),
+            unique_name: None,
+            defining_target: None,
+        },
+    );
     let actual = generate_unsupported(
         &db,
-        UnsupportedItem::new_with_static_message(
-            &db.ir(),
+        db.new_unsupported_item_with_static_message(
             &TestItem { source_loc: Some("Generated from: some/header;l=1".into()) },
             /* path= */ None,
             "unsupported_message",
@@ -140,8 +177,8 @@ fn test_generate_unsupported_item_with_environment_production() -> Result<()> {
         .into(),
     )
     .generated_items;
-    let actual = code_snippet::generated_items_to_token_stream(&actual, db.ir(), &[TEST_ITEM_ID]);
-    let expected = "Generated from: some/header;l=1\nError while generating bindings for item 'test_item':\nunsupported_message";
+    let actual = code_snippet::generated_items_to_token_stream(&actual, &db, &[TEST_ITEM_ID]);
+    let expected = "Generated from: some/header;l=1\nerror: item `test_item` could not be bound\n  unsupported_message";
     assert_rs_matches!(quote! { #actual }, quote! { __COMMENT__ #expected});
     Ok(())
 }
@@ -152,11 +189,19 @@ fn test_generate_unsupported_item_with_environment_production() -> Result<()> {
 #[gtest]
 fn test_generate_unsupported_item_with_missing_source_loc() -> Result<()> {
     let factory = TestDbFactory::new();
-    let db = factory.make_db(Environment::Production);
+    let db = factory.make_db(false);
+    let _scope = error_report::ItemScope::new(
+        db.errors(),
+        error_report::ItemName {
+            name: "test_item".into(),
+            id: TEST_ITEM_ID.as_u64(),
+            unique_name: None,
+            defining_target: None,
+        },
+    );
     let actual = generate_unsupported(
         &db,
-        UnsupportedItem::new_with_static_message(
-            &db.ir(),
+        db.new_unsupported_item_with_static_message(
             &TestItem { source_loc: None },
             /* path= */ None,
             "unsupported_message",
@@ -164,8 +209,8 @@ fn test_generate_unsupported_item_with_missing_source_loc() -> Result<()> {
         .into(),
     )
     .generated_items;
-    let actual = code_snippet::generated_items_to_token_stream(&actual, db.ir(), &[TEST_ITEM_ID]);
-    let expected = "Error while generating bindings for item 'test_item':\nunsupported_message";
+    let actual = code_snippet::generated_items_to_token_stream(&actual, &db, &[TEST_ITEM_ID]);
+    let expected = "error: item `test_item` could not be bound\n  unsupported_message";
     assert_rs_matches!(quote! { #actual }, quote! { __COMMENT__ #expected});
     Ok(())
 }
@@ -173,11 +218,19 @@ fn test_generate_unsupported_item_with_missing_source_loc() -> Result<()> {
 #[gtest]
 fn test_generate_unsupported_item_with_environment_golden_test() -> Result<()> {
     let factory = TestDbFactory::new();
-    let db = factory.make_db(Environment::GoldenTest);
+    let db = factory.make_db(true);
+    let _scope = error_report::ItemScope::new(
+        db.errors(),
+        error_report::ItemName {
+            name: "test_item".into(),
+            id: TEST_ITEM_ID.as_u64(),
+            unique_name: None,
+            defining_target: None,
+        },
+    );
     let actual = generate_unsupported(
         &db,
-        UnsupportedItem::new_with_static_message(
-            &db.ir(),
+        db.new_unsupported_item_with_static_message(
             &TestItem { source_loc: Some("Generated from: some/header;l=1".into()) },
             /* path= */ None,
             "unsupported_message",
@@ -185,8 +238,8 @@ fn test_generate_unsupported_item_with_environment_golden_test() -> Result<()> {
         .into(),
     )
     .generated_items;
-    let actual = code_snippet::generated_items_to_token_stream(&actual, db.ir(), &[TEST_ITEM_ID]);
-    let expected = "Error while generating bindings for item 'test_item':\nunsupported_message";
+    let actual = code_snippet::generated_items_to_token_stream(&actual, &db, &[TEST_ITEM_ID]);
+    let expected = "error: item `test_item` could not be bound\n  unsupported_message";
     assert_rs_matches!(quote! { #actual }, quote! { __COMMENT__ #expected});
     Ok(())
 }

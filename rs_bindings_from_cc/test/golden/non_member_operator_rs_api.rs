@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:non_member_operator_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 pub mod ns {
@@ -19,7 +20,7 @@ pub mod ns {
     #[repr(C)]
     ///CRUBIT_ANNOTATE: cpp_type=ns :: X
     pub struct X {
-        pub f: ::core::ffi::c_int,
+        pub f: ::ffi_11::c_int,
     }
     impl !Send for X {}
     impl !Sync for X {}

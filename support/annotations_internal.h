@@ -2,13 +2,15 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+// IWYU pragma: private, include "support/annotations.h"
+
 #ifndef CRUBIT_SUPPORT_ANNOTATIONS_INTERNAL_H_
 #define CRUBIT_SUPPORT_ANNOTATIONS_INTERNAL_H_
 
 #include "absl/base/attributes.h"
 #include "absl/base/nullability.h"
 
-// Style waiver granted in <internal link>
+// Style waiver granted in crubit.rs-style-waiver-attribute-annotate
 #if ABSL_HAVE_CPP_ATTRIBUTE(clang::annotate) && \
     ABSL_HAVE_CPP_ATTRIBUTE(clang::annotate_type)
 #define CRUBIT_INTERNAL_ANNOTATE(...) [[clang::annotate(__VA_ARGS__)]]
@@ -18,11 +20,33 @@
 #define CRUBIT_INTERNAL_ANNOTATE_TYPE(...)
 #endif
 
+namespace crubit::rust_type {
+// Helper for CRUBIT_INTERNAL_RUST_TYPE. This type should never be used
+// directly.
+template <typename...>
+struct Args {};
+
+// Helper for CRUBIT_INTERNAL_RUST_TYPE. Instantiations of this type can be used
+// to represent const-generic arguments in Rust.
+//
+// Example:
+//
+// ```cpp
+// template <typename T, int N>
+// struct CRUBIT_INTERNAL_RUST_TYPE("MyType", T, crubit::rust_type::Const<N>)
+// MyType {};
+// ```
+//
+// `MyType<T, 123>` in C++ will then be mapped to `MyType<T, 123>` in Rust.
+template <auto>
+struct Const {};
+}  // namespace crubit::rust_type
+
 // Unsafe: disables bindings, and reinterprets all uses of this type as `t`.
 //
 // This attribute completely disables automated bindings for the type which it
 // appertains to. All uses of that type are replaced with uses of `t`, which
-// must be a rust type which exists and is guaranteed to be available by that
+// must be a Rust type which exists and is guaranteed to be available by that
 // name.
 //
 // This can be applied to a struct, class, or enum.
@@ -51,8 +75,9 @@
 //
 // SAFETY:
 //   If the type is not layout-compatible with `t`, the behavior is undefined.
-#define CRUBIT_INTERNAL_RUST_TYPE(t) \
-  CRUBIT_INTERNAL_ANNOTATE("crubit_internal_rust_type", t)
+#define CRUBIT_INTERNAL_RUST_TYPE(t, ...)                  \
+  CRUBIT_INTERNAL_ANNOTATE("crubit_internal_rust_type", t, \
+                           crubit::rust_type::Args<__VA_ARGS__>())
 
 // Unsafe: forces a type to be treated as C abi compatible with its rust
 // equivalent.
@@ -66,21 +91,6 @@
 //   undefined.
 #define CRUBIT_INTERNAL_SAME_ABI \
   CRUBIT_INTERNAL_ANNOTATE("crubit_internal_same_abi")
-
-#define CRUBIT_INTERNAL_BRIDGE_TYPE(t) \
-  CRUBIT_INTERNAL_ANNOTATE("crubit_bridge_type", t)
-
-#define CRUBIT_INTERNAL_BRIDGE_TYPE_RUST_TO_CPP_CONVERTER(t) \
-  CRUBIT_INTERNAL_ANNOTATE("crubit_bridge_type_rust_to_cpp_converter", t)
-
-#define CRUBIT_INTERNAL_BRIDGE_TYPE_CPP_TO_RUST_CONVERTER(t) \
-  CRUBIT_INTERNAL_ANNOTATE("crubit_bridge_type_cpp_to_rust_converter", t)
-
-// See CRUBIT_BRIDGE_VOID_CONVERTERS in annotations.h.
-#define CRUBIT_INTERNAL_BRIDGE_SUPPORT(ty, rust_to_cpp, cpp_to_rust) \
-  CRUBIT_INTERNAL_BRIDGE_TYPE(ty)                                    \
-  CRUBIT_INTERNAL_BRIDGE_TYPE_RUST_TO_CPP_CONVERTER(rust_to_cpp)     \
-  CRUBIT_INTERNAL_BRIDGE_TYPE_CPP_TO_RUST_CONVERTER(cpp_to_rust)
 
 #define CRUBIT_LIFETIME_BOUND ABSL_ATTRIBUTE_LIFETIME_BOUND
 

@@ -1,5 +1,8 @@
 """Generates Rust bindings from C++ headers."""
 
+load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("@protobuf//rust:defs.bzl", "rust_proto_library")
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
 load(
     "@rules_rust//rust:defs.bzl",
@@ -41,14 +44,19 @@ deps_for_bindings(
     deps_for_generated_cc_file = [
         "//support/public:bindings_support",
         "//support:bridge_cpp",
+        "//support/rs_std:dyn_callable",
+        "//support/rs_std:lossy_formatter_for_bindings",
     ],
     deps_for_generated_rs_file = [
         "//support:ctor",
+        "//support:operator",
         "//support/ffi_11",
         "//support:forward_declare",
         "//support:oops",
         "//support:bridge_rust",
+        "//support:cref",
         "//support/rs_std:dyn_callable_rs",
+        "//support/rs_std:lossy_formatter",
         # Required for `Copy` trait assertions added to the generated Rust
         # code.
         "@crate_index//:static_assertions",  # v1
@@ -103,11 +111,15 @@ cc_library(
         ":ir_from_cc",
         ":src_code_gen",
         "//common:status_macros",
+        "@abseil-cpp//absl/base:nullability",
         "@abseil-cpp//absl/container:flat_hash_map",
         "@abseil-cpp//absl/container:flat_hash_set",
         "@abseil-cpp//absl/log:check",
+        "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:string_view",
+        "@llvm-project//llvm:Support",
     ],
 )
 
@@ -153,6 +165,7 @@ cc_library(
         "@abseil-cpp//absl/algorithm:container",
         "@abseil-cpp//absl/container:flat_hash_set",
         "@abseil-cpp//absl/functional:function_ref",
+        "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:string_view",
@@ -207,7 +220,6 @@ cc_library(
         ":bazel_types",
         ":cc_ir",
         ":cmdline_flags",
-        "//common:cc_ffi_types",
         "//common:status_macros",
         "//common:string_view_conversion",
         "@abseil-cpp//absl/container:flat_hash_map",
@@ -237,7 +249,6 @@ crubit_cc_test(
         ":cc_ir",
         ":cmdline",
         ":cmdline_flags",
-        "//common:cc_ffi_types",
         "//common:status_macros",
         "//common:status_test_matchers",
         "//testing/base/public:gunit_main",
@@ -262,10 +273,12 @@ cc_library(
         "@abseil-cpp//absl/container:flat_hash_set",
         "@abseil-cpp//absl/log:check",
         "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings:string_view",
         "@abseil-cpp//absl/types:span",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:basic",
         "@llvm-project//clang:sema",
+        "@llvm-project//llvm:Support",
     ],
 )
 
@@ -315,6 +328,7 @@ cc_library(
         "//rs_bindings_from_cc/importers:class_template",
         "//rs_bindings_from_cc/importers:cxx_record",
         "//rs_bindings_from_cc/importers:enum",
+        "//rs_bindings_from_cc/importers:enum_constant",
         "//rs_bindings_from_cc/importers:existing_rust_type",
         "//rs_bindings_from_cc/importers:friend",
         "//rs_bindings_from_cc/importers:function",
@@ -322,7 +336,9 @@ cc_library(
         "//rs_bindings_from_cc/importers:namespace",
         "//rs_bindings_from_cc/importers:type_alias",
         "//rs_bindings_from_cc/importers:var",
+        "@abseil-cpp//absl/algorithm:container",
         "@abseil-cpp//absl/base:no_destructor",
+        "@abseil-cpp//absl/base:nullability",
         "@abseil-cpp//absl/container:flat_hash_map",
         "@abseil-cpp//absl/container:flat_hash_set",
         "@abseil-cpp//absl/log",
@@ -331,12 +347,12 @@ cc_library(
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings",
-        "@abseil-cpp//absl/strings:cord",
-        "@abseil-cpp//absl/strings:str_format",
         "@abseil-cpp//absl/strings:string_view",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:basic",
+        "@llvm-project//clang:lex",
         "@llvm-project//clang:sema",
+        "@llvm-project//clang:unified_symbol_resolution",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -350,9 +366,29 @@ crubit_cc_test(
         ":ir_from_cc",
         "//common:status_test_matchers",
         "//testing/base/public:gunit_main",
+        "@abseil-cpp//absl/functional:overload",
         "@abseil-cpp//absl/status",
+        "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings",
     ],
+)
+
+proto_library(
+    name = "ir_proto",
+    srcs = ["ir.proto"],
+    visibility = ["//:__subpackages__"],
+)
+
+cc_proto_library(
+    name = "ir_cc_proto",
+    visibility = ["//:__subpackages__"],
+    deps = [":ir_proto"],
+)
+
+rust_proto_library(
+    name = "ir_rust_proto",
+    visibility = ["//:__subpackages__"],
+    deps = [":ir_proto"],
 )
 
 cc_library(
@@ -362,8 +398,10 @@ cc_library(
     visibility = ["//:__subpackages__"],
     deps = [
         ":bazel_types",
+        ":ir_cc_proto",
         "//common:string_type",
         "//common:strong_int",
+        "@abseil-cpp//absl/algorithm:container",
         "@abseil-cpp//absl/base:nullability",
         "@abseil-cpp//absl/container:flat_hash_map",
         "@abseil-cpp//absl/container:flat_hash_set",
@@ -415,13 +453,16 @@ rust_library(
     ],
     deps = [
         ":ir",
+        ":ir_rust_proto",
         ":json_from_cc",
+        ":proto_from_cc",
         "//common:arc_anyhow",
         "//common:crubit_feature",
         "//common:ffi_types",
         "//common:multiplatform_testing",
         "@crate_index//:flagset",  # v0_4
         "@crate_index//:itertools",  # v0_13
+        "@protobuf//rust:protobuf",
     ],
 )
 
@@ -451,6 +492,7 @@ cc_library(
         ":frontend_action",
         "//common:status_macros",
         "//common:string_view_conversion",
+        "@abseil-cpp//absl/base:nullability",
         "@abseil-cpp//absl/container:flat_hash_map",
         "@abseil-cpp//absl/container:flat_hash_set",
         "@abseil-cpp//absl/log:check",
@@ -461,6 +503,23 @@ cc_library(
         "@abseil-cpp//absl/types:span",
         "@llvm-project//clang:serialization",
         "@llvm-project//clang:tooling",
+        "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_library(
+    name = "ir_from_cc_dependency",
+    testonly = 1,
+    srcs = ["ir_from_cc_dependency.cc"],
+    hdrs = ["ir_from_cc_dependency.h"],
+    deps = [
+        ":bazel_types",
+        ":cc_ir",
+        ":ir_from_cc",
+        "//common:cc_ffi_types",
+        "@abseil-cpp//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings:string_view",
     ],
 )
 
@@ -469,14 +528,29 @@ cc_library(
     testonly = 1,
     srcs = ["json_from_cc.cc"],
     deps = [
-        ":bazel_types",
         ":cc_ir",
-        ":ir_from_cc",
+        ":ir_from_cc_dependency",
         "//common:cc_ffi_types",
+        "@abseil-cpp//absl/container:flat_hash_set",
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings:string_view",
         "@llvm-project//llvm:Support",
     ],
+    alwayslink = 1,
+)
+
+cc_library(
+    name = "proto_from_cc",
+    testonly = 1,
+    srcs = ["proto_from_cc.cc"],
+    deps = [
+        ":cc_ir",
+        ":ir_from_cc_dependency",
+        "//common:cc_ffi_types",
+        "@abseil-cpp//absl/status:statusor",
+        "@llvm-project//llvm:Support",
+    ],
+    alwayslink = 1,
 )
 
 multiplatform_rust_test(
@@ -500,15 +574,43 @@ multiplatform_rust_test(
     ],
 )
 
+multiplatform_rust_test(
+    name = "ir_from_cc_proto_test",
+    srcs = ["ir_from_cc_proto_test.rs"],
+    tags = [
+        "not_run:arm",
+        "not_run:mac",
+    ],
+    deps = [
+        ":ir_rust_proto",
+        ":ir_testing",
+        "//common:arc_anyhow",
+        "//common:multiplatform_testing",
+        "@crate_index//:googletest",
+    ],
+)
+
+cc_library(
+    name = "src_code_gen_ffi",
+    srcs = ["src_code_gen_ffi.cc"],
+    hdrs = ["src_code_gen_ffi.h"],
+    deps = [
+        "//common:cc_ffi_types",
+        "//rs_bindings_from_cc/generate_bindings:generate_bindings_cc_proto",
+        "@abseil-cpp//absl/strings:string_view",
+    ],
+)
+
 cc_library(
     name = "src_code_gen",
     srcs = ["src_code_gen.cc"],
     hdrs = ["src_code_gen.h"],
     deps = [
         ":cc_ir",
-        "//common:cc_ffi_types",
-        "//common:status_macros",
-        "//rs_bindings_from_cc/generate_bindings:cc_api",  # buildcleaner: keep
+        ":ir_cc_proto",
+        ":src_code_gen_ffi",
+        "//rs_bindings_from_cc/generate_bindings:cc_api_ffi",  # buildcleaner: keep
+        "//rs_bindings_from_cc/generate_bindings:generate_bindings_cc_proto",
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
         "@abseil-cpp//absl/strings:string_view",

@@ -25,18 +25,17 @@
 #ifndef CRUBIT_NULLABILITY_TYPE_NULLABILITY_H_
 #define CRUBIT_NULLABILITY_TYPE_NULLABILITY_H_
 
+#include <cassert>
 #include <optional>
 #include <string>
 #include <tuple>
 #include <vector>
 
 #include "absl/base/nullability.h"
-#include "absl/log/check.h"
 #include "nullability/pragma.h"
 #include "clang/AST/ASTContext.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/Expr.h"
-#include "clang/AST/NestedNameSpecifier.h"
 #include "clang/AST/Type.h"
 #include "clang/AST/TypeLoc.h"
 #include "clang/Analysis/FlowSensitive/Arena.h"
@@ -116,12 +115,12 @@ class PointerTypeNullability {
   // Returns symbolic nullability atoms.
   // Requires: isSymbolic().
   dataflow::Atom nonnullAtom() const {
-    CHECK(isSymbolic());
+    assert(isSymbolic());
     return Nonnull;
   }
 
   dataflow::Atom nullableAtom() const {
-    CHECK(isSymbolic());
+    assert(isSymbolic());
     return Nullable;
   }
 
@@ -180,7 +179,8 @@ using GetTypeParamNullability =
 struct TypeNullabilityDefaults {
   // TODO(sammccall): remove this legacy constructor that ignores pragmas
   TypeNullabilityDefaults() : Ctx(nullptr), FileNullability(nullptr) {}
-  TypeNullabilityDefaults(ASTContext &Ctx, const NullabilityPragmas &Pragmas)
+  TypeNullabilityDefaults(const ASTContext& Ctx,
+                          const NullabilityPragmas& Pragmas)
       : Ctx(&Ctx), FileNullability(&Pragmas) {}
 
   // Get the effective default nullability for a particular file.
@@ -188,7 +188,7 @@ struct TypeNullabilityDefaults {
 
   // The AST context is needed to resolve the associated file in some cases.
   // TODO(sammccall): this should always be provided, clean up callers.
-  ASTContext *absl_nullable Ctx;
+  const ASTContext* absl_nullable Ctx;
   // The nullability of pointer types in this translation unit, where no
   // nullability annotations or pragmas apply.
   NullabilityKind DefaultNullability = NullabilityKind::Unspecified;

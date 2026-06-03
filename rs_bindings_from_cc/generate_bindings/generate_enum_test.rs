@@ -4,9 +4,11 @@
 
 use arc_anyhow::Result;
 use googletest::prelude::gtest;
-use multiplatform_ir_testing::ir_from_cc;
+use multiplatform_ir_testing::{ir_from_cc, ir_from_cc_annotated};
 use quote::quote;
-use test_generators::generate_bindings_tokens_for_test;
+use test_generators::{
+    generate_bindings_tokens_for_test, generate_bindings_tokens_for_test_with_annotations,
+};
 use token_stream_matchers::{assert_rs_matches, assert_rs_not_matches};
 
 #[gtest]
@@ -16,21 +18,54 @@ fn test_generate_enum_basic() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
+            #[doc=" Generated from: ir_from_cc_virtual_header.h;l=3"]
             #[repr(transparent)]
             #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash, PartialOrd, Ord)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=Color"]
-            pub struct Color(::core::ffi::c_uint);
+            pub struct Color(::ffi_11::c_uint);
             impl Color {
-                pub const kRed: Color = Color(5);
-                pub const kBlue: Color = Color(6);
+                pub const kRed: Color = Color(::ffi_11::new_c_uint(5));
+                pub const kBlue: Color = Color(::ffi_11::new_c_uint(6));
             }
-            impl From<::core::ffi::c_uint> for Color {
-                fn from(value: ::core::ffi::c_uint) -> Color {
+            impl From<::ffi_11::c_uint> for Color {
+                fn from(value: ::ffi_11::c_uint) -> Color {
                     Color(value)
                 }
             }
-            impl From<Color> for ::core::ffi::c_uint {
-                fn from(value: Color) -> ::core::ffi::c_uint {
+            impl From<Color> for ::ffi_11::c_uint {
+                fn from(value: Color) -> ::ffi_11::c_uint {
+                    value.0
+                }
+            }
+        }
+    );
+    Ok(())
+}
+
+#[gtest]
+fn test_generate_enum_basic_with_annotations() -> Result<()> {
+    let ir = ir_from_cc_annotated("enum Color { kRed = 5, kBlue };")?;
+    let rs_api = generate_bindings_tokens_for_test_with_annotations(ir)?.rs_api;
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            __CAPTURE_TAG__ "ir_from_cc_virtual_header.h" "42" "47"
+            #[doc=" Generated from: ir_from_cc_virtual_header.h;l=3[42,47]"]
+            #[repr(transparent)]
+            #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash, PartialOrd, Ord)]
+            #[doc="CRUBIT_ANNOTATE: cpp_type=Color"]
+            pub struct __CAPTURE_BEGIN__ Color __CAPTURE_END__ (::ffi_11::c_uint);
+            impl Color {
+                pub const kRed: Color = Color(::ffi_11::new_c_uint(5));
+                pub const kBlue: Color = Color(::ffi_11::new_c_uint(6));
+            }
+            impl From<::ffi_11::c_uint> for Color {
+                fn from(value: ::ffi_11::c_uint) -> Color {
+                    Color(value)
+                }
+            }
+            impl From<Color> for ::ffi_11::c_uint {
+                fn from(value: Color) -> ::ffi_11::c_uint {
                     value.0
                 }
             }
@@ -54,21 +89,22 @@ fn test_generate_scoped_enum_basic() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
+            #[doc=" Generated from: ir_from_cc_virtual_header.h;l=3"]
             #[repr(transparent)]
             #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash, PartialOrd, Ord)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=Color"]
-            pub struct Color(::core::ffi::c_int);
+            pub struct Color(::ffi_11::c_int);
             impl Color {
-                pub const kRed: Color = Color(-5);
-                pub const kBlue: Color = Color(-4);
+                pub const kRed: Color = Color(::ffi_11::new_c_int(-5));
+                pub const kBlue: Color = Color(::ffi_11::new_c_int(-4));
             }
-            impl From<::core::ffi::c_int> for Color {
-                fn from(value: ::core::ffi::c_int) -> Color {
+            impl From<::ffi_11::c_int> for Color {
+                fn from(value: ::ffi_11::c_int) -> Color {
                     Color(value)
                 }
             }
-            impl From<Color> for ::core::ffi::c_int {
-                fn from(value: Color) -> ::core::ffi::c_int {
+            impl From<Color> for ::ffi_11::c_int {
+                fn from(value: Color) -> ::ffi_11::c_int {
                     value.0
                 }
             }
@@ -92,24 +128,25 @@ fn test_generate_enum_with_64_bit_signed_vals() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
+            #[doc=" Generated from: ir_from_cc_virtual_header.h;l=3"]
             #[repr(transparent)]
             #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash, PartialOrd, Ord)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=Color"]
-            pub struct Color(::core::ffi::c_long);
+            pub struct Color(::ffi_11::c_long);
             impl Color {
-                pub const kViolet: Color = Color(-9223372036854775808);
-                pub const kRed: Color = Color(-5);
-                pub const kBlue: Color = Color(-4);
-                pub const kGreen: Color = Color(3);
-                pub const kMagenta: Color = Color(9223372036854775807);
+                pub const kViolet: Color = Color(::ffi_11::new_c_long(-9223372036854775808));
+                pub const kRed: Color = Color(::ffi_11::new_c_long(-5));
+                pub const kBlue: Color = Color(::ffi_11::new_c_long(-4));
+                pub const kGreen: Color = Color(::ffi_11::new_c_long(3));
+                pub const kMagenta: Color = Color(::ffi_11::new_c_long(9223372036854775807));
             }
-            impl From<::core::ffi::c_long> for Color {
-                fn from(value: ::core::ffi::c_long) -> Color {
+            impl From<::ffi_11::c_long> for Color {
+                fn from(value: ::ffi_11::c_long) -> Color {
                     Color(value)
                 }
             }
-            impl From<Color> for ::core::ffi::c_long {
-                fn from(value: Color) -> ::core::ffi::c_long {
+            impl From<Color> for ::ffi_11::c_long {
+                fn from(value: Color) -> ::ffi_11::c_long {
                     value.0
                 }
             }
@@ -131,22 +168,23 @@ fn test_generate_enum_with_64_bit_unsigned_vals() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
+            #[doc=" Generated from: ir_from_cc_virtual_header.h;l=3"]
             #[repr(transparent)]
             #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash, PartialOrd, Ord)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=Color"]
-            pub struct Color(::core::ffi::c_ulong);
+            pub struct Color(::ffi_11::c_ulong);
             impl Color {
-                pub const kRed: Color = Color(0);
-                pub const kBlue: Color = Color(1);
-                pub const kLimeGreen: Color = Color(18446744073709551615);
+                pub const kRed: Color = Color(::ffi_11::new_c_ulong(0));
+                pub const kBlue: Color = Color(::ffi_11::new_c_ulong(1));
+                pub const kLimeGreen: Color = Color(::ffi_11::new_c_ulong(18446744073709551615));
             }
-            impl From<::core::ffi::c_ulong> for Color {
-                fn from(value: ::core::ffi::c_ulong) -> Color {
+            impl From<::ffi_11::c_ulong> for Color {
+                fn from(value: ::ffi_11::c_ulong) -> Color {
                     Color(value)
                 }
             }
-            impl From<Color> for ::core::ffi::c_ulong {
-                fn from(value: Color) -> ::core::ffi::c_ulong {
+            impl From<Color> for ::ffi_11::c_ulong {
+                fn from(value: Color) -> ::ffi_11::c_ulong {
                     value.0
                 }
             }
@@ -164,24 +202,25 @@ fn test_generate_enum_with_32_bit_signed_vals() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
+            #[doc=" Generated from: ir_from_cc_virtual_header.h;l=3"]
             #[repr(transparent)]
             #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash, PartialOrd, Ord)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=Color"]
-            pub struct Color(::core::ffi::c_int);
+            pub struct Color(::ffi_11::c_int);
             impl Color {
-                pub const kViolet: Color = Color(-2147483648);
-                pub const kRed: Color = Color(-5);
-                pub const kBlue: Color = Color(-4);
-                pub const kGreen: Color = Color(3);
-                pub const kMagenta: Color = Color(2147483647);
+                pub const kViolet: Color = Color(::ffi_11::new_c_int(-2147483648));
+                pub const kRed: Color = Color(::ffi_11::new_c_int(-5));
+                pub const kBlue: Color = Color(::ffi_11::new_c_int(-4));
+                pub const kGreen: Color = Color(::ffi_11::new_c_int(3));
+                pub const kMagenta: Color = Color(::ffi_11::new_c_int(2147483647));
             }
-            impl From<::core::ffi::c_int> for Color {
-                fn from(value: ::core::ffi::c_int) -> Color {
+            impl From<::ffi_11::c_int> for Color {
+                fn from(value: ::ffi_11::c_int) -> Color {
                     Color(value)
                 }
             }
-            impl From<Color> for ::core::ffi::c_int {
-                fn from(value: Color) -> ::core::ffi::c_int {
+            impl From<Color> for ::ffi_11::c_int {
+                fn from(value: Color) -> ::ffi_11::c_int {
                     value.0
                 }
             }
@@ -197,22 +236,23 @@ fn test_generate_enum_with_32_bit_unsigned_vals() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
+            #[doc=" Generated from: ir_from_cc_virtual_header.h;l=3"]
             #[repr(transparent)]
             #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash, PartialOrd, Ord)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=Color"]
-            pub struct Color(::core::ffi::c_uint);
+            pub struct Color(::ffi_11::c_uint);
             impl Color {
-                pub const kRed: Color = Color(0);
-                pub const kBlue: Color = Color(1);
-                pub const kLimeGreen: Color = Color(4294967295);
+                pub const kRed: Color = Color(::ffi_11::new_c_uint(0));
+                pub const kBlue: Color = Color(::ffi_11::new_c_uint(1));
+                pub const kLimeGreen: Color = Color(::ffi_11::new_c_uint(4294967295));
             }
-            impl From<::core::ffi::c_uint> for Color {
-                fn from(value: ::core::ffi::c_uint) -> Color {
+            impl From<::ffi_11::c_uint> for Color {
+                fn from(value: ::ffi_11::c_uint) -> Color {
                     Color(value)
                 }
             }
-            impl From<Color> for ::core::ffi::c_uint {
-                fn from(value: Color) -> ::core::ffi::c_uint {
+            impl From<Color> for ::ffi_11::c_uint {
+                fn from(value: Color) -> ::ffi_11::c_uint {
                     value.0
                 }
             }
@@ -228,6 +268,7 @@ fn test_generate_enum_bool() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
+            #[doc=" Generated from: ir_from_cc_virtual_header.h;l=3"]
             #[repr(transparent)]
             #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash, PartialOrd, Ord)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=Bool"]
@@ -258,6 +299,7 @@ fn test_generate_enum_bool_alias() -> Result<()> {
     assert_rs_matches!(
         rs_api,
         quote! {
+            #[doc=" Generated from: ir_from_cc_virtual_header.h;l=3"]
             #[repr(transparent)]
             #[derive(Debug, PartialEq, Eq, Copy, Clone, Hash, PartialOrd, Ord)]
             #[doc="CRUBIT_ANNOTATE: cpp_type=Bool"]
@@ -275,6 +317,33 @@ fn test_generate_enum_bool_alias() -> Result<()> {
                 fn from(value: Bool) -> crate::MyBool {
                     value.0
                 }
+            }
+        }
+    );
+    Ok(())
+}
+
+#[gtest]
+fn test_display() -> Result<()> {
+    let ir = ir_from_cc(
+        r#"
+        enum class Enum {
+            kEnum,
+        };
+        template <typename Sink>
+        void AbslStringify(Sink& sink, Enum) {
+            sink.Append("Enum");
+        }
+    "#,
+    )?;
+
+    let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
+
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            impl ::core::fmt::Display for Enum {
+              ...
             }
         }
     );

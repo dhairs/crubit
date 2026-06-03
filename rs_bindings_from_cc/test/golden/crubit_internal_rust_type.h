@@ -5,7 +5,12 @@
 #ifndef CRUBIT_RS_BINDINGS_FROM_CC_TEST_GOLDEN_CRUBIT_INTERNAL_RS_TYPE_H_
 #define CRUBIT_RS_BINDINGS_FROM_CC_TEST_GOLDEN_CRUBIT_INTERNAL_RS_TYPE_H_
 
-#pragma clang lifetime_elision
+namespace crubit::rust_type {
+template <typename...>
+struct Args {};
+template <auto>
+struct Const {};
+}  // namespace crubit::rust_type
 
 // These types should be suppressed due to the rust type override, as should
 // any methods they have.
@@ -26,7 +31,9 @@ struct [[clang::annotate("crubit_internal_rust_type", "i8")]] MyI8Class final {
 };
 
 enum [[clang::annotate("crubit_internal_rust_type",
-                       "i8")]] MyI8Enum : unsigned char{kX};
+                       "i8")]] MyI8Enum : unsigned char {
+  kX
+};
 
 using MyI8Alias [[clang::annotate("crubit_internal_rust_type", "i8")]] =
     unsigned char;
@@ -56,5 +63,52 @@ struct ExistingRustTypeFieldTypes final {
 
   TooFewArgs error;
 };
+
+template <typename T>
+struct [[clang::annotate("crubit_internal_rust_type", "RustPtr<{}>",
+                         crubit::rust_type::Args<T>())]] Ptr final {
+  T* ptr;
+};
+
+void AcceptPtrInt(Ptr<int> ptr);
+
+template <typename T, typename U, bool B>
+struct [[clang::annotate(
+    "crubit_internal_rust_type", "RustTypeWithReorderedGenerics<{}, {}, {}>",
+    crubit::rust_type::Args<T, U, crubit::rust_type::Const<B>>())]]
+CppTypeWithTemplateArgs final {
+  T* t;
+  U* u;
+};
+
+void AcceptCppTypeWithTemplateArgs(
+    CppTypeWithTemplateArgs<int, float, true> cpp_type);
+
+template <typename T, typename U>
+struct [[clang::annotate("crubit_internal_rust_type",
+                         "RustTypeReordered<{}, {}>",
+                         crubit::rust_type::Args<T, U>())]] ConvertPtrs {};
+
+template <typename T, typename U>
+using Reordered = ConvertPtrs<U, T>;
+
+void AcceptReordered(Reordered<int, float> x);
+
+template <typename T, typename U = int>
+struct [[clang::annotate("crubit_internal_rust_type",
+                         "RustTypeWithDefault<{}, {}>",
+                         crubit::rust_type::Args<T, U>())]] WithDefault {};
+
+void AcceptWithDefault(WithDefault<float> x);
+
+template <typename T>
+struct [[clang::annotate("crubit_internal_rust_type", "MyRustContainer<{}>",
+                         crubit::rust_type::Args<T>())]] MyContainer {};
+
+template <>
+struct [[clang::annotate("crubit_internal_rust_type", "MyRustContainerVoid",
+                         crubit::rust_type::Args<>())]] MyContainer<void> {};
+
+void AcceptSpecialized(MyContainer<int> a, MyContainer<void> b);
 
 #endif  // CRUBIT_RS_BINDINGS_FROM_CC_TEST_GOLDEN_CRUBIT_INTERNAL_RS_TYPE_H_

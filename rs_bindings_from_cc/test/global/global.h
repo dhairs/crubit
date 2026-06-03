@@ -7,6 +7,7 @@
 
 extern int extern_int;
 extern const int kExternConstInt;
+extern thread_local int thread_local_int;
 
 // Check that duplicate extern declarations are handled correctly.
 extern int extern_int;
@@ -22,6 +23,8 @@ constexpr int kConstexprInt = 7;
 inline int inline_int = 5;
 namespace foo {
 inline int inline_int_namespaced = 5;
+inline long long inline_long_long_namespaced = 24;
+inline bool inline_bool_namespaced = true;
 }  // namespace foo
 
 // Also make sure we don't choke on templated variables.
@@ -34,5 +37,13 @@ int GetIntVal();
 int GetNamespacedIntVal();
 int GetCNamespacedIntVal();
 int GetInlineIntVal();
+
+enum { kAnonEnumConst = 123 };
+namespace foo {
+enum { kAnonEnumNamespacedConst = 456 };
+}
+struct StructWithAnonEnum {
+  enum { kAnonEnumInStructConst = 789 };
+};
 
 #endif  // THIRD_PARTY_CRUBIT_RS_BINDINGS_FROM_CC_TEST_EXTERN_BASIC_EXTERN_H_

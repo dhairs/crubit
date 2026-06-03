@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:static_methods_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
@@ -32,27 +33,16 @@ unsafe impl ::cxx::ExternType for SomeClass {
 impl SomeClass {
     /// Example of a factory method.
     #[inline(always)]
-    pub fn static_factory_method(initial_value_of_field: ::core::ffi::c_int) -> crate::SomeClass {
-        unsafe {
-            let mut __return = ::core::mem::MaybeUninit::<Self>::uninit();
-            crate::detail::__rust_thunk___ZN9SomeClass21static_factory_methodEi(
-                &raw mut __return as *mut ::core::ffi::c_void,
-                initial_value_of_field,
-            );
-            __return.assume_init()
-        }
+    pub fn static_factory_method(initial_value_of_field: ::ffi_11::c_int) -> crate::SomeClass {
+        unsafe { self::some_class::static_factory_method(initial_value_of_field) }
     }
     /// Static method working on primitive types (and unrelated to the struct).
     #[inline(always)]
     pub fn static_method_that_multiplies_its_args(
-        x: ::core::ffi::c_int,
-        y: ::core::ffi::c_int,
-    ) -> ::core::ffi::c_int {
-        unsafe {
-            crate::detail::__rust_thunk___ZN9SomeClass38static_method_that_multiplies_its_argsEii(
-                x, y,
-            )
-        }
+        x: ::ffi_11::c_int,
+        y: ::ffi_11::c_int,
+    ) -> ::ffi_11::c_int {
+        unsafe { self::some_class::static_method_that_multiplies_its_args(x, y) }
     }
 }
 
@@ -67,23 +57,34 @@ impl Default for SomeClass {
     }
 }
 
-// Error while generating bindings for constructor 'SomeClass::SomeClass':
-// Can't generate bindings for SomeClass::SomeClass, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:static_methods_cc needs [//features:experimental] for SomeClass::SomeClass (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for constructor 'SomeClass::SomeClass':
-// Can't generate bindings for SomeClass::SomeClass, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:static_methods_cc needs [//features:experimental] for SomeClass::SomeClass (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SomeClass::operator=':
-// Can't generate bindings for SomeClass::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:static_methods_cc needs [//features:experimental] for SomeClass::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:static_methods_cc needs [//features:experimental] for SomeClass::operator= (the type of __param_0 (parameter #1): references are not supported)
-
-// Error while generating bindings for function 'SomeClass::operator=':
-// Can't generate bindings for SomeClass::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:static_methods_cc needs [//features:experimental] for SomeClass::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:static_methods_cc needs [//features:experimental] for SomeClass::operator= (the type of __param_0 (parameter #1): references are not supported)
+pub mod some_class {
+    /// Example of a factory method.
+    #[inline(always)]
+    pub(crate) fn static_factory_method(
+        initial_value_of_field: ::ffi_11::c_int,
+    ) -> crate::SomeClass {
+        unsafe {
+            let mut __crubit_return = ::core::mem::MaybeUninit::<crate::SomeClass>::uninit();
+            crate::detail::__rust_thunk___ZN9SomeClass21static_factory_methodEi(
+                &raw mut __crubit_return as *mut ::core::ffi::c_void,
+                initial_value_of_field,
+            );
+            __crubit_return.assume_init()
+        }
+    }
+    /// Static method working on primitive types (and unrelated to the struct).
+    #[inline(always)]
+    pub(crate) fn static_method_that_multiplies_its_args(
+        x: ::ffi_11::c_int,
+        y: ::ffi_11::c_int,
+    ) -> ::ffi_11::c_int {
+        unsafe {
+            crate::detail::__rust_thunk___ZN9SomeClass38static_method_that_multiplies_its_argsEii(
+                x, y,
+            )
+        }
+    }
+}
 
 mod detail {
     #[allow(unused_imports)]
@@ -92,13 +93,13 @@ mod detail {
         pub(crate) unsafe fn __rust_thunk___ZN9SomeClassC1Ev(__this: *mut ::core::ffi::c_void);
         pub(crate) unsafe fn __rust_thunk___ZN9SomeClass21static_factory_methodEi(
             __return: *mut ::core::ffi::c_void,
-            initial_value_of_field: ::core::ffi::c_int,
+            initial_value_of_field: ::ffi_11::c_int,
         );
         #[link_name = "_ZN9SomeClass38static_method_that_multiplies_its_argsEii"]
         pub(crate) unsafe fn __rust_thunk___ZN9SomeClass38static_method_that_multiplies_its_argsEii(
-            x: ::core::ffi::c_int,
-            y: ::core::ffi::c_int,
-        ) -> ::core::ffi::c_int;
+            x: ::ffi_11::c_int,
+            y: ::ffi_11::c_int,
+        ) -> ::ffi_11::c_int;
     }
 }
 

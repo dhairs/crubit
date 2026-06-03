@@ -4,7 +4,8 @@
 
 extern crate rustc_span;
 
-use crate::{AdtCoreBindings, SugaredTy};
+use crate::AdtCoreBindings;
+use rustc_middle::ty::Ty;
 use rustc_span::Symbol;
 use std::fmt::Debug;
 use std::rc::Rc;
@@ -20,7 +21,7 @@ pub struct CppType<'tcx> {
     /// The kind of C++ type this is.
     pub kind: CppTypeKind<'tcx>,
     /// The Rust type that this C++ type was created from.
-    pub rs_type_origin: SugaredTy<'tcx>,
+    pub rs_type_origin: Ty<'tcx>,
 }
 
 #[derive(Clone)]
@@ -111,16 +112,16 @@ impl CppPrimitiveKind {
     pub fn to_str(self) -> &'static str {
         use CppPrimitiveKind::*;
         match self {
-            Int8 => "std::int8_t",
-            Int16 => "std::int16_t",
-            Int32 => "std::int32_t",
-            Int64 => "std::int64_t",
-            UInt8 => "std::uint8_t",
-            UInt16 => "std::uint16_t",
-            UInt32 => "std::uint32_t",
-            UInt64 => "std::uint64_t",
-            IntPtr => "std::intptr_t",
-            UIntPtr => "std::uintptr_t",
+            Int8 => "::std::int8_t",
+            Int16 => "::std::int16_t",
+            Int32 => "::std::int32_t",
+            Int64 => "::std::int64_t",
+            UInt8 => "::std::uint8_t",
+            UInt16 => "::std::uint16_t",
+            UInt32 => "::std::uint32_t",
+            UInt64 => "::std::uint64_t",
+            IntPtr => "::std::intptr_t",
+            UIntPtr => "::std::uintptr_t",
             Char => "char",
             SignedChar => "signed_char",
             UnsignedChar => "unsigned char",

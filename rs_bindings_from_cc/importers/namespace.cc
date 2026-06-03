@@ -12,6 +12,7 @@
 #include "absl/log/check.h"
 #include "rs_bindings_from_cc/ast_util.h"
 #include "rs_bindings_from_cc/ir.h"
+#include "clang/AST/Attr.h"
 #include "clang/AST/Decl.h"
 
 namespace crubit {
@@ -21,7 +22,7 @@ std::optional<IR::Item> NamespaceDeclImporter::Import(
   if (namespace_decl->isAnonymousNamespace()) {
     return ictx_.ImportUnsupportedItem(
         *namespace_decl, std::nullopt,
-        FormattedError::Static("Anonymous namespaces are not supported yet"));
+        {FormattedError::Static("Anonymous namespaces are not yet supported")});
   }
 
   absl::StatusOr<TranslatedIdentifier> identifier =
@@ -29,8 +30,8 @@ std::optional<IR::Item> NamespaceDeclImporter::Import(
   if (!identifier.ok()) {
     return ictx_.ImportUnsupportedItem(
         *namespace_decl, std::nullopt,
-        FormattedError::PrefixedStrCat("Namespace name is not supported",
-                                       identifier.status().message()));
+        {FormattedError::PrefixedStrCat("Namespace name is not supported",
+                                        identifier.status().message())});
   }
 
   ictx_.ImportDeclsFromDeclContext(namespace_decl);
@@ -39,26 +40,35 @@ std::optional<IR::Item> NamespaceDeclImporter::Import(
   if (!enclosing_item_id.ok()) {
     return ictx_.ImportUnsupportedItem(
         *namespace_decl, std::nullopt,
-        FormattedError::FromStatus(std::move(enclosing_item_id.status())));
+        {FormattedError::FromStatus(std::move(enclosing_item_id.status()))});
   }
   // Renames are not currently supported for namespaces.
   // TODO - b/399487279: Support namespace renames using CRUBIT_RUST_NAME.
   // if (identifier->crubit_rust_name.has_value()) {
   //   return ictx_.ImportUnsupportedItem(
-  //       namespace_decl, std::nullopt,
-  //       FormattedError::Static("Namespace renames are not supported yet"));
+  //       *namespace_decl, std::nullopt,
+  //       {FormattedError::Static("Namespace renames are not yet supported")});
   // }
 
+  std::optional<std::string> deprecated;
   absl::StatusOr<std::optional<std::string>> unknown_attr =
-      CollectUnknownAttrs(*namespace_decl);
+      CollectUnknownAttrs(*namespace_decl, [&](const clang::Attr& attr) {
+        if (auto* deprecated_attr =
+                clang::dyn_cast<clang::DeprecatedAttr>(&attr)) {
+          deprecated.emplace(deprecated_attr->getMessage());
+          return true;
+        }
+        return false;
+      });
   if (!unknown_attr.ok()) {
     return ictx_.ImportUnsupportedItem(
         *namespace_decl, std::nullopt,
-        FormattedError::FromStatus(std::move(unknown_attr.status())));
+        {FormattedError::FromStatus(std::move(unknown_attr.status()))});
   }
 
   return Namespace{.cc_name = identifier->cc_identifier,
                    .rs_name = identifier->cc_identifier,
+                   .unique_name = ictx_.GetUniqueName(*namespace_decl),
                    .id = ictx_.GenerateItemId(namespace_decl),
                    .canonical_namespace_id =
                        ictx_.GenerateItemId(namespace_decl->getCanonicalDecl()),
@@ -66,7 +76,9 @@ std::optional<IR::Item> NamespaceDeclImporter::Import(
                    .owning_target = ictx_.GetOwningTarget(namespace_decl),
                    .child_item_ids = std::move(item_ids),
                    .enclosing_item_id = *std::move(enclosing_item_id),
-                   .is_inline = namespace_decl->isInline()};
+                   .is_inline = namespace_decl->isInline(),
+                   .deprecated = std::move(deprecated),
+                   .doc_comment = ictx_.GetComment(namespace_decl)};
 }
 
 }  // namespace crubit

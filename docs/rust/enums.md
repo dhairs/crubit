@@ -1,7 +1,6 @@
 # C++ bindings for Rust `enum`s
 
-A Rust `enum` is mapped to an opaque C++ type. C++ code cannot create a specific
-variant, but can call functions accepting or returning an `enum`.
+A Rust `enum` is mapped to an opaque C++ type.
 
 To receive C++ bindings, the `enum` must be movable in C++. See
 [Movable Types](movable_types.md).
@@ -10,17 +9,21 @@ To receive C++ bindings, the `enum` must be movable in C++. See
 
 Given the following Rust crate:
 
-```live-snippet
-cs/file:examples/rust/enum/example.rs class:Color
 ```
+{{ #include ../../examples/rust/enum/example.rs }}
+```
+<!--  class:Color -->
+
 
 Crubit will generate the following bindings:
 
 <!-- Note: Kythe currently indexes this as class `CRUBIT_INTERNAL_RUST_TYPE` because it doesn't have a build rule. -->
 
-```live-snippet
-cs/file:examples/rust/enum/example_generated.h class:CRUBIT_INTERNAL_RUST_TYPE|Color
 ```
+{{ #include ../../examples/rust/enum/example_generated.h }}
+```
+<!--  class:CRUBIT_INTERNAL_RUST_TYPE|Color -->
+
 
 ## Why isn't it a C++ `enum`? {#cpp_enum}
 
@@ -44,3 +47,41 @@ cannot be used to represent a Rust `enum`. Instead, the C++ bindings are a
 
 To receive C++ bindings, the `enum` must be movable in C++. See
 [Movable Types](movable_types.md).
+
+## Enums with payload
+
+Each variant of a Rust `enum` may contain an additional payload (a tuple or a
+struct).  C++ bindings for Rust `enum`s provide the following ways of working
+with an `enum` payload:
+
+* Constructing an `enum` variant with the given payload
+  by calling a `static` `Make<variant name>` method
+  (one such method is injected for each of `enum` variants).
+  The following bugs track future work in this area:
+
+    *   b/487357254: Constructing variants with a struct payload
+    *   b/489085607: Bindings for constructing enums should be `constexpr`
+
+* TODO(b/262737383): Matching `enum` variants and inspecting their payload.
+
+### Example
+
+Given the following Rust crate:
+
+<!-- b/487357254: Cover struct payload in this example. -->
+
+```
+{{ #include ../../examples/rust/enum_with_payload/example.rs }}
+```
+<!--  class:Color -->
+
+
+Crubit will generate the following bindings:
+
+<!-- Note: Kythe currently indexes this as class `CRUBIT_INTERNAL_RUST_TYPE` because it doesn't have a build rule. -->
+
+```
+{{ #include ../../examples/rust/enum_with_payload/example_generated.h }}
+```
+<!--  class:CRUBIT_INTERNAL_RUST_TYPE|Color -->
+

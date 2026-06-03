@@ -44,7 +44,7 @@ def _get_cc_info(providers):
             return provider
     fail("Couldn't find a CcInfo in the list of providers")
 
-def compile_rust(ctx, attr, src, extra_srcs, deps, crate_name, include_coverage, force_all_deps_direct, allow_lto = True):
+def compile_rust(ctx, attr, src, extra_srcs, deps, crate_name, include_coverage, force_all_deps_direct, allow_lto = True, aliases = {}, remap_path_prefix = {}):
     """Compiles a Rust source file.
 
     Args:
@@ -57,6 +57,8 @@ def compile_rust(ctx, attr, src, extra_srcs, deps, crate_name, include_coverage,
       include_coverage: (bool) Whether or not coverage information should be generated.
       force_all_deps_direct: (bool) Whether or not to force all deps to be direct.
       allow_lto: (bool, optional) Whether to allow LTO
+      aliases: (dict, optional) A dict of aliases to be passed to the rustc_compile_action.
+      remap_path_prefix: (dict, optional) A dict of {symlink_path: source_path} to be remapped by rustc.
 
     Returns:
       A DepVariantInfo provider.
@@ -80,6 +82,7 @@ def compile_rust(ctx, attr, src, extra_srcs, deps, crate_name, include_coverage,
     )
 
     lib = ctx.actions.declare_file(lib_name)
+
     rmeta = ctx.actions.declare_file(rmeta_name)
 
     # TODO(b/336367148): We should inherit almost nothing from `attr`, but for now, at least, we
@@ -92,6 +95,10 @@ def compile_rust(ctx, attr, src, extra_srcs, deps, crate_name, include_coverage,
     else:
         srcs = depset([src] + extra_srcs)
 
+    remapped_flags = []
+    for symlink, source in remap_path_prefix.items():
+        remapped_flags.append("--remap-path-prefix={}={}".format(symlink, source))
+
     providers = rustc_compile_action(
         ctx = ctx,
         attr = struct(**attr_args),
@@ -103,22 +110,34 @@ def compile_rust(ctx, attr, src, extra_srcs, deps, crate_name, include_coverage,
             srcs = srcs,
             deps = deps.to_list(),
             proc_macro_deps = [],
-            aliases = {},
+            aliases = aliases,
             output = lib,
             metadata = rmeta,
-            edition = "2018",
+            edition = "2021",
             is_test = False,
             rustc_env = {},
             compile_data = depset([]),
             compile_data_targets = depset([]),
             owner = ctx.label,
         ),
-        # LINT.IfChange
-        rust_flags = ["-Zallow-features=custom_inner_attributes,impl_trait_in_assoc_type,register_tool,negative_impls,vec_into_raw_parts,extern_types,arbitrary_self_types,allocator_api,cfg_sanitize"],
-        # LINT.ThenChange(//docs/overview/unstable_features.md)
+        rust_flags = remapped_flags,
         output_hash = output_hash,
         force_all_deps_direct = force_all_deps_direct,
         include_coverage = include_coverage,
+        # LINT.IfChange
+        allowed_unstable_rust_features = [
+            # <internal link> start
+            "allocator_api",
+            "arbitrary_self_types",
+            "cfg_sanitize",
+            "custom_inner_attributes",
+            "extern_types",
+            "impl_trait_in_assoc_type",
+            "negative_impls",
+            "register_tool",
+            # <internal link> end
+        ],
+        # LINT.ThenChange(//docs/overview/unstable_features.md)
     )
 
     return DepVariantInfo(

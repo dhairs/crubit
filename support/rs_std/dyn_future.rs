@@ -4,13 +4,12 @@
 
 //! A Rust wrapper around a type-erased `Future` designed for use from C++.
 
-#![deny(missing_docs)]
+#![deny(missing_docs, unsafe_op_in_unsafe_fn)]
 
 use cpp_waker::rs_std::CppWaker;
-use std::future::Future;
 use std::mem::ManuallyDrop;
 use std::pin::Pin;
-use std::task::{RawWaker, RawWakerVTable, Waker};
+use std::task::{Context, RawWaker, RawWakerVTable, Waker};
 
 /// A type-erased wrapper for Rust `Future` types that exposes a Crubit-compatible API.
 #[must_use]
@@ -43,12 +42,12 @@ impl<'a> DynFuture<'a> {
     pub unsafe fn poll(&mut self, waker_ptr: *const CppWaker) -> bool {
         // Wrap in `ManuallyDrop` because we don't want to decrease the refcount when this function
         // completes.
-        // Safety: the `wakeup_object` is managed by `wakeup_vtable` as required by the function.
+        // Safety: `waker_ptr` is managed by `RS_STD_CPP_WAKER_VTABLE` as required by the function.
         let waker =
             ManuallyDrop::new(unsafe { Waker::new(waker_ptr as UnitPtr, RS_STD_CPP_WAKER_VTABLE) });
         let future =
             self.0.as_mut().expect("Attempted to `poll` a completed or discarded `DynFuture`.");
-        let mut cx = std::task::Context::from_waker(&waker);
+        let mut cx = Context::from_waker(&waker);
         if future.as_mut().poll(&mut cx).is_ready() {
             self.0 = None;
             true
@@ -58,11 +57,19 @@ impl<'a> DynFuture<'a> {
     }
 }
 
+/// A `DynFuture` can be turned into a boxed reference to the underlying future, or `None` if it has
+/// already been completed or discarded.
+impl<'a> From<DynFuture<'a>> for Option<Pin<Box<dyn Future<Output = ()> + Send + 'a>>> {
+    fn from(df: DynFuture<'a>) -> Self {
+        df.0
+    }
+}
+
 // A type-erased pointer to a `CppWaker`.
 // This is necessary in order to match the signatures required by `RawWakerVTable`.
 type UnitPtr = *const ();
 
-// Wakeup functions for `RustFuture` defined in `from_rust.cc`.
+// Waker functions for `DynFuture` defined in `cpp_waker.cc`.
 unsafe extern "C" {
     fn rs_std_cpp_waker_clone(_: UnitPtr) -> UnitPtr;
     fn rs_std_cpp_waker_wake_and_destroy(_: UnitPtr);
@@ -71,19 +78,19 @@ unsafe extern "C" {
 }
 
 unsafe fn rs_std_cpp_waker_clone_wrapper(obj: UnitPtr) -> RawWaker {
-    RawWaker::new(rs_std_cpp_waker_clone(obj), RS_STD_CPP_WAKER_VTABLE)
+    RawWaker::new(unsafe { rs_std_cpp_waker_clone(obj) }, RS_STD_CPP_WAKER_VTABLE)
 }
 
 unsafe fn rs_std_cpp_waker_wake_and_destroy_wrapper(obj: UnitPtr) {
-    rs_std_cpp_waker_wake_and_destroy(obj)
+    unsafe { rs_std_cpp_waker_wake_and_destroy(obj) }
 }
 
 unsafe fn rs_std_cpp_waker_wake_by_ref_wrapper(obj: UnitPtr) {
-    rs_std_cpp_waker_wake_by_ref(obj)
+    unsafe { rs_std_cpp_waker_wake_by_ref(obj) }
 }
 
 unsafe fn rs_std_cpp_waker_drop_wrapper(obj: UnitPtr) {
-    rs_std_cpp_waker_drop(obj)
+    unsafe { rs_std_cpp_waker_drop(obj) }
 }
 
 static RS_STD_CPP_WAKER_VTABLE: &RawWakerVTable = &RawWakerVTable::new(

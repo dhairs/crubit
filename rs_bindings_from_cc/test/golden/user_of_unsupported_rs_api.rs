@@ -6,20 +6,18 @@
 // //rs_bindings_from_cc/test/golden:user_of_unsupported_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, impl_trait_in_assoc_type)]
+#![feature(custom_inner_attributes, impl_trait_in_assoc_type)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[inline(always)]
 pub fn UseNontrivialCustomType(
-    non_trivial_custom_type: impl ::ctor::Ctor<
-        Output = ::unsupported_cc::NontrivialCustomType,
-        Error = ::ctor::Infallible,
-    >,
+    non_trivial_custom_type: ::ctor::Ctor![::unsupported_cc::NontrivialCustomType],
 ) {
     unsafe {
         crate::detail::__rust_thunk___Z23UseNontrivialCustomType20NontrivialCustomType(

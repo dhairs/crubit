@@ -6,18 +6,13 @@
 // //rs_bindings_from_cc/test/golden:no_unique_address_cc
 
 #![rustfmt::skip]
-#![feature(
-    allocator_api,
-    cfg_sanitize,
-    custom_inner_attributes,
-    impl_trait_in_assoc_type,
-    negative_impls
-)]
+#![feature(custom_inner_attributes, impl_trait_in_assoc_type, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 /// The no_unique_address.h header is present both in
@@ -47,16 +42,8 @@ unsafe impl ::cxx::ExternType for Struct {
 }
 impl Struct {
     #[inline(always)]
-    pub fn Make(f1: ::core::ffi::c_int, f2: ::core::ffi::c_char) -> crate::Struct {
-        unsafe {
-            let mut __return = ::core::mem::MaybeUninit::<Self>::uninit();
-            crate::detail::__rust_thunk___ZN6Struct4MakeEic(
-                &raw mut __return as *mut ::core::ffi::c_void,
-                f1,
-                f2,
-            );
-            __return.assume_init()
-        }
+    pub fn Make(f1: ::ffi_11::c_int, f2: ::ffi_11::c_char) -> crate::Struct {
+        unsafe { self::r#struct::Make(f1, f2) }
     }
 }
 
@@ -71,23 +58,40 @@ impl Default for Struct {
     }
 }
 
-// Error while generating bindings for constructor 'Struct::Struct':
-// Can't generate bindings for Struct::Struct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for Struct::Struct (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `Struct::Struct` could not be bound
+//   Unsupported parameter type `const Struct& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'Struct::Struct':
-// Can't generate bindings for Struct::Struct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for Struct::Struct (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `Struct::Struct` could not be bound
+//   Unsupported parameter type `Struct&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Struct::operator=':
-// Can't generate bindings for Struct::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for Struct::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for Struct::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `Struct::operator=` could not be bound
+//   Unsupported parameter type `const Struct& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `Struct&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Struct::operator=':
-// Can't generate bindings for Struct::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for Struct::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for Struct::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `Struct::operator=` could not be bound
+//   Unsupported parameter type `Struct&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `Struct&`:
+//     references are not yet supported
+
+pub mod r#struct {
+    #[inline(always)]
+    pub(crate) fn Make(f1: ::ffi_11::c_int, f2: ::ffi_11::c_char) -> crate::Struct {
+        unsafe {
+            let mut __crubit_return = ::core::mem::MaybeUninit::<crate::Struct>::uninit();
+            crate::detail::__rust_thunk___ZN6Struct4MakeEic(
+                &raw mut __crubit_return as *mut ::core::ffi::c_void,
+                f1,
+                f2,
+            );
+            __crubit_return.assume_init()
+        }
+    }
+}
 
 /// Regression test for b/232418721.  This tests that the offset of `field2` is
 /// correct (given its alignment requirements there need to be 3 bytes of padding
@@ -99,7 +103,7 @@ impl Default for Struct {
 ///CRUBIT_ANNOTATE: cpp_type=PaddingBetweenFields
 pub struct PaddingBetweenFields {
     /// size: 1, alignment: 1 => offset: 0
-    pub field1: ::core::ffi::c_char,
+    pub field1: ::ffi_11::c_char,
     __padding1: [::core::mem::MaybeUninit<u8>; 3],
     /// size: 4, alignment: 4 => offset: 4
     ///
@@ -115,16 +119,8 @@ unsafe impl ::cxx::ExternType for PaddingBetweenFields {
 }
 impl PaddingBetweenFields {
     #[inline(always)]
-    pub fn Make(f1: ::core::ffi::c_char, f2: ::core::ffi::c_int) -> crate::PaddingBetweenFields {
-        unsafe {
-            let mut __return = ::core::mem::MaybeUninit::<Self>::uninit();
-            crate::detail::__rust_thunk___ZN20PaddingBetweenFields4MakeEci(
-                &raw mut __return as *mut ::core::ffi::c_void,
-                f1,
-                f2,
-            );
-            __return.assume_init()
-        }
+    pub fn Make(f1: ::ffi_11::c_char, f2: ::ffi_11::c_int) -> crate::PaddingBetweenFields {
+        unsafe { self::padding_between_fields::Make(f1, f2) }
     }
 }
 
@@ -139,23 +135,41 @@ impl Default for PaddingBetweenFields {
     }
 }
 
-// Error while generating bindings for constructor 'PaddingBetweenFields::PaddingBetweenFields':
-// Can't generate bindings for PaddingBetweenFields::PaddingBetweenFields, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for PaddingBetweenFields::PaddingBetweenFields (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `PaddingBetweenFields::PaddingBetweenFields` could not be bound
+//   Unsupported parameter type `const PaddingBetweenFields& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'PaddingBetweenFields::PaddingBetweenFields':
-// Can't generate bindings for PaddingBetweenFields::PaddingBetweenFields, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for PaddingBetweenFields::PaddingBetweenFields (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `PaddingBetweenFields::PaddingBetweenFields` could not be bound
+//   Unsupported parameter type `PaddingBetweenFields&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'PaddingBetweenFields::operator=':
-// Can't generate bindings for PaddingBetweenFields::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for PaddingBetweenFields::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for PaddingBetweenFields::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `PaddingBetweenFields::operator=` could not be bound
+//   Unsupported parameter type `const PaddingBetweenFields& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `PaddingBetweenFields&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'PaddingBetweenFields::operator=':
-// Can't generate bindings for PaddingBetweenFields::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for PaddingBetweenFields::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for PaddingBetweenFields::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `PaddingBetweenFields::operator=` could not be bound
+//   Unsupported parameter type `PaddingBetweenFields&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `PaddingBetweenFields&`:
+//     references are not yet supported
+
+pub mod padding_between_fields {
+    #[inline(always)]
+    pub(crate) fn Make(f1: ::ffi_11::c_char, f2: ::ffi_11::c_int) -> crate::PaddingBetweenFields {
+        unsafe {
+            let mut __crubit_return =
+                ::core::mem::MaybeUninit::<crate::PaddingBetweenFields>::uninit();
+            crate::detail::__rust_thunk___ZN20PaddingBetweenFields4MakeEci(
+                &raw mut __crubit_return as *mut ::core::ffi::c_void,
+                f1,
+                f2,
+            );
+            __crubit_return.assume_init()
+        }
+    }
+}
 
 /// Layout properties of FieldInTailPadding_InnerStruct look as follows:
 /// - alignment: 4 (because of `inner_int_field`)
@@ -167,9 +181,9 @@ impl Default for PaddingBetweenFields {
 ///CRUBIT_ANNOTATE: cpp_type=FieldInTailPadding_InnerStruct
 pub struct FieldInTailPadding_InnerStruct {
     /// size: 4, alignment: 4 => offset: 0
-    pub inner_int_field: ::core::ffi::c_int,
+    pub inner_int_field: ::ffi_11::c_int,
     /// size: 1, alignment: 1 => offset: 4
-    pub inner_char_field: ::core::ffi::c_char,
+    pub inner_char_field: ::ffi_11::c_char,
 }
 impl !Send for FieldInTailPadding_InnerStruct {}
 impl !Sync for FieldInTailPadding_InnerStruct {}
@@ -179,36 +193,37 @@ unsafe impl ::cxx::ExternType for FieldInTailPadding_InnerStruct {
 }
 
 impl ::ctor::CtorNew<()> for FieldInTailPadding_InnerStruct {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN30FieldInTailPadding_InnerStructC1Ev(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                 );
             })
         }
     }
 }
 
-// Error while generating bindings for constructor 'FieldInTailPadding_InnerStruct::FieldInTailPadding_InnerStruct':
-// Can't generate bindings for FieldInTailPadding_InnerStruct::FieldInTailPadding_InnerStruct, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for FieldInTailPadding_InnerStruct::FieldInTailPadding_InnerStruct (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `FieldInTailPadding_InnerStruct::FieldInTailPadding_InnerStruct` could not be bound
+//   Unsupported parameter type `const FieldInTailPadding_InnerStruct& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'FieldInTailPadding_InnerStruct::operator=':
-// Can't generate bindings for FieldInTailPadding_InnerStruct::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for FieldInTailPadding_InnerStruct::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for FieldInTailPadding_InnerStruct::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `FieldInTailPadding_InnerStruct::operator=` could not be bound
+//   Unsupported parameter type `const FieldInTailPadding_InnerStruct& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `FieldInTailPadding_InnerStruct&`:
+//     references are not yet supported
 
 /// User-defined destructor to make this struct non-POD for the purposes of
 /// layout.
 impl ::ctor::PinnedDrop for FieldInTailPadding_InnerStruct {
     #[inline(always)]
     unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        crate::detail::__rust_thunk___ZN30FieldInTailPadding_InnerStructD1Ev(self)
+        unsafe { crate::detail::__rust_thunk___ZN30FieldInTailPadding_InnerStructD1Ev(self) }
     }
 }
 
@@ -224,12 +239,12 @@ impl ::ctor::PinnedDrop for FieldInTailPadding_InnerStruct {
 #[repr(C, align(4))]
 ///CRUBIT_ANNOTATE: cpp_type=FieldInTailPadding
 pub struct FieldInTailPadding {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 0],
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 0],
     /// Reason for representing this field as a blob of bytes:
     /// `[[no_unique_address]]` attribute was present.
-    pub(crate) inner_struct: [::core::mem::MaybeUninit<u8>; 5],
+    pub(crate) inner_struct: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 5],
     /// offset: 5 (dsize of `s`).
-    pub char_in_tail_padding_of_prev_field: ::core::ffi::c_char,
+    pub char_in_tail_padding_of_prev_field: ::ffi_11::c_char,
 }
 impl !Send for FieldInTailPadding {}
 impl !Sync for FieldInTailPadding {}
@@ -238,45 +253,43 @@ unsafe impl ::cxx::ExternType for FieldInTailPadding {
     type Kind = ::cxx::kind::Opaque;
 }
 
-// Error while generating bindings for constructor 'FieldInTailPadding::FieldInTailPadding':
-// Can't generate bindings for FieldInTailPadding::FieldInTailPadding, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for FieldInTailPadding::FieldInTailPadding (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `FieldInTailPadding::FieldInTailPadding` could not be bound
+//   Unsupported parameter type `const FieldInTailPadding& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'FieldInTailPadding::FieldInTailPadding':
-// Can't generate bindings for FieldInTailPadding::FieldInTailPadding, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for FieldInTailPadding::FieldInTailPadding (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `FieldInTailPadding::FieldInTailPadding` could not be bound
+//   Unsupported parameter type `FieldInTailPadding&& __param_0`:
+//     references are not yet supported
 
 impl ::ctor::PinnedDrop for FieldInTailPadding {
     #[inline(always)]
     unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        crate::detail::__rust_thunk___ZN18FieldInTailPaddingD1Ev(self)
+        unsafe { crate::detail::__rust_thunk___ZN18FieldInTailPaddingD1Ev(self) }
     }
 }
 
-// Error while generating bindings for function 'FieldInTailPadding::operator=':
-// Can't generate bindings for FieldInTailPadding::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for FieldInTailPadding::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for FieldInTailPadding::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `FieldInTailPadding::operator=` could not be bound
+//   Unsupported parameter type `const FieldInTailPadding& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `FieldInTailPadding&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'FieldInTailPadding::operator=':
-// Can't generate bindings for FieldInTailPadding::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for FieldInTailPadding::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:no_unique_address_cc needs [//features:experimental] for FieldInTailPadding::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `FieldInTailPadding::operator=` could not be bound
+//   Unsupported parameter type `FieldInTailPadding&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `FieldInTailPadding&`:
+//     references are not yet supported
 
-impl ::ctor::CtorNew<(::core::ffi::c_int, ::core::ffi::c_char, ::core::ffi::c_char)>
-    for FieldInTailPadding
-{
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+impl ::ctor::CtorNew<(::ffi_11::c_int, ::ffi_11::c_char, ::ffi_11::c_char)> for FieldInTailPadding {
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
-    fn ctor_new(
-        args: (::core::ffi::c_int, ::core::ffi::c_char, ::core::ffi::c_char),
-    ) -> Self::CtorType {
+    fn ctor_new(args: (::ffi_11::c_int, ::ffi_11::c_char, ::ffi_11::c_char)) -> Self::CtorType {
         let (mut inner_int, mut inner_char, mut outer_char) = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN18FieldInTailPaddingC1Eicc(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                     inner_int,
                     inner_char,
                     outer_char,
@@ -293,16 +306,16 @@ mod detail {
         pub(crate) unsafe fn __rust_thunk___ZN6StructC1Ev(__this: *mut ::core::ffi::c_void);
         pub(crate) unsafe fn __rust_thunk___ZN6Struct4MakeEic(
             __return: *mut ::core::ffi::c_void,
-            f1: ::core::ffi::c_int,
-            f2: ::core::ffi::c_char,
+            f1: ::ffi_11::c_int,
+            f2: ::ffi_11::c_char,
         );
         pub(crate) unsafe fn __rust_thunk___ZN20PaddingBetweenFieldsC1Ev(
             __this: *mut ::core::ffi::c_void,
         );
         pub(crate) unsafe fn __rust_thunk___ZN20PaddingBetweenFields4MakeEci(
             __return: *mut ::core::ffi::c_void,
-            f1: ::core::ffi::c_char,
-            f2: ::core::ffi::c_int,
+            f1: ::ffi_11::c_char,
+            f2: ::ffi_11::c_int,
         );
         pub(crate) unsafe fn __rust_thunk___ZN30FieldInTailPadding_InnerStructC1Ev(
             __this: *mut ::core::ffi::c_void,
@@ -315,9 +328,9 @@ mod detail {
         );
         pub(crate) unsafe fn __rust_thunk___ZN18FieldInTailPaddingC1Eicc(
             __this: *mut ::core::ffi::c_void,
-            inner_int: ::core::ffi::c_int,
-            inner_char: ::core::ffi::c_char,
-            outer_char: ::core::ffi::c_char,
+            inner_int: ::ffi_11::c_int,
+            inner_char: ::ffi_11::c_char,
+            outer_char: ::ffi_11::c_char,
         );
     }
 }
@@ -341,8 +354,8 @@ const _: () = {
     static_assertions::assert_not_impl_any!(crate::FieldInTailPadding_InnerStruct: Copy);
     assert!(::core::mem::offset_of!(crate::FieldInTailPadding_InnerStruct, inner_int_field) == 0);
     assert!(::core::mem::offset_of!(crate::FieldInTailPadding_InnerStruct, inner_char_field) == 4);
-    static_assertions::assert_impl_all!(::core::ffi::c_int: Copy);
-    static_assertions::assert_impl_all!(::core::ffi::c_char: Copy);
+    static_assertions::assert_impl_all!(::ffi_11::c_int: Copy);
+    static_assertions::assert_impl_all!(::ffi_11::c_char: Copy);
     assert!(::core::mem::size_of::<crate::FieldInTailPadding>() == 8);
     assert!(::core::mem::align_of::<crate::FieldInTailPadding>() == 4);
     static_assertions::assert_impl_all!(crate::FieldInTailPadding: Drop);
@@ -351,5 +364,5 @@ const _: () = {
     assert!(
         ::core::mem::offset_of!(crate::FieldInTailPadding, char_in_tail_padding_of_prev_field) == 5
     );
-    static_assertions::assert_impl_all!(::core::ffi::c_char: Copy);
+    static_assertions::assert_impl_all!(::ffi_11::c_char: Copy);
 };

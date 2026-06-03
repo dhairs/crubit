@@ -4,42 +4,43 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // modules_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_MODULES_MODULES_GOLDEN
 #define THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_MODULES_MODULES_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 #include "support/internal/slot.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 #include <utility>
 
+namespace modules::basic_module {
+
+::std::int32_t add_i32(::std::int32_t x, ::std::int32_t y);
+
+}
+
 namespace modules {
-
-namespace basic_module {
-
-// Generated from:
-// cc_bindings_from_rs/test/modules/modules.rs;l=9
-std::int32_t add_i32(std::int32_t x, std::int32_t y);
-
-}  // namespace basic_module
 
 namespace [[deprecated]] deprecated_module {
 
-// Generated from:
-// cc_bindings_from_rs/test/modules/modules.rs;l=16
-[[deprecated]] std::int32_t add_i32(std::int32_t x, std::int32_t y);
+[[deprecated]] ::std::int32_t add_i32(::std::int32_t x, ::std::int32_t y);
 
-}  // namespace deprecated_module
+}
 
-namespace impl_in_separate_private_module {
+}  // namespace modules
 
-// Generated from:
-// cc_bindings_from_rs/test/modules/modules.rs;l=48
+namespace modules::impl_in_separate_private_module {
+
 struct CRUBIT_INTERNAL_RUST_TYPE(
     ":: modules_golden :: impl_in_separate_private_module :: Foo") alignas(4)
     [[clang::trivial_abi]] Foo final {
@@ -49,7 +50,7 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   Foo() = delete;
 
   // Synthesized tuple constructor
-  explicit Foo(std::int32_t __field0) : __field0(std::move(__field0)) {}
+  explicit Foo(::std::int32_t __field0) : __field0(::std::move(__field0)) {}
 
   // No custom `Drop` impl and no custom "drop glue" required
   ~Foo() = default;
@@ -61,78 +62,80 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   Foo(const Foo&) = delete;
   Foo& operator=(const Foo&) = delete;
   Foo(::crubit::UnsafeRelocateTag, Foo&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
-  // Generated from:
-  // cc_bindings_from_rs/test/modules/modules.rs;l=55
-  static ::modules::impl_in_separate_private_module::Foo create(std::int32_t i);
+  static ::modules::impl_in_separate_private_module::Foo create(
+      ::std::int32_t i);
 
-  // Generated from:
-  // cc_bindings_from_rs/test/modules/modules.rs;l=59
-  static std::int32_t into_i32(
+  static ::std::int32_t into_i32(
       ::modules::impl_in_separate_private_module::Foo s);
 
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/modules/modules.rs;l=48
-    std::int32_t __field0;
+    ::std::int32_t __field0;
   };
 
  private:
   static void __crubit_field_offset_assertions();
 };
 
-}  // namespace impl_in_separate_private_module
+}  // namespace modules::impl_in_separate_private_module
 
-namespace outer {
+namespace modules::outer {
 
 namespace [[deprecated]] inner_deprecated {
 
-// Error generating bindings for `outer::inner_deprecated::SomeType` defined at
+// Error generating bindings for struct
+// `modules_golden::outer::inner_deprecated::SomeType` defined at
 // cc_bindings_from_rs/test/modules/modules.rs;l=26:
 // Zero-sized types (ZSTs) are not supported (b/258259459)
 
 }
 
-}  // namespace outer
+}  // namespace modules::outer
 
-namespace outer::middle {
+namespace modules::outer::middle {
 
 namespace [[deprecated]] innermost_deprecated {
 
-// Error generating bindings for `outer::middle::innermost_deprecated::SomeType`
-// defined at
+// Error generating bindings for struct
+// `modules_golden::outer::middle::innermost_deprecated::SomeType` defined at
 // cc_bindings_from_rs/test/modules/modules.rs;l=32:
 // Zero-sized types (ZSTs) are not supported (b/258259459)
 
 }
 
-}  // namespace outer::middle
+}  // namespace modules::outer::middle
 
-namespace basic_module {
+namespace modules::basic_module {
 
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_add_ui32(std::int32_t, std::int32_t);
+extern "C" ::std::int32_t __crubit_thunk_add_ui32(::std::int32_t,
+                                                  ::std::int32_t);
 }
-inline std::int32_t add_i32(std::int32_t x, std::int32_t y) {
+inline ::std::int32_t add_i32(::std::int32_t x, ::std::int32_t y) {
   return __crubit_internal::__crubit_thunk_add_ui32(x, y);
 }
 
-}  // namespace basic_module
+}  // namespace modules::basic_module
+
+namespace modules {
 
 namespace [[deprecated]] deprecated_module {
 
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_add_ui32(std::int32_t, std::int32_t);
+extern "C" ::std::int32_t __crubit_thunk_add_ui32(::std::int32_t,
+                                                  ::std::int32_t);
 }
-inline std::int32_t add_i32(std::int32_t x, std::int32_t y) {
+inline ::std::int32_t add_i32(::std::int32_t x, ::std::int32_t y) {
   return __crubit_internal::__crubit_thunk_add_ui32(x, y);
 }
 
 }  // namespace deprecated_module
 
-namespace impl_in_separate_private_module {
+}  // namespace modules
+
+namespace modules::impl_in_separate_private_module {
 
 static_assert(
     sizeof(Foo) == 4,
@@ -140,46 +143,36 @@ static_assert(
 static_assert(
     alignof(Foo) == 4,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<Foo>);
-static_assert(std::is_trivially_move_constructible_v<Foo>);
-static_assert(std::is_trivially_move_assignable_v<Foo>);
+static_assert(::std::is_trivially_destructible_v<Foo>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::modules::impl_in_separate_private_module::Foo>);
+static_assert(::std::is_trivially_move_assignable_v<
+              ::modules::impl_in_separate_private_module::Foo>);
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_create(
-    std::int32_t, ::modules::impl_in_separate_private_module::Foo* __ret_ptr);
+    ::std::int32_t, ::modules::impl_in_separate_private_module::Foo* __ret_ptr);
 }
 inline ::modules::impl_in_separate_private_module::Foo Foo::create(
-    std::int32_t i) {
+    ::std::int32_t i) {
   crubit::Slot<::modules::impl_in_separate_private_module::Foo>
       __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_create(i, __return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 
 namespace __crubit_internal {
-extern "C" std::int32_t __crubit_thunk_into_ui32(
+extern "C" ::std::int32_t __crubit_thunk_into_ui32(
     ::modules::impl_in_separate_private_module::Foo*);
 }
-inline std::int32_t Foo::into_i32(
+inline ::std::int32_t Foo::into_i32(
     ::modules::impl_in_separate_private_module::Foo s) {
   return __crubit_internal::__crubit_thunk_into_ui32(&s);
 }
 inline void Foo::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(Foo, __field0));
 }
-}  // namespace impl_in_separate_private_module
+}  // namespace modules::impl_in_separate_private_module
 
-namespace outer {
-
-namespace [[deprecated]] inner_deprecated {}
-
-}  // namespace outer
-
-namespace outer::middle {
-
-namespace [[deprecated]] innermost_deprecated {}
-
-}  // namespace outer::middle
-
-}  // namespace modules
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_MODULES_MODULES_GOLDEN

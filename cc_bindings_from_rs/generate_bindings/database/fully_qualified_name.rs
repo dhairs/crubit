@@ -9,7 +9,7 @@ use arc_anyhow::Result;
 use code_gen_utils::{format_cc_type_name, make_rs_ident, NamespaceQualifier};
 use proc_macro2::{Ident, TokenStream};
 use quote::quote;
-use rustc_span::def_id::DefId;
+use rustc_span::def_id::{CrateNum, DefId};
 use rustc_span::symbol::Symbol;
 use std::rc::Rc;
 
@@ -47,6 +47,10 @@ pub struct FullyQualifiedName {
     /// For example, this would be `std` for `std::cmp::Ordering`.
     pub krate: Symbol,
 
+    /// Number of the crate that defines the item.
+    /// This can be different from `def_id.krate` if the item is re-exported.
+    pub krate_num: CrateNum,
+
     /// Configurable top-level namespace of the C++ bindings.
     /// For example, this would be `::foo` for `foo::bar::baz::qux`.
     pub cpp_top_level_ns: Rc<[Symbol]>,
@@ -64,7 +68,7 @@ pub struct FullyQualifiedName {
 }
 
 fn format_ns_path_for_cc(
-    db: &dyn BindingsGenerator<'_>,
+    db: &BindingsGenerator<'_>,
     ns: &NamespaceQualifier,
 ) -> Result<TokenStream> {
     let idents =
@@ -73,10 +77,43 @@ fn format_ns_path_for_cc(
 }
 
 impl FullyQualifiedName {
-    pub fn format_for_cc(&self, db: &dyn BindingsGenerator<'_>) -> Result<TokenStream> {
+    pub fn format_for_cc(&self, db: &BindingsGenerator<'_>) -> Result<TokenStream> {
         if let Some(path) = self.unqualified.cpp_type {
-            let path = format_cc_type_name(path.as_str())?;
-            return Ok(path);
+            // TODO(b/502939407): Until this bug is fixed and cpp_type comes pre-prefixed with `::`,
+            // we use this hack here to add the prefix on to generated code manually. This should
+            // typically be applied to all types, but because ffi_11 is special and maps to builtin
+            // types, we use a match expression to filter those out to avoid things like `::long`.
+            return match path.as_str() {
+                "decltype(char(0))"
+                | "signed char"
+                | "unsigned char"
+                | "short"
+                | "unsigned short"
+                | "int"
+                | "unsigned int"
+                | "long"
+                | "unsigned long"
+                | "long long"
+                | "unsigned long long"
+                | "decltype(long(0))"
+                | "decltype(nullptr)"
+                | "decltype(char8_t(0))"
+                | "decltype(char16_t(0))"
+                | "decltype(char32_t(0))"
+                | "decltype(wchar_t(0))"
+                | "wchar_t" => format_cc_type_name(path.as_str()),
+                path => {
+                    let (maybe_const_prefix, path) = if let Some(path) = path.strip_prefix("const ")
+                    {
+                        ("const ", path)
+                    } else {
+                        ("", path)
+                    };
+                    let (universal_qualifier, path) =
+                        if path.trim_start().starts_with("::") { ("", path) } else { ("::", path) };
+                    format_cc_type_name(&format!("{maybe_const_prefix}{universal_qualifier}{path}"))
+                }
+            };
         }
 
         let name = self.unqualified.cpp_name;
@@ -122,12 +159,34 @@ pub struct ExportedPath {
     /// True if any segment of this path is marked #[doc(hidden)] making it a less preferable path
     /// than any non-hidden path regardless of length.
     pub is_doc_hidden: bool,
+    /// True if this path is a reexport.
+    pub is_reexport: bool,
+    /// The crate that defines this path.
+    pub krate: CrateNum,
 }
 
-impl From<&ExportedPath> for NamespaceQualifier {
-    fn from(this: &ExportedPath) -> Self {
+// Checks for a list of known clang builtin macros and renames their namespaces to avoid
+// collisions. Generating a namespace with the same name as a macro causes the namespace to
+// expand during preprocessing, producing an ill-formed program.
+pub fn rename_clang_builtin_macros(ns: Rc<str>) -> Rc<str> {
+    if matches!(ns.as_ref(), "unix" | "linux" | "WIN32" | "WINNT" | "WIN64" | "spirv" | "sun") {
+        return Rc::from(format!("rs_{}", ns.as_ref()));
+    }
+    ns
+}
+
+impl ExportedPath {
+    pub fn to_namespace_qualifier(&self, db: &BindingsGenerator) -> NamespaceQualifier {
+        let features = db.crate_features(self.krate);
+        let use_leading_colons =
+            features.contains(crubit_feature::CrubitFeature::LeadingColonsForCppType);
         NamespaceQualifier::new(
-            this.path.iter().map(|s| Rc::<str>::from(s.as_str())).collect::<Vec<_>>(),
+            self.path
+                .iter()
+                .map(|s| Rc::<str>::from(s.as_str()))
+                .map(rename_clang_builtin_macros)
+                .collect::<Vec<_>>(),
+            use_leading_colons,
         )
     }
 }
@@ -144,6 +203,12 @@ impl Ord for ExportedPath {
             .then_with(|| match (self.type_alias_def_id, other.type_alias_def_id) {
                 (Some(_), None) => Ordering::Greater,
                 (None, Some(_)) => Ordering::Less,
+                _ => Ordering::Equal,
+            })
+            // Between two paths of the same length, prefer the one that is not a reexport.
+            .then_with(|| match (self.is_reexport, other.is_reexport) {
+                (true, false) => Ordering::Greater,
+                (false, true) => Ordering::Less,
                 _ => Ordering::Equal,
             })
             // Failing all else, choose the lexicographically smallest path.
@@ -184,6 +249,23 @@ impl PublicPaths {
         if let Err(index) = self.aliases.binary_search(&alias) {
             self.aliases.insert(index, alias);
         }
+    }
+
+    pub fn insert_aliases(&mut self, other: Self) {
+        let other_aliases = if other.canonical_path == self.canonical_path {
+            other.aliases
+        } else {
+            other.into_extern_aliases()
+        };
+        let self_aliases = std::mem::take(&mut self.aliases);
+        self.aliases = itertools::kmerge(vec![self_aliases, other_aliases]).collect();
+    }
+
+    pub fn merge(&mut self, mut other: Self) {
+        if self.canonical_path > other.canonical_path {
+            std::mem::swap(&mut self.canonical_path, &mut other.canonical_path);
+        }
+        self.insert_aliases(other);
     }
 
     pub fn canonical(&self) -> &ExportedPath {

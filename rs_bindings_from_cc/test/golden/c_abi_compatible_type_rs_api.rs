@@ -6,12 +6,13 @@
 // //rs_bindings_from_cc/test/golden:c_abi_compatible_type_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 // Type bindings for MyI8 suppressed due to being mapped to an existing Rust type (i8)
@@ -20,7 +21,7 @@
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=X
 pub struct X {
-    pub a: ::core::ffi::c_int,
+    pub a: ::ffi_11::c_int,
 }
 impl !Send for X {}
 impl !Sync for X {}
@@ -45,11 +46,15 @@ pub fn ffi(a: i8, mut b: crate::X) -> i8 {
     unsafe { crate::detail::__rust_thunk___Z3ffi4MyI81X(a, &mut b) }
 }
 
-pub type MyTypedefDecl = ::core::ffi::c_int;
+pub type MyTypedefDecl = ::ffi_11::c_int;
 
+/// # Safety
+///
+/// The caller must ensure that the following unsafe arguments are not misused by the function:
+/// * `b`: raw pointer
 #[inline(always)]
-pub unsafe fn f(a: crate::MyTypedefDecl, b: *mut ::core::ffi::c_void, c: ::core::ffi::c_int) {
-    crate::detail::__rust_thunk___Z1fiPvi(a, b, c)
+pub unsafe fn f(a: crate::MyTypedefDecl, b: *mut ::ffi_11::c_void, c: ::ffi_11::c_int) {
+    unsafe { crate::detail::__rust_thunk___Z1fiPvi(a, b, c) }
 }
 
 mod detail {
@@ -60,8 +65,8 @@ mod detail {
         pub(crate) unsafe fn __rust_thunk___Z3ffi4MyI81X(a: i8, b: &mut crate::X) -> i8;
         pub(crate) unsafe fn __rust_thunk___Z1fiPvi(
             a: crate::MyTypedefDecl,
-            b: *mut ::core::ffi::c_void,
-            c: ::core::ffi::c_int,
+            b: *mut ::ffi_11::c_void,
+            c: ::ffi_11::c_int,
         );
     }
 }

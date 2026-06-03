@@ -4,25 +4,28 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/templates/type_alias_access_rule:type_alias_access_rule
-// Features: custom_ffi_types, experimental, non_unpin_ctor, std_unique_ptr, std_vector, supported, wrapper
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
-// Generated from: rs_bindings_from_cc/test/templates/type_alias_access_rule/type_alias_access_rule.h;l=10
-// Error while generating bindings for class 'A':
-// Class templates are not supported yet
+// error: class `A` could not be bound
+//   Class templates are not yet supported
 
-/// Generated from: rs_bindings_from_cc/test/templates/type_alias_access_rule/type_alias_access_rule.h;l=13
+/// # Safety
+///
+/// To call a function that accepts this type, you must uphold these requirements:
+/// * Document why the following public unsafe fields of this type cannot be misused by callee:
+///   * `a_`: Rust type is unknown; safety requirements cannot be automatically generated: Unsupported type 'A<B::PrivateMember>': Failed to create bindings for template specialization type A<PrivateMember>: Type 'struct B::PrivateMember' uses non-public declaration 'B::PrivateMember', which cannot be spelled in C++ by generated code.
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
-///CRUBIT_ANNOTATE: cpp_type=B
+///CRUBIT_ANNOTATE: cpp_type=:: B
 pub struct B {
     /// Reason for representing this field as a blob of bytes:
     /// Unsupported type 'A<B::PrivateMember>': Failed to create bindings for template specialization type A<PrivateMember>: Type 'struct B::PrivateMember' uses non-public declaration 'B::PrivateMember', which cannot be spelled in C++ by generated code.
@@ -31,12 +34,11 @@ pub struct B {
 impl !Send for B {}
 impl !Sync for B {}
 unsafe impl ::cxx::ExternType for B {
-    type Id = ::cxx::type_id!("B");
+    type Id = ::cxx::type_id!(":: B");
     type Kind = ::cxx::kind::Trivial;
 }
-forward_declare::unsafe_define!(forward_declare::symbol!("B"), crate::B);
+forward_declare::unsafe_define!(forward_declare::symbol!(":: B"), crate::B);
 
-/// Generated from: rs_bindings_from_cc/test/templates/type_alias_access_rule/type_alias_access_rule.h;l=13
 impl Default for B {
     #[inline(always)]
     fn default() -> Self {
@@ -48,9 +50,8 @@ impl Default for B {
     }
 }
 
-// Generated from: rs_bindings_from_cc/test/templates/type_alias_access_rule/type_alias_access_rule.h;l=10
-// Error while generating bindings for class 'A':
-// Type 'struct B::PrivateMember' uses non-public declaration 'B::PrivateMember', which cannot be spelled in C++ by generated code.
+// error: class `A` could not be bound
+//   Type 'struct B::PrivateMember' uses non-public declaration 'B::PrivateMember', which cannot be spelled in C++ by generated code.
 
 mod detail {
     #[allow(unused_imports)]

@@ -13,7 +13,6 @@
 #include <utility>
 
 #include "absl/base/nullability.h"
-#include "absl/log/check.h"
 #include "nullability/forwarding_functions.h"
 #include "nullability/pointer_nullability.h"
 #include "nullability/pointer_nullability_analysis.h"
@@ -59,6 +58,7 @@
 #include "llvm/Support/Debug.h"
 #include "llvm/Support/Errc.h"
 #include "llvm/Support/Error.h"
+#include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/raw_ostream.h"
 
 #define DEBUG_TYPE "nullability-diagnostic"
@@ -177,6 +177,30 @@ static const Expr* absl_nullable matchesNonConstCallNullCheck(
                           DynTypedNode::create(*ParentFunction), Ctx));
 }
 
+// Determines if the pointer expression appears inside a lambda via a lambda
+// capture. Handles cases like:
+// - `*p` and `p->x`, where `p` is a captured pointer variable
+// - `*o.p`, where `o` is a captured object with a pointer member `p`
+// Currently does not handle the cases:
+// - `*this->p` and `*p`, where `p` is a pointer member of the enclosing class
+//   and `this` is captured in the lambda.
+static bool isCapturedVariableOrMemberAccess(const Expr* absl_nonnull E) {
+  E = E->IgnoreParenImpCasts();
+
+  // Cases like `*p` and `p->x`, where `p` is captured in the lambda.
+  if (const DeclRefExpr* Variable = dyn_cast<DeclRefExpr>(E))
+    return Variable->refersToEnclosingVariableOrCapture();
+
+  // Cases like `*o.p`, where `o` is an object captured in the lambda.
+  if (const MemberExpr* MemberAccess = dyn_cast<MemberExpr>(E)) {
+    const Expr* Base = MemberAccess->getBase();
+    if (const DeclRefExpr* BaseVariable = dyn_cast<DeclRefExpr>(Base))
+      return BaseVariable->refersToEnclosingVariableOrCapture();
+  }
+
+  return false;
+}
+
 // Diagnoses whether `E` violates the expectation that it is nonnull.
 static SmallVector<PointerNullabilityDiagnostic> diagnoseNonnullExpected(
     const Expr* absl_nonnull E, const Environment& Env, ASTContext& Ctx,
@@ -207,8 +231,7 @@ static SmallVector<PointerNullabilityDiagnostic> diagnoseNonnullExpected(
     Range = CharSourceRange::getTokenRange(E->getSourceRange());
 
   if (const Expr* NullCheck =
-          matchesNonConstCallNullCheck(*E, Ctx, Env.getCurrentFunc());
-      NullCheck != nullptr) {
+          matchesNonConstCallNullCheck(*E, Ctx, Env.getCurrentFunc()))
     return {{
         .Code = PointerNullabilityDiagnostic::ErrorCode::
             ExpectedNonnullWithCheckOnNonConstCall,
@@ -225,12 +248,27 @@ static SmallVector<PointerNullabilityDiagnostic> diagnoseNonnullExpected(
             "that. Or, mark the method as const (if possible, and if it has "
             "zero params).",
     }};
-  }
+
+  Range = getRangeModuloMacros(Range, Ctx);
+
+  if (isCapturedVariableOrMemberAccess(E))
+    return {
+        {.Code = PointerNullabilityDiagnostic::ErrorCode::ExpectedNonnull,
+         .Ctx = DiagCtx,
+         .Range = Range,
+         .Callee = Callee,
+         .ParamName = ParamName,
+         .NoteRange = Range,
+         .NoteMessage =
+             "This pointer is captured and dereferenced in a lambda. If it is "
+             "null-checked outside the lambda, consider capturing the pointee "
+             "by value or reference (possibly with an init-capture). Otherwise "
+             "do a null check inside the lambda body to ensure null safety."}};
 
   return {{
       .Code = PointerNullabilityDiagnostic::ErrorCode::ExpectedNonnull,
       .Ctx = DiagCtx,
-      .Range = getRangeModuloMacros(Range, Ctx),
+      .Range = Range,
       .Callee = Callee,
       .ParamName = ParamName,
   }};
@@ -459,10 +497,14 @@ static SmallVector<PointerNullabilityDiagnostic> diagnoseArgumentCompatibility(
   auto ParamTypes = CalleeFPT.getParamTypes();
   // C-style varargs cannot be annotated and therefore are unchecked.
   if (CalleeFPT.isVariadic()) {
-    CHECK_GE(Args.size(), ParamTypes.size());
+    if (Args.size() < ParamTypes.size())
+      llvm::reportFatalInternalError(
+          "Callee prototype is variadic, but we see fewer args than params.");
     Args = Args.take_front(ParamTypes.size());
   }
-  CHECK_EQ(ParamTypes.size(), Args.size());
+  if (ParamTypes.size() != Args.size())
+    llvm::reportFatalInternalError(
+        "Mismatch between number of params and args");
   SmallVector<PointerNullabilityDiagnostic> Diagnostics;
   for (unsigned int I = 0; I < Args.size(); ++I) {
     unsigned Len = countPointersInType(ParamTypes[I]);
@@ -654,7 +696,10 @@ diagnoseMakeUniqueConstructExpr(
                       ConstructorArgs.end());
     for (unsigned I = MakeUniqueCall->getNumArgs();
          I < CEInMakeUnique->getNumArgs(); ++I) {
-      CHECK(CEInMakeUnique->getArg(I)->isDefaultArgument());
+      if (!CEInMakeUnique->getArg(I)->isDefaultArgument())
+        llvm::reportFatalInternalError(
+            "ConstructExpr's extra arguments (vs make_unique) are not default "
+            "arguments");
       CopyOfArgs.push_back(CEInMakeUnique->getArg(I));
     }
     ConstructorArgs = CopyOfArgs;
@@ -795,7 +840,7 @@ static SmallVector<PointerNullabilityDiagnostic> diagnoseReturn(
   if (!RS->getRetValue()) return {};
 
   auto* Function = State.Env.getCurrentFunc();
-  CHECK(Function);
+  assert(Function);
   auto FunctionNullability =
       getTypeNullability(*Function, State.Lattice.defaults());
   auto ReturnTypeNullability =
@@ -816,8 +861,8 @@ static SmallVector<PointerNullabilityDiagnostic> diagnoseReturn(
 static SmallVector<PointerNullabilityDiagnostic> diagnoseMemberInitializer(
     const CXXCtorInitializer* absl_nonnull CI,
     const MatchFinder::MatchResult& Result, const DiagTransferState& State) {
-  CHECK(CI->isAnyMemberInitializer());
-  const FieldDecl& Member = *CI->getAnyMember();
+  const FieldDecl* Member = CI->getAnyMember();
+  assert(Member != nullptr);
 
   // Ignore default initialization and use of a default member initializer.
   if (!CI->isWritten()) {
@@ -825,7 +870,7 @@ static SmallVector<PointerNullabilityDiagnostic> diagnoseMemberInitializer(
   }
 
   return diagnoseAssignmentLike(
-      Member.getType(), getTypeNullability(Member, State.Lattice.defaults()),
+      Member->getType(), getTypeNullability(*Member, State.Lattice.defaults()),
       CI->getInit(), State, *Result.Context,
       PointerNullabilityDiagnostic::Context::Initializer);
 }
@@ -1059,7 +1104,9 @@ static void checkAnnotationsConsistent(
   if (Func != nullptr) {
     const auto* FuncCanonical = cast<FunctionDecl>(CanonicalDecl);
     unsigned int NumParams = Func->getNumParams();
-    CHECK(NumParams <= FuncCanonical->getNumParams());
+    if (NumParams > FuncCanonical->getNumParams())
+      llvm::reportFatalInternalError(
+          "Function decl has more parameters than its canonical declaration.");
     for (unsigned int I = 0; I < NumParams; ++I) {
       const auto* Parm = Func->getParamDecl(I);
       const auto* ParmCanonical = FuncCanonical->getParamDecl(I);
@@ -1121,7 +1168,7 @@ static void checkNonnullPointerMemberDefaultInitializer(
   // converting constructors. `isNullPointerConstant` handles most wrapper nodes
   // but does not handle constructors (`CXXConstructExpr`), so we use
   // `getSubExprAsWritten()` for that case.
-  // TODO: b/376638797 - Warn on nullable expressions other than null pointer
+  // TODO: b/475944638 - Warn on nullable expressions other than null pointer
   // constants in default member initializers.
   if (const CastExpr* SubExpr = dyn_cast<CastExpr>(Initializer)) {
     Initializer = SubExpr->getSubExprAsWritten();

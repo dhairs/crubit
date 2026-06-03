@@ -4,15 +4,15 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/namespace/inline:inline
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 pub mod foo {
@@ -22,12 +22,11 @@ pub mod foo {
     // but without `inline namespace /*...*/`, just with `namespace inline1`.
 
     pub mod inline1 {
-        /// Generated from: rs_bindings_from_cc/test/namespace/inline/inline.h;l=11
         #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
         #[repr(C)]
         ///CRUBIT_ANNOTATE: cpp_type=foo :: inline1 :: MyStruct
         pub struct MyStruct {
-            pub value: ::core::ffi::c_int,
+            pub value: ::ffi_11::c_int,
         }
         impl !Send for MyStruct {}
         impl !Sync for MyStruct {}
@@ -36,7 +35,6 @@ pub mod foo {
             type Kind = ::cxx::kind::Trivial;
         }
 
-        /// Generated from: rs_bindings_from_cc/test/namespace/inline/inline.h;l=11
         impl Default for MyStruct {
             #[inline(always)]
             fn default() -> Self {
@@ -50,36 +48,48 @@ pub mod foo {
             }
         }
 
-        /// Generated from: rs_bindings_from_cc/test/namespace/inline/inline.h;l=15
+        /// # Safety
+        ///
+        /// The caller must ensure that the following unsafe arguments are not misused by the function:
+        /// * `s`: raw pointer
         #[inline(always)]
-        pub unsafe fn GetStructValue1(
-            s: *const crate::foo::inline1::MyStruct,
-        ) -> ::core::ffi::c_int {
-            crate::detail::__rust_thunk___ZN3foo7inline115GetStructValue1EPKNS0_8MyStructE(s)
+        pub unsafe fn GetStructValue1(s: *const crate::foo::inline1::MyStruct) -> ::ffi_11::c_int {
+            unsafe {
+                crate::detail::__rust_thunk___ZN3foo7inline115GetStructValue1EPKNS0_8MyStructE(s)
+            }
         }
 
-        /// Generated from: rs_bindings_from_cc/test/namespace/inline/inline.h;l=17
+        /// # Safety
+        ///
+        /// The caller must ensure that the following unsafe arguments are not misused by the function:
+        /// * `s`: raw pointer
         #[inline(always)]
-        pub unsafe fn GetStructValue2(
-            s: *const crate::foo::inline1::MyStruct,
-        ) -> ::core::ffi::c_int {
-            crate::detail::__rust_thunk___ZN3foo7inline115GetStructValue2EPKNS0_8MyStructE(s)
+        pub unsafe fn GetStructValue2(s: *const crate::foo::inline1::MyStruct) -> ::ffi_11::c_int {
+            unsafe {
+                crate::detail::__rust_thunk___ZN3foo7inline115GetStructValue2EPKNS0_8MyStructE(s)
+            }
         }
 
-        /// Generated from: rs_bindings_from_cc/test/namespace/inline/inline.h;l=26
+        /// # Safety
+        ///
+        /// The caller must ensure that the following unsafe arguments are not misused by the function:
+        /// * `s`: raw pointer
         #[inline(always)]
-        pub unsafe fn GetStructValue3(
-            s: *const crate::foo::inline1::MyStruct,
-        ) -> ::core::ffi::c_int {
-            crate::detail::__rust_thunk___ZN3foo7inline115GetStructValue3EPKNS0_8MyStructE(s)
+        pub unsafe fn GetStructValue3(s: *const crate::foo::inline1::MyStruct) -> ::ffi_11::c_int {
+            unsafe {
+                crate::detail::__rust_thunk___ZN3foo7inline115GetStructValue3EPKNS0_8MyStructE(s)
+            }
         }
 
-        /// Generated from: rs_bindings_from_cc/test/namespace/inline/inline.h;l=27
+        /// # Safety
+        ///
+        /// The caller must ensure that the following unsafe arguments are not misused by the function:
+        /// * `s`: raw pointer
         #[inline(always)]
-        pub unsafe fn GetStructValue4(
-            s: *const crate::foo::inline1::MyStruct,
-        ) -> ::core::ffi::c_int {
-            crate::detail::__rust_thunk___ZN3foo7inline115GetStructValue4EPKNS0_8MyStructE(s)
+        pub unsafe fn GetStructValue4(s: *const crate::foo::inline1::MyStruct) -> ::ffi_11::c_int {
+            unsafe {
+                crate::detail::__rust_thunk___ZN3foo7inline115GetStructValue4EPKNS0_8MyStructE(s)
+            }
         }
     }
     #[allow(unused_imports)]
@@ -99,16 +109,16 @@ mod detail {
         );
         pub(crate) unsafe fn __rust_thunk___ZN3foo7inline115GetStructValue1EPKNS0_8MyStructE(
             s: *const crate::foo::inline1::MyStruct,
-        ) -> ::core::ffi::c_int;
+        ) -> ::ffi_11::c_int;
         pub(crate) unsafe fn __rust_thunk___ZN3foo7inline115GetStructValue2EPKNS0_8MyStructE(
             s: *const crate::foo::inline1::MyStruct,
-        ) -> ::core::ffi::c_int;
+        ) -> ::ffi_11::c_int;
         pub(crate) unsafe fn __rust_thunk___ZN3foo7inline115GetStructValue3EPKNS0_8MyStructE(
             s: *const crate::foo::inline1::MyStruct,
-        ) -> ::core::ffi::c_int;
+        ) -> ::ffi_11::c_int;
         pub(crate) unsafe fn __rust_thunk___ZN3foo7inline115GetStructValue4EPKNS0_8MyStructE(
             s: *const crate::foo::inline1::MyStruct,
-        ) -> ::core::ffi::c_int;
+        ) -> ::ffi_11::c_int;
     }
 }
 

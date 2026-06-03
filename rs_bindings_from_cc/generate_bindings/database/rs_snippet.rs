@@ -6,20 +6,21 @@
 
 use crate::code_snippet::{Feature, Visibility};
 use crate::BindingsGenerator;
-use arc_anyhow::Result;
-use code_gen_utils::make_rs_ident;
+use arc_anyhow::{anyhow, Result};
 use code_gen_utils::NamespaceQualifier;
-use crubit_abi_type::FullyQualifiedPath;
+use code_gen_utils::{make_rs_ident, make_rs_lifetime_ident};
 use crubit_feature::CrubitFeature;
-use error_report::{anyhow, bail, ensure};
+use error_report::{bail, ensure};
 use flagset::FlagSet;
 use ir::*;
-use itertools::Itertools;
-use proc_macro2::{Ident, TokenStream};
-use quote::{quote, ToTokens};
+use proc_macro2::{Delimiter, Group, Ident, TokenStream, TokenTree};
+use quote::{format_ident, quote, ToTokens};
 use std::collections::HashSet;
+use std::fmt::{Display, Formatter};
 use std::rc::Rc;
 use token_stream_printer::write_unformatted_tokens;
+
+use std::ops::Deref;
 
 const SLICE_REF_NAME_RS: &str = "&[]";
 
@@ -64,6 +65,22 @@ impl Mutability {
             Mutability::Mut => quote! {mut},
             Mutability::Const => quote! {},
         }
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Hash)]
+pub struct UnsafeReason(pub Rc<str>);
+
+impl Display for UnsafeReason {
+    fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
+        Display::fmt(&self.0, f)
+    }
+}
+
+impl Deref for UnsafeReason {
+    type Target = str;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
@@ -115,7 +132,7 @@ impl Lifetime {
 impl ToTokens for Lifetime {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let Self(name) = self;
-        let lifetime = syn::Lifetime::new(&format!("'{name}"), proc_macro2::Span::call_site());
+        let lifetime = make_rs_lifetime_ident(name);
         lifetime.to_tokens(tokens);
     }
 }
@@ -136,24 +153,11 @@ impl CratePath {
         namespace_qualifier: NamespaceQualifier,
         crate_ident: Option<Ident>,
     ) -> CratePath {
-        let crate_root_path = NamespaceQualifier::new(ir.crate_root_path());
+        let use_leading_colons = ir
+            .target_crubit_features(ir.current_target())
+            .contains(CrubitFeature::LeadingColonsForCppType);
+        let crate_root_path = NamespaceQualifier::new(ir.crate_root_path(), use_leading_colons);
         CratePath { crate_ident, crate_root_path, namespace_qualifier }
-    }
-
-    pub fn to_fully_qualified_path(&self, item: Ident) -> FullyQualifiedPath {
-        let crate_ident = self
-            .crate_ident
-            .as_ref()
-            .cloned()
-            .unwrap_or_else(|| Ident::new("crate", proc_macro2::Span::call_site()));
-        FullyQualifiedPath {
-            start_with_colon2: self.crate_ident.is_some(),
-            parts: std::iter::once(crate_ident)
-                .chain(self.crate_root_path.parts_with_snake_case_record_names())
-                .chain(self.namespace_qualifier.parts_with_snake_case_record_names())
-                .chain(std::iter::once(item))
-                .collect(),
-        }
     }
 }
 
@@ -171,20 +175,35 @@ impl ToTokens for CratePath {
 
 pub fn unique_lifetimes<'a>(
     types: impl IntoIterator<Item = &'a RsTypeKind> + 'a,
-) -> impl Iterator<Item = Lifetime> + 'a {
+    assumed_inputs: &Vec<Rc<str>>,
+) -> Vec<Lifetime> {
     let mut unordered_lifetimes = HashSet::new();
-    types
+    let mut saved_assumed_inputs: Vec<Lifetime> = Vec::new();
+    for lt in assumed_inputs {
+        let rs_lt = Lifetime::new(lt);
+        if unordered_lifetimes.insert(rs_lt.clone()) {
+            saved_assumed_inputs.push(rs_lt);
+        }
+    }
+    let mut all_lifetimes: Vec<Lifetime> = types
         .into_iter()
         .flat_map(|ty| ty.lifetimes())
-        .filter(|lifetime| !lifetime.is_elided())
         .filter(move |lifetime| unordered_lifetimes.insert(lifetime.clone()))
+        .chain(saved_assumed_inputs)
+        .collect();
+    all_lifetimes.sort_by(|a, b| a.0.cmp(&b.0));
+    all_lifetimes
 }
 
 pub fn format_generic_params<'a, T: ToTokens>(
     lifetimes: impl IntoIterator<Item = &'a Lifetime>,
     types: impl IntoIterator<Item = T>,
 ) -> TokenStream {
-    let mut lifetimes = lifetimes.into_iter().filter(|lifetime| &*lifetime.0 != "_").peekable();
+    // It is never valid to capture 'static as a lifetime parameter.
+    let mut lifetimes = lifetimes
+        .into_iter()
+        .filter(|lifetime| &*lifetime.0 != "_" && &*lifetime.0 != "static")
+        .peekable();
     let mut types = types.into_iter().peekable();
     if types.peek().is_none() {
         if lifetimes.peek().is_none() {
@@ -199,14 +218,14 @@ pub fn format_generic_params<'a, T: ToTokens>(
     }
 }
 
-pub fn format_generic_params_replacing_by_self<'a>(
-    db: &dyn BindingsGenerator,
+pub fn format_generic_params_replacing_by_self<'db, 'a>(
+    db: impl Deref<Target = BindingsGenerator<'db>> + Copy,
     types: impl IntoIterator<Item = &'a RsTypeKind>,
-    trait_record: Option<&Record>,
+    trait_type: Option<&RsTypeKind>,
 ) -> TokenStream {
     format_generic_params(
         [],
-        types.into_iter().map(|ty| ty.to_token_stream_replacing_by_self(db, trait_record)),
+        types.into_iter().map(|ty| ty.to_token_stream_replacing_by_self(db, trait_type)),
     )
 }
 
@@ -217,6 +236,11 @@ pub fn format_generic_params_replacing_by_self<'a>(
 // Otherwise, these functions should be moved into a separate module.
 
 pub fn should_derive_clone(record: &Record) -> bool {
+    // Thread-safe types wrap their fields in UnsafeCell<[MaybeUninit<u8>; N]>,
+    // which prevents them from deriving Clone.
+    if record.is_thread_safe {
+        return false;
+    }
     match record.trait_derives.clone {
         TraitImplPolarity::Positive => true,
         TraitImplPolarity::Negative => false,
@@ -252,7 +276,15 @@ pub struct LifetimeOptions {
     /// Are there any reference parameters to the function whose return type we are interested in?
     pub have_reference_param: bool,
 
+    /// Is the type we're lowering part of a type in return position?
     pub is_return_type: bool,
+
+    /// If true, assumed lifetimes are used. The item in question is expected to have undergone
+    /// lifetime_defaults_transform.
+    pub assume_lifetimes: bool,
+
+    /// Is the type we're lowering part of the type of an operator function?
+    pub is_operator: bool,
 }
 
 /// A type with template type arguments that has a uniform representation regardless of `T` and
@@ -261,17 +293,36 @@ pub struct LifetimeOptions {
 pub enum UniformReprTemplateType {
     /// std::vector<T, std::allocator<T>>
     StdVector {
+        // No lifetime: owned by the vector
         element_type: RsTypeKind,
     },
     /// std::unique_ptr<T, std::default_delete<T>>
     StdUniquePtr {
+        // No lifetime here: owned by the unique_ptr
         element_type: RsTypeKind,
     },
     AbslSpan {
         is_const: bool,
         include_lifetime: bool,
         element_type: RsTypeKind,
+        // The lifetime for the span, if assumed lifetimes are turned on.
+        lifetime: Option<Lifetime>,
     },
+    /// cc_std::string_view<'a>
+    StdStringView { in_cc_std: bool, lifetime: Lifetime },
+}
+
+fn choose_one_type(t: &CcType, ts: &Option<Rc<[CcType]>>) -> Result<CcType> {
+    match ts {
+        Some(ts) => {
+            if ts.len() == 1 {
+                Ok(ts[0].clone())
+            } else {
+                Err(anyhow!("Internal error: overriding template arguments with wrong arity"))
+            }
+        }
+        None => Ok(t.clone()),
+    }
 }
 
 impl UniformReprTemplateType {
@@ -280,20 +331,23 @@ impl UniformReprTemplateType {
     /// Returns none if the template specialization is not for a known type corresponding with
     /// one of `UniformReprTemplateType`s variants.
     fn new(
-        db: &dyn BindingsGenerator,
+        db: &BindingsGenerator,
         template_specialization_kind: Option<&TemplateSpecializationKind>,
-        is_return_type: bool,
+        options: &LifetimeOptions,
+        template_args: &Option<Rc<[CcType]>>,
+        lifetimes: &[Lifetime],
+        in_cc_std: bool,
     ) -> Result<Option<Rc<Self>>> {
-        let type_arg = |template_arg: &TemplateArg| -> Result<RsTypeKind> {
-            let arg_type = match &template_arg.type_ {
-                Ok(arg_type) => arg_type.clone(),
-                Err(e) => bail!("{e}"),
-            };
+        let type_arg = |template_arg: &CcType| -> Result<RsTypeKind> {
             // Importantly, `is_return_type` is not propagated through inner types.
-            let arg_type_kind = db.rs_type_kind(arg_type)?;
+            let arg_type_kind = db.rs_type_kind_with_lifetime_elision(
+                template_arg.clone(),
+                LifetimeOptions { is_return_type: false, ..*options },
+            )?;
             ensure!(
                 !arg_type_kind.is_bridge_type(),
-                "Bridge types cannot be used as template arguments"
+                "`{}` cannot be used as a template argument because it is a bridged type\nSee crubit.rs/types.",
+                arg_type_kind.display(db),
             );
             // We don't do this in required_crubit_features() because it doesn't know which
             // template arguments actually need to be free of errors. (For example,
@@ -304,18 +358,23 @@ impl UniformReprTemplateType {
             Ok(arg_type_kind)
         };
         match template_specialization_kind {
-            Some(TemplateSpecializationKind::StdUniquePtr { element_type }) => {
-                let element_type = type_arg(element_type)?;
-                ensure!(element_type.is_complete(), "Rust std::unique_ptr<T> cannot be used with incomplete types, and `{}` is incomplete", element_type.display(db));
-                ensure!(element_type.is_destructible(), "Rust std::unique_ptr<T> requires that `T` be destructible, but the destructor of `{}` is non-public or deleted", element_type.display(db));
-                if element_type.overloads_operator_delete() {
-                    return Ok(None);
-                }
+            Some(TemplateSpecializationKind::StdUniquePtr { raw_element_type }) => {
+                let element_type = choose_one_type(raw_element_type, template_args)?;
+                let element_type = type_arg(&element_type)?;
+                ensure!(element_type.is_complete(),
+                    "`{}` can't be used in a Rust std::unique_ptr<T> because it is an incomplete type",
+                    element_type.display(db));
+                ensure!(element_type.is_destructible(),
+                    "`{}` can't be used in a Rust std::unique_ptr<T> because it has a deleted or non-public destructor",
+                    element_type.display(db));
                 Ok(Some(Rc::new(UniformReprTemplateType::StdUniquePtr { element_type })))
             }
-            Some(TemplateSpecializationKind::StdVector { element_type }) => {
-                let element_type = type_arg(element_type)?;
-                ensure!(element_type.is_destructible(), "Rust std::vector<T> requires that `T` be destructible, but the destructor of `{}` is non-public or deleted", element_type.display(db));
+            Some(TemplateSpecializationKind::StdVector { raw_element_type }) => {
+                let element_type = choose_one_type(raw_element_type, template_args)?;
+                let element_type = type_arg(&element_type)?;
+                ensure!(element_type.is_destructible(),
+                    "`{}` can't be used in a Rust std::vector<T> becuase it has a deleted or non-public destructor",
+                    element_type.display(db));
                 if element_type.overloads_operator_delete() {
                     return Ok(None);
                 }
@@ -325,13 +384,13 @@ impl UniformReprTemplateType {
                 }
                 Ok(Some(Rc::new(UniformReprTemplateType::StdVector { element_type })))
             }
-            Some(TemplateSpecializationKind::AbslSpan { element_type }) => {
-                let element_type_kind = type_arg(element_type)?;
-                let is_const = element_type
-                    .type_
-                    .as_ref()
-                    .expect("should be okay because type_arg succeeded")
-                    .is_const;
+            Some(TemplateSpecializationKind::AbslSpan { raw_element_type }) => {
+                let element_type = choose_one_type(raw_element_type, template_args)?;
+                let element_type_kind = type_arg(&element_type)?;
+                let is_const = element_type.is_const;
+                if lifetimes.len() > 1 {
+                    bail!("Internal error: span was given too many lifetimes.")
+                }
                 Ok(Some(Rc::new(UniformReprTemplateType::AbslSpan {
                     is_const,
 
@@ -340,8 +399,15 @@ impl UniformReprTemplateType {
                     //
                     // Spans returned by a C++ function have an unclear lifetime, and so must be
                     // returned as a raw span.
-                    include_lifetime: !is_return_type,
+                    include_lifetime: !options.is_return_type,
                     element_type: element_type_kind,
+                    lifetime: if lifetimes.is_empty() { None } else { Some(lifetimes[0].clone()) },
+                })))
+            }
+            Some(TemplateSpecializationKind::StdStringView) if lifetimes.len() == 1 => {
+                Ok(Some(Rc::new(UniformReprTemplateType::StdStringView {
+                    in_cc_std,
+                    lifetime: lifetimes[0].clone(),
                 })))
             }
             Some(
@@ -354,7 +420,7 @@ impl UniformReprTemplateType {
         }
     }
 
-    fn to_token_stream(&self, db: &dyn BindingsGenerator) -> TokenStream {
+    pub fn to_token_stream(&self, db: &BindingsGenerator) -> TokenStream {
         match self {
             Self::StdVector { element_type } => {
                 let element_type_tokens = element_type.to_token_stream(db);
@@ -362,21 +428,49 @@ impl UniformReprTemplateType {
             }
             Self::StdUniquePtr { element_type } => {
                 let element_type_tokens = element_type.to_token_stream(db);
-                quote! { ::cc_std::std::unique_ptr::<#element_type_tokens> }
+                if element_type.overloads_operator_delete() {
+                    quote! { ::cc_std::std::virtual_unique_ptr::<#element_type_tokens> }
+                } else {
+                    quote! { ::cc_std::std::unique_ptr::<#element_type_tokens> }
+                }
             }
-            Self::AbslSpan { is_const, include_lifetime, element_type } => {
+            Self::AbslSpan { is_const, include_lifetime, element_type, lifetime } => {
                 let element_type_tokens = element_type.to_token_stream(db);
 
                 // Use Span when we have a lifetime parameter, and RawSpan otherwise.
                 //
                 // See http://<internal link>.
-                match (*is_const, *include_lifetime) {
-                    (true, true) => quote! { ::span::absl::Span<'_, #element_type_tokens> },
-                    (false, true) => quote! { ::span::absl::SpanMut<'_, #element_type_tokens> },
-                    (true, false) => quote! { ::span::absl::RawSpan<#element_type_tokens> },
-                    (false, false) => quote! { ::span::absl::RawSpanMut<#element_type_tokens> },
+                match (*is_const, *include_lifetime, lifetime) {
+                    (true, _, Some(lifetime)) => {
+                        quote! { ::span::absl::Span<#lifetime, #element_type_tokens> }
+                    }
+                    (false, _, Some(lifetime)) => {
+                        quote! { ::span::absl::SpanMut<#lifetime, #element_type_tokens> }
+                    }
+                    (true, true, _) => quote! { ::span::absl::Span<'_, #element_type_tokens> },
+                    (false, true, _) => quote! { ::span::absl::SpanMut<'_, #element_type_tokens> },
+                    (true, false, _) => quote! { ::span::absl::RawSpan<#element_type_tokens> },
+                    (false, false, _) => quote! { ::span::absl::RawSpanMut<#element_type_tokens> },
                 }
             }
+            Self::StdStringView { in_cc_std, lifetime } => {
+                // nb: shows up when we don't use a type alias
+                if *in_cc_std {
+                    quote! { crate::std::string_view<#lifetime> }
+                } else {
+                    quote! { ::cc_std::std::string_view<#lifetime> }
+                }
+            }
+        }
+    }
+
+    pub fn lifetime(&self) -> Option<Lifetime> {
+        match self {
+            Self::StdVector { .. } => None,
+            Self::StdUniquePtr { .. } => None,
+            Self::AbslSpan { include_lifetime: true, .. } => Some(Lifetime::elided()),
+            Self::AbslSpan { include_lifetime: false, .. } => None,
+            Self::StdStringView { lifetime, .. } => Some(lifetime.clone()),
         }
     }
 }
@@ -410,6 +504,7 @@ pub enum RsTypeKind {
         referent: Rc<RsTypeKind>,
         mutability: Mutability,
         lifetime: Lifetime,
+        is_cref: bool,
     },
     RvalueReference {
         referent: Rc<RsTypeKind>,
@@ -434,6 +529,7 @@ pub enum RsTypeKind {
         /// If this record is an instantiation of a `UniformReprTemplateType`, this will be set.
         uniform_repr_template_type: Option<Rc<UniformReprTemplateType>>,
         owned_ptr_type: Option<Rc<str>>,
+        lifetimes: Vec<Lifetime>,
     },
     Enum {
         enum_: Rc<Enum>,
@@ -443,6 +539,7 @@ pub enum RsTypeKind {
         type_alias: Rc<TypeAlias>,
         underlying_type: Rc<RsTypeKind>,
         crate_path: Rc<CratePath>,
+        lifetimes: Vec<Lifetime>,
     },
     Primitive(Primitive),
     /// Types that require custom logic to translate.
@@ -454,50 +551,95 @@ pub enum RsTypeKind {
     /// This variant comes from the `CRUBIT_INTERNAL_RUST_TYPE` attribute macro in C++,
     /// which is used on types like `SliceRef`, `StrRef`, and C++ types generated from Rust
     /// types by cc_bindings_from_rs.
-    ExistingRustType(Rc<ExistingRustType>),
-    /// c9::Co<T>
-    C9Co {
-        have_reference_param: bool,
-        result_type: Rc<RsTypeKind>,
-        original_type: Rc<Record>,
+    ExistingRustType {
+        existing_rust_type: Rc<ExistingRustType>,
+        /// How the Rust type should be spelled, after interpolating template arguments.
+        /// This is the stringified TokenStream because TokenStream is not PartialEq + Eq + Hash.
+        rust_type: Rc<str>,
     },
 }
 
-fn new_c9_co_record(
-    have_reference_param: bool,
-    record: Rc<Record>,
-    db: &dyn BindingsGenerator,
-) -> Result<Option<RsTypeKind>> {
-    let Some(TemplateSpecialization {
-        kind: TemplateSpecializationKind::C9Co { element_type },
-        ..
-    }) = record.template_specialization.as_ref()
-    else {
-        return Ok(None);
-    };
-    let arg_type = element_type
-        .type_
-        .as_ref()
-        .map_err(|e: &String| anyhow!("c9::Co T argument is not Crubit compatible: {e}"))?
-        .clone();
-    let arg_type_kind = db.rs_type_kind(arg_type)?;
-    if let RsTypeKind::Error { error, .. } = arg_type_kind {
-        return Err(error);
-    };
-    Ok(Some(RsTypeKind::C9Co {
-        have_reference_param,
-        result_type: Rc::new(arg_type_kind),
-        original_type: record,
-    }))
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum BackingType {
+    DynCallable,
+    AnyInvocable {
+        /// The name of an extern "C" function that knows how to invoke this AnyInvocable.
+        /// It is declared in Rust and defined in C++. It has the signature
+        /// `extern "C" fn(*mut RawAnyInvocable, ...) -> ...`
+        invoke_any_invocable_ident: Ident,
+    },
+}
+
+/// Information about how the owned function object may be called.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum FnTrait {
+    /// A function object that may be called in any context, any number of times.
+    Fn,
+
+    /// A function object that requires mutable access in order to invoke, and may be called any
+    /// number of times.
+    FnMut,
+
+    /// A function object that may be called at most once.
+    FnOnce,
+}
+
+impl ToTokens for FnTrait {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self {
+            FnTrait::Fn => quote! { ::core::ops::Fn },
+            FnTrait::FnMut => quote! { ::core::ops::FnMut },
+            FnTrait::FnOnce => quote! { ::core::ops::FnOnce },
+        }
+        .to_tokens(tokens);
+    }
+}
+
+/// Information about a dyn callable type.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Callable {
+    pub backing_type: BackingType,
+    pub fn_trait: FnTrait,
+    pub return_type: Rc<RsTypeKind>,
+    pub param_types: Rc<[RsTypeKind]>,
+    pub invoker_ident: Ident,
+    pub manager_ident: Ident,
+}
+
+impl Callable {
+    /// Returns a `TokenStream` in the shape of `-> Output`, or None if the return type is void.
+    pub fn rust_return_type_fragment(&self, db: &BindingsGenerator) -> Option<TokenStream> {
+        if self.return_type.is_void() {
+            None
+        } else {
+            let return_type_tokens = self.return_type.to_token_stream(db);
+            Some(quote! { -> #return_type_tokens })
+        }
+    }
+
+    /// Returns a `TokenStream` in the shape of `dyn Trait(Inputs) -> Output`.
+    pub fn dyn_fn_spelling(&self, db: &BindingsGenerator) -> TokenStream {
+        let rust_return_type_fragment = self.rust_return_type_fragment(db);
+        let param_type_tokens =
+            self.param_types.iter().map(|param_ty| param_ty.to_token_stream(db));
+        let fn_trait = self.fn_trait;
+        quote! {
+            dyn #fn_trait(#(#param_type_tokens),*) #rust_return_type_fragment + ::core::marker::Send + ::core::marker::Sync + 'static
+        }
+    }
+
+    /// Returns true if the function type signature is C ABI compatible.
+    ///
+    /// A function signature is C ABI compatible if and only if all of its parameters and the
+    /// return type are C ABI compatible by value.
+    pub fn is_c_abi_compatible(&self) -> bool {
+        self.param_types.iter().all(|param_type| param_type.is_c_abi_compatible_by_value())
+            && self.return_type.is_c_abi_compatible_by_value()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub enum BridgeRsTypeKind {
-    BridgeVoidConverters {
-        rust_name: Rc<str>,
-        cpp_to_rust_converter: Rc<str>,
-        rust_to_cpp_converter: Rc<str>,
-    },
     Bridge {
         rust_name: Rc<str>,
         abi_rust: Rc<str>,
@@ -512,43 +654,65 @@ pub enum BridgeRsTypeKind {
     StdString {
         in_cc_std: bool,
     },
+    Callable(Rc<Callable>),
+    /// c9::Co<T>
+    C9Co {
+        // TODO(b/489098131): Remove has_reference_param after assume_lifetimes is supported.
+        has_reference_param: bool,
+        result_type: Rc<RsTypeKind>,
+        lifetime: Option<Lifetime>,
+    },
 }
 
 impl BridgeRsTypeKind {
     /// If the record is a bridge type, returns the corresponding BridgeRsTypeKind.
     /// Otherwise, returns None. This may also return an error if db.rs_type_kind fails, or if the
     /// record has template parameters that cannot be translated.
-    pub fn new(record: &Record, db: &dyn BindingsGenerator) -> Result<Option<BridgeRsTypeKind>> {
+    pub fn new(
+        record: &Record,
+        options: &LifetimeOptions,
+        template_args: &Option<Rc<[CcType]>>,
+        db: &BindingsGenerator,
+        lifetimes: &[Lifetime],
+    ) -> Result<Option<BridgeRsTypeKind>> {
+        if let Some(c9_co) = new_c9_co_record(options, record, template_args, lifetimes, db)? {
+            return Ok(Some(c9_co));
+        }
+
         let Some(bridge_type) = &record.bridge_type else {
             return Ok(None);
         };
 
         let bridge_rs_type_kind = match bridge_type.clone() {
-            BridgeType::BridgeVoidConverters {
-                rust_name,
-                cpp_to_rust_converter,
-                rust_to_cpp_converter,
-            } => BridgeRsTypeKind::BridgeVoidConverters {
-                rust_name,
-                cpp_to_rust_converter,
-                rust_to_cpp_converter,
-            },
             BridgeType::ProtoMessageBridge { rust_name } => {
                 BridgeRsTypeKind::ProtoMessageBridge { rust_name }
             }
-            BridgeType::Bridge { rust_name, abi_rust, abi_cpp, template_args } => {
+            BridgeType::Bridge {
+                rust_name,
+                abi_rust,
+                abi_cpp,
+                template_args: bridge_template_args,
+            } => {
+                let template_args = match template_args {
+                    Some(a) => {
+                        if a.len() == bridge_template_args.len() {
+                            a.clone()
+                        } else {
+                            return Err(anyhow!(
+                            "Internal error: template argument arity mismatch for bridge type `{}`",
+                            record.rs_name.identifier.as_ref(),
+                        ));
+                        }
+                    }
+                    None => bridge_template_args.clone(),
+                };
                 BridgeRsTypeKind::Bridge {
                     rust_name,
                     abi_rust,
                     abi_cpp,
                     generic_types: template_args
                         .iter()
-                        .map(|template_arg| {
-                            let type_ = template_arg.type_.as_ref().map_err(|err| {
-                                anyhow!("Failed to get type from template arg: {}", err)
-                            })?;
-                            db.rs_type_kind(type_.clone())
-                        })
+                        .map(|template_arg| db.rs_type_kind(template_arg.clone()))
                         .collect::<Result<Rc<[RsTypeKind]>>>()?,
                 }
             }
@@ -565,14 +729,87 @@ impl BridgeRsTypeKind {
 
                 BridgeRsTypeKind::StdString { in_cc_std }
             }
+            BridgeType::Callable { backing_type, fn_trait, return_type, param_types } => {
+                let target_identifier = record.owning_target.convert_to_cc_identifier();
+                BridgeRsTypeKind::Callable(Rc::new(Callable {
+                    backing_type: match backing_type {
+                        ir::BackingType::DynCallable => BackingType::DynCallable,
+                        ir::BackingType::AnyInvocable => BackingType::AnyInvocable {
+                            invoke_any_invocable_ident: format_ident!(
+                                "__crubit_invoke_any_invocable_{}{target_identifier}",
+                                record.rs_name.identifier.as_ref(),
+                            ),
+                        },
+                    },
+                    fn_trait: match fn_trait {
+                        ir::FnTrait::Fn => FnTrait::Fn,
+                        ir::FnTrait::FnMut => FnTrait::FnMut,
+                        ir::FnTrait::FnOnce => FnTrait::FnOnce,
+                    },
+                    return_type: Rc::new(db.rs_type_kind(return_type.clone())?),
+                    param_types: param_types
+                        .iter()
+                        .map(|param_type| db.rs_type_kind(param_type.clone()))
+                        .collect::<Result<_>>()?,
+                    invoker_ident: format_ident!(
+                        "__crubit_invoker_{}{}",
+                        record.rs_name.identifier.as_ref(),
+                        target_identifier,
+                    ),
+                    manager_ident: format_ident!(
+                        "__crubit_manager_{}{}",
+                        record.rs_name.identifier.as_ref(),
+                        target_identifier,
+                    ),
+                }))
+            }
         };
 
         Ok(Some(bridge_rs_type_kind))
     }
+}
 
-    pub fn is_void_converters_bridge_type(&self) -> bool {
-        matches!(self, BridgeRsTypeKind::BridgeVoidConverters { .. })
-    }
+fn new_c9_co_record(
+    options: &LifetimeOptions,
+    record: &Record,
+    template_args: &Option<Rc<[CcType]>>,
+    lifetimes: &[Lifetime],
+    db: &BindingsGenerator,
+) -> Result<Option<BridgeRsTypeKind>> {
+    let Some(TemplateSpecialization {
+        kind: TemplateSpecializationKind::C9Co { raw_element_type },
+        ..
+    }) = record.template_specialization.as_ref()
+    else {
+        return Ok(None);
+    };
+    let element_type = choose_one_type(raw_element_type, template_args)?;
+    let arg_type_kind = db.rs_type_kind_with_lifetime_elision(
+        element_type.clone(),
+        LifetimeOptions { have_reference_param: false, ..*options },
+    )?;
+    if let RsTypeKind::Error { error, .. } = arg_type_kind {
+        let element_name = db.cc_type_debug_name(&element_type);
+        let desc = error.to_string().replace("\n", "\n  ");
+        return Err(anyhow!(
+            "`c9::Co<{element_name}>` is unsupported because `{element_name}` is unavailable:\n\
+              {desc}"
+        ));
+    };
+    let lifetime = if options.assume_lifetimes {
+        if lifetimes.is_empty() {
+            Some(Lifetime::new("static"))
+        } else {
+            Some(lifetimes[0].clone())
+        }
+    } else {
+        None
+    };
+    Ok(Some(BridgeRsTypeKind::C9Co {
+        has_reference_param: options.have_reference_param,
+        result_type: Rc::new(arg_type_kind),
+        lifetime,
+    }))
 }
 
 impl RsTypeKind {
@@ -587,20 +824,21 @@ impl RsTypeKind {
     /// or if the `RsTypeKind` cannot be created (e.g. a type alias which points to a type that
     /// cannot receive an `RsTypeKind`).
     pub fn from_item_raw(
-        db: &dyn BindingsGenerator,
+        db: &BindingsGenerator,
         item: Item,
-        have_reference_param: bool,
-        is_return_type: bool,
+        options: &LifetimeOptions,
+        template_args: &Option<Rc<[CcType]>>,
+        lifetimes: &[Lifetime],
     ) -> Result<Self> {
         match item {
             Item::IncompleteRecord(incomplete_record) => {
                 RsTypeKind::new_incomplete_record(db, incomplete_record)
             }
             Item::Record(record) => {
-                RsTypeKind::new_record(db, record, have_reference_param, is_return_type)
+                RsTypeKind::new_record(db, record, options, template_args, lifetimes)
             }
             Item::Enum(enum_) => RsTypeKind::new_enum(db, enum_),
-            Item::TypeAlias(type_alias) => RsTypeKind::new_type_alias(db, type_alias),
+            Item::TypeAlias(type_alias) => RsTypeKind::new_type_alias(db, type_alias, lifetimes),
             Item::ExistingRustType(existing_rust_type) => {
                 RsTypeKind::new_existing_rust_type(db, existing_rust_type)
             }
@@ -608,7 +846,11 @@ impl RsTypeKind {
         }
     }
 
-    fn new_type_alias(db: &dyn BindingsGenerator, type_alias: Rc<TypeAlias>) -> Result<Self> {
+    fn new_type_alias(
+        db: &BindingsGenerator,
+        type_alias: Rc<TypeAlias>,
+        lifetimes: &[Lifetime],
+    ) -> Result<Self> {
         let ir = db.ir();
         let underlying_type = db.rs_type_kind(type_alias.underlying_type.clone())?;
         // Note: we don't need to call `.unalias()` for these checks, because we already checked
@@ -623,97 +865,107 @@ impl RsTypeKind {
         // unit, we don't know if the record is incomplete from the point of view of the alias.
         // For example, perhaps the alias is to a forward declaration, and then later, we completed
         // the forward declaration.
-        if let RsTypeKind::Record { record, .. } = &underlying_type {
-            if record.owning_target != type_alias.owning_target
-                && record.defining_target() != Some(&type_alias.owning_target)
-            {
-                return Ok(underlying_type);
-            }
+        if let RsTypeKind::Record { record, .. } = &underlying_type
+            && record.owning_target != type_alias.owning_target
+            && db.defining_target(record.id()).as_ref() != Some(&type_alias.owning_target)
+        {
+            return Ok(underlying_type);
         }
         let crate_path = Rc::new(CratePath::new(
-            &ir,
-            ir.namespace_qualifier(&type_alias),
-            rs_imported_crate_name(&type_alias.owning_target, &ir),
+            ir,
+            db.namespace_qualifier(&type_alias),
+            rs_imported_crate_name(&type_alias.owning_target, ir),
         ));
         Ok(RsTypeKind::TypeAlias {
             type_alias,
             crate_path,
             underlying_type: Rc::new(underlying_type),
+            lifetimes: lifetimes.to_vec(),
         })
     }
 
     fn new_record(
-        db: &dyn BindingsGenerator,
+        db: &BindingsGenerator,
         record: Rc<Record>,
-        have_reference_param: bool,
-        is_return_type: bool,
+        options: &LifetimeOptions,
+        template_args: &Option<Rc<[CcType]>>,
+        lifetimes: &[Lifetime],
     ) -> Result<Self> {
         let ir = db.ir();
-        if let Some(bridge_type) = BridgeRsTypeKind::new(&record, db)? {
+        if let Some(bridge_type) =
+            BridgeRsTypeKind::new(&record, options, template_args, db, lifetimes)?
+        {
             return Ok(RsTypeKind::BridgeType { bridge_type, original_type: record });
-        }
-
-        if let Some(c9_co) = new_c9_co_record(have_reference_param, Rc::clone(&record), db)? {
-            return Ok(c9_co);
         }
 
         let crate_path = Rc::new(CratePath::new(
             ir,
-            ir.namespace_qualifier(&record),
+            db.namespace_qualifier(&record),
             rs_imported_crate_name(&record.owning_target, ir),
         ));
+
+        let in_cc_std = db.ir().is_current_target(&record.owning_target)
+            && record.owning_target.target_name_escaped() == "cc_std";
+
         Ok(RsTypeKind::Record {
             uniform_repr_template_type: UniformReprTemplateType::new(
                 db,
                 record.template_specialization.as_ref().map(|ts| &ts.kind),
-                is_return_type,
+                options,
+                template_args,
+                lifetimes,
+                in_cc_std,
             )?,
-            owned_ptr_type: record.owned_ptr_type.clone(),
+            owned_ptr_type: record.owned_ptr_config.as_ref().map(|cfg| cfg.owned_ptr_type.clone()),
             record,
             crate_path,
+            lifetimes: lifetimes.to_vec(),
         })
     }
 
     fn new_incomplete_record(
-        db: &dyn BindingsGenerator,
+        db: &BindingsGenerator,
         incomplete_record: Rc<IncompleteRecord>,
     ) -> Result<Self> {
         let ir = db.ir();
         let crate_path = Rc::new(CratePath::new(
             ir,
-            ir.namespace_qualifier(&incomplete_record),
+            db.namespace_qualifier(&incomplete_record),
             rs_imported_crate_name(&incomplete_record.owning_target, ir),
         ));
         Ok(RsTypeKind::IncompleteRecord { incomplete_record, crate_path })
     }
 
-    fn new_enum(db: &dyn BindingsGenerator, enum_: Rc<Enum>) -> Result<Self> {
+    fn new_enum(db: &BindingsGenerator, enum_: Rc<Enum>) -> Result<Self> {
         let ir = db.ir();
         let crate_path = Rc::new(CratePath::new(
             ir,
-            ir.namespace_qualifier(&enum_),
+            db.namespace_qualifier(&enum_),
             rs_imported_crate_name(&enum_.owning_target, ir),
         ));
         Ok(RsTypeKind::Enum { enum_, crate_path })
     }
 
-    fn new_existing_rust_type(
-        db: &dyn BindingsGenerator,
+    fn new_existing_rust_type<'db>(
+        db: impl Deref<Target = BindingsGenerator<'db>> + Copy,
         existing_rust_type: Rc<ExistingRustType>,
     ) -> Result<Self> {
         if existing_rust_type.rs_name.as_ref() == SLICE_REF_NAME_RS {
-            let [inner_cc_type] = &existing_rust_type.type_parameters[..] else {
+            let [template_arg] = &existing_rust_type.template_args[..] else {
                 bail!(
-                    "SliceRef has {} type parameters, expected 1",
-                    existing_rust_type.type_parameters.len()
+                    "SliceRef has {} template parameters, expected 1",
+                    existing_rust_type.template_args.len()
                 );
+            };
+            let TemplateArg::Type(inner_cc_type) = template_arg else {
+                bail!("SliceRef should have a type as its singular template argument");
             };
 
             let inner_rs_type_kind = db.rs_type_kind(inner_cc_type.clone())?;
             ensure!(
                 inner_rs_type_kind.allowed_behind_multi_element_ptr(),
                 "SliceRef pointee type is not allowed behind a multi element pointer: {}",
-                inner_rs_type_kind.display(db),
+                inner_rs_type_kind.display(&db),
             );
 
             return Ok(RsTypeKind::Pointer {
@@ -727,7 +979,42 @@ impl RsTypeKind {
             });
         }
 
-        Ok(RsTypeKind::ExistingRustType(existing_rust_type))
+        let uninterpolated_rust_type = fully_qualify_type(
+            db,
+            ir::Item::ExistingRustType(existing_rust_type.clone()),
+            &existing_rust_type.rs_name,
+        );
+
+        let mut iter = existing_rust_type.template_args.iter().map(|subst| {
+            Ok(match subst {
+                TemplateArg::Type(type_param) => {
+                    let rs_type_kind = db.rs_type_kind(type_param.clone())?;
+                    ensure!(
+                        !rs_type_kind.is_bridge_type(),
+                        "Type parameter cannot be a bridge type: {}",
+                        rs_type_kind.display(&db),
+                    );
+                    rs_type_kind.to_token_stream(db)
+                }
+                TemplateArg::Int(i) => i.to_token_stream(),
+                TemplateArg::Bool(b) => b.to_token_stream(),
+            })
+        });
+
+        let rust_type = interpolate_spelled_rust_type(uninterpolated_rust_type, &mut iter)
+            .map_err(|e| {
+                anyhow!("Failed to interpolate rust type {}: {e}", existing_rust_type.rs_name)
+            })?;
+
+        let remaining_template_args = iter.collect::<Vec<_>>();
+        if !remaining_template_args.is_empty() {
+            bail!("Unexpected template args: {:?}", remaining_template_args);
+        }
+
+        Ok(RsTypeKind::ExistingRustType {
+            existing_rust_type,
+            rust_type: rust_type.to_string().into(),
+        })
     }
 
     /// Returns true if the type is known to be `Unpin`, false otherwise.
@@ -755,27 +1042,6 @@ impl RsTypeKind {
         matches!(self.unalias(), RsTypeKind::BridgeType { .. })
     }
 
-    pub fn as_c9_co(&self) -> Option<&RsTypeKind> {
-        match self.unalias() {
-            RsTypeKind::C9Co { result_type, .. } => Some(result_type),
-            _ => None,
-        }
-    }
-
-    pub fn is_pointer_bridge_type(&self) -> bool {
-        matches!(
-            self.unalias(),
-            RsTypeKind::BridgeType {
-                bridge_type: BridgeRsTypeKind::BridgeVoidConverters { .. },
-                ..
-            }
-        )
-    }
-
-    pub fn is_crubit_abi_bridge_type(&self) -> bool {
-        self.is_bridge_type() && !self.is_pointer_bridge_type()
-    }
-
     pub fn is_proto_message_bridge_type(&self) -> bool {
         matches!(
             self.unalias(),
@@ -801,60 +1067,54 @@ impl RsTypeKind {
     /// for both the template definition and its instantiation, and so both
     /// would need to be passed in to rs_type_kind() in order to be able to
     /// merge these two functions.
-    pub fn required_crubit_features(
+    pub fn missing_feature_descriptions_of_type(
         &self,
-        db: &dyn BindingsGenerator,
+        target: &BazelLabel,
         enabled_features: flagset::FlagSet<CrubitFeature>,
-    ) -> (flagset::FlagSet<CrubitFeature>, String) {
-        let mut missing_features = <flagset::FlagSet<CrubitFeature>>::default();
-        let mut reasons = <std::collections::BTreeSet<std::borrow::Cow<'static, str>>>::new();
-        let mut require_feature =
-            |required_feature: CrubitFeature,
-             reason: Option<&dyn Fn() -> std::borrow::Cow<'static, str>>| {
-                let required_features = <flagset::FlagSet<CrubitFeature>>::from(required_feature);
-                let missing = required_features - enabled_features;
-                if !missing.is_empty() {
-                    missing_features |= missing;
-                    if let Some(reason) = reason {
-                        reasons.insert(reason());
-                    }
+    ) -> Vec<String> {
+        let mut reasons = std::collections::BTreeSet::<String>::new();
+        let mut require_any_feature =
+            |any_required_feature: flagset::FlagSet<CrubitFeature>, reason: std::fmt::Arguments| {
+                let missing = any_required_feature & enabled_features;
+                if missing.is_empty() {
+                    reasons.insert(reason.to_string());
                 }
             };
+
+        if !enabled_features.contains(CrubitFeature::Types) {
+            require_any_feature(
+                <flagset::FlagSet<CrubitFeature>>::from(CrubitFeature::Types),
+                format_args!("Crubit is not enabled on defining target:\n  {target}"),
+            );
+        }
 
         for rs_type_kind in self.dfs_iter() {
             match rs_type_kind {
                 RsTypeKind::Error { error, visibility_override, .. } => {
-                    if visibility_override.is_some() {
-                        require_feature(CrubitFeature::Supported, None)
-                    } else {
-                        require_feature(
-                            CrubitFeature::Wrapper,
-                            Some(&|| std::borrow::Cow::from(format!("error: {error}"))),
+                    if visibility_override.is_none() {
+                        require_any_feature(
+                            <flagset::FlagSet<CrubitFeature>>::from(CrubitFeature::Wrapper),
+                            format_args!("{error}"),
                         )
                     }
                 }
-                RsTypeKind::Pointer { .. } => require_feature(CrubitFeature::Supported, None),
                 RsTypeKind::Reference { .. } | RsTypeKind::RvalueReference { .. } => {
-                    require_feature(
-                        CrubitFeature::Experimental,
-                        Some(&|| "references are not supported".into()),
+                    require_any_feature(
+                        <flagset::FlagSet<CrubitFeature>>::from(CrubitFeature::Experimental),
+                        format_args!("references are not yet supported"),
                     );
                 }
                 RsTypeKind::FuncPtr { cc_calling_conv, .. } => {
-                    if *cc_calling_conv == CcCallingConv::C {
-                        require_feature(CrubitFeature::Supported, None);
-                    } else {
-                        require_feature(
-                            CrubitFeature::Experimental,
-                            Some(&|| "functions must be not use a non-C calling convention".into()),
+                    if *cc_calling_conv != CcCallingConv::C {
+                        require_any_feature(
+                            <flagset::FlagSet<CrubitFeature>>::from(CrubitFeature::Experimental),
+                            format_args!("function pointers using a non-`C` calling convention are not yet supported"),
                         );
                     }
                 }
-                RsTypeKind::IncompleteRecord { .. } => require_feature(
-                    CrubitFeature::Wrapper,
-                    Some(&|| {
-                        format!("{} is not a complete type)", rs_type_kind.display(db)).into()
-                    }),
+                RsTypeKind::IncompleteRecord { .. } => require_any_feature(
+                    <flagset::FlagSet<CrubitFeature>>::from(CrubitFeature::Wrapper),
+                    format_args!("forward declared types are not yet supported"),
                 ),
                 // Here, we can very carefully be non-recursive into the _structure_ of the type.
                 //
@@ -871,47 +1131,26 @@ impl RsTypeKind {
                     // temporary solution until we have a better way to handle template
                     // instantiations.
 
-                    if uniform_repr_template_type.is_some() || record.has_unique_owning_target() {
-                        require_feature(CrubitFeature::Supported, None);
-                    } else {
-                        require_feature(
-                            CrubitFeature::Wrapper,
-                            Some(&|| {
-                                format!("{} is a template instantiation", rs_type_kind.display(db),)
-                                    .into()
-                            }),
-                        )
+                    if uniform_repr_template_type.is_none() && !record.has_unique_owning_target() {
+                        require_any_feature(
+                            <flagset::FlagSet<CrubitFeature>>::from(CrubitFeature::Wrapper)
+                                | <flagset::FlagSet<CrubitFeature>>::from(
+                                    CrubitFeature::TemplateInstantiation,
+                                ),
+                            format_args!("template instantiation is not yet supported"),
+                        );
                     }
                 }
-                RsTypeKind::Enum { .. } => require_feature(CrubitFeature::Supported, None),
-                // the alias itself is supported, but the overall features require depends on the
-                // aliased type, which is also visited by dfs_iter.
-                RsTypeKind::TypeAlias { .. } => require_feature(CrubitFeature::Supported, None),
-                RsTypeKind::Primitive { .. } => require_feature(CrubitFeature::Supported, None),
-                RsTypeKind::BridgeType { bridge_type, original_type } => {
-                    let is_pointer_bridge =
-                        matches!(bridge_type, BridgeRsTypeKind::BridgeVoidConverters { .. });
 
-                    if !original_type.has_unique_owning_target() && is_pointer_bridge {
-                        require_feature(
-                            CrubitFeature::Experimental,
-                            Some(&|| {
-                                format!(
-                                    "{} is a bridged template instantiation",
-                                    rs_type_kind.display(db),
-                                )
-                                .into()
-                            }),
-                        )
-                    } else {
-                        require_feature(CrubitFeature::Supported, None)
-                    }
-                }
-                RsTypeKind::ExistingRustType(_) => require_feature(CrubitFeature::Supported, None),
-                RsTypeKind::C9Co { .. } => require_feature(CrubitFeature::Supported, None),
+                RsTypeKind::Pointer { .. }
+                | RsTypeKind::BridgeType { .. }
+                | RsTypeKind::ExistingRustType { .. }
+                | RsTypeKind::Enum { .. }
+                | RsTypeKind::TypeAlias { .. }
+                | RsTypeKind::Primitive { .. } => {}
             }
         }
-        (missing_features, reasons.into_iter().join(", "))
+        reasons.into_iter().collect()
     }
 
     // If the type is pointer annotated with CRUBIT_OWNED_POINTER, returns the pointee type.
@@ -961,8 +1200,9 @@ impl RsTypeKind {
             RsTypeKind::TypeAlias { .. } => unreachable!(),
             RsTypeKind::Primitive(_) => true,
             RsTypeKind::BridgeType { .. } => false,
-            RsTypeKind::ExistingRustType(existing_rust_type) => existing_rust_type.is_same_abi,
-            RsTypeKind::C9Co { .. } => false,
+            RsTypeKind::ExistingRustType { existing_rust_type, .. } => {
+                existing_rust_type.is_same_abi
+            }
         }
     }
 
@@ -986,11 +1226,14 @@ impl RsTypeKind {
     /// it can't.
     pub fn check_by_value(&self) -> Result<()> {
         match self.unalias() {
-            RsTypeKind::Error { error, .. } => bail!("Cannot use an error type by value: {error}"),
+            RsTypeKind::Error { error, symbol, .. } => {
+                let desc = error.to_string().replace("\n", "\n  ");
+                bail!("Cannot use an error type `{symbol}` by value:\n  {desc}")
+            }
             RsTypeKind::Record { record, .. } => record.check_by_value(),
             RsTypeKind::IncompleteRecord { incomplete_record, .. } => {
                 bail!(
-                    "Attempted to pass incomplete record type `{}` by-value",
+                    "`{}` cannot be passed by-value because it is an incomplete type",
                     incomplete_record.cc_name
                 )
             }
@@ -1017,8 +1260,7 @@ impl RsTypeKind {
             RsTypeKind::TypeAlias { .. } => unreachable!(),
             RsTypeKind::Primitive(_) => true,
             RsTypeKind::BridgeType { .. } => false,
-            RsTypeKind::ExistingRustType(_) => true,
-            RsTypeKind::C9Co { .. } => false,
+            RsTypeKind::ExistingRustType { .. } => true,
         }
     }
 
@@ -1039,14 +1281,14 @@ impl RsTypeKind {
         }
     }
 
-    pub fn format_as_return_type_fragment(
+    pub fn format_as_return_type_fragment<'a>(
         &self,
-        db: &dyn BindingsGenerator,
-        self_record: Option<&Record>,
+        db: impl Deref<Target = BindingsGenerator<'a>> + Copy,
+        self_type: Option<&RsTypeKind>,
     ) -> Option<TokenStream> {
         match self.unalias() {
             RsTypeKind::Primitive(Primitive::Void) => None,
-            _ => Some(self.to_token_stream_replacing_by_self(db, self_record)),
+            _ => Some(self.to_token_stream_replacing_by_self(db, self_type)),
         }
     }
 
@@ -1061,17 +1303,18 @@ impl RsTypeKind {
         match self {
             RsTypeKind::Pointer { .. } => {
                 // TODO(jeanpierreda): provide end-user-facing docs, and insert a link to e.g.
-                // something like <internal link>
+                // something like crubit.rs-self-lifetime
                 bail!(
-                    "`self` has no lifetime. Use lifetime annotations or `#pragma clang lifetime_elision` to create bindings for this function."
+                    "`self` has no lifetime. Use lifetime annotations to create bindings for this function."
                 )
             }
-            RsTypeKind::Reference { referent, lifetime, mutability } => {
+            RsTypeKind::Reference { referent, lifetime, mutability, is_cref } => {
+                if *is_cref {
+                    bail!("Internal error (crubit.rs-bug): `self` should not be CRef/CMut.");
+                };
                 let mut_ = mutability.format_for_reference();
                 let lifetime = lifetime.format_for_reference();
                 if mutability == &Mutability::Mut && !referent.is_unpin() {
-                    // TODO(b/239661934): Add a `use ::core::pin::Pin` to the crate, and use
-                    // `Pin`.
                     Ok(RsSnippet::new(quote! {self: ::core::pin::Pin< & #lifetime #mut_ Self>}))
                 } else {
                     Ok(RsSnippet::new(quote! { & #lifetime #mut_ self }))
@@ -1079,7 +1322,6 @@ impl RsTypeKind {
             }
             RsTypeKind::RvalueReference { referent: _, lifetime, mutability } => {
                 let lifetime = lifetime.format_for_reference();
-                // TODO(b/239661934): Add `use ::ctor::{RvalueReference, ConstRvalueReference}`.
                 match mutability {
                     Mutability::Mut => Ok(RsSnippet {
                         tokens: quote! {self: ::ctor::RvalueReference<#lifetime, Self>},
@@ -1117,15 +1359,19 @@ impl RsTypeKind {
             RsTypeKind::TypeAlias { underlying_type, .. } => underlying_type.implements_copy(),
             RsTypeKind::BridgeType { bridge_type, .. } => match bridge_type {
                 // We cannot get the information of the Rust type so we assume it is not Copy.
-                BridgeRsTypeKind::BridgeVoidConverters { .. }
-                | BridgeRsTypeKind::Bridge { .. }
-                | BridgeRsTypeKind::ProtoMessageBridge { .. } => false,
+                BridgeRsTypeKind::Bridge { .. } | BridgeRsTypeKind::ProtoMessageBridge { .. } => {
+                    false
+                }
                 BridgeRsTypeKind::StdOptional(t) => t.implements_copy(),
                 BridgeRsTypeKind::StdPair(t1, t2) => t1.implements_copy() && t2.implements_copy(),
                 BridgeRsTypeKind::StdString { .. } => false,
+                BridgeRsTypeKind::Callable { .. } => {
+                    // Callables represent an owned function object, so they are not copyable.
+                    false
+                }
+                BridgeRsTypeKind::C9Co { .. } => false,
             },
-            RsTypeKind::ExistingRustType(_) => true,
-            RsTypeKind::C9Co { .. } => false,
+            RsTypeKind::ExistingRustType { .. } => true,
         }
     }
 
@@ -1146,6 +1392,30 @@ impl RsTypeKind {
             RsTypeKind::RvalueReference { referent, .. } => referent.is_record(expected_record),
             _ => false,
         }
+    }
+
+    pub fn as_rvalue_referee(&self) -> Option<&Rc<RsTypeKind>> {
+        // TODO(b/505098853): I have no idea why there are two rvalue ref types.
+        // We need to unify them.
+        match self.unalias() {
+            RsTypeKind::RvalueReference { referent: p, .. }
+            | RsTypeKind::Pointer {
+                kind: RustPtrKind::CcPtr(PointerTypeKind::RValueRef),
+                pointee: p,
+                ..
+            } => Some(p),
+            _ => None,
+        }
+    }
+
+    pub fn is_rvalue_ref(&self) -> bool {
+        // TODO(b/505098853): I have no idea why there are two rvalue ref types.
+        // We need to unify them.
+        matches!(
+            self.unalias(),
+            RsTypeKind::RvalueReference { .. }
+                | RsTypeKind::Pointer { kind: RustPtrKind::CcPtr(PointerTypeKind::RValueRef), .. }
+        )
     }
 
     pub fn is_rvalue_ref_to(&self, expected_record: &Record) -> bool {
@@ -1202,14 +1472,14 @@ impl RsTypeKind {
     /// Iterates over `self` and all the nested types (e.g. pointees, generic
     /// type args, etc.) in DFS order.
     pub fn dfs_iter(&self) -> impl Iterator<Item = &RsTypeKind> + '_ {
-        RsTypeKindIter::new(self)
+        RsTypeKindIter::new(self, false)
     }
 
     /// Iterates over all `LifetimeId`s in `self` and in all the nested types.
     /// Note that the results might contain duplicate LifetimeId values (e.g.
     /// if the same LifetimeId is used in two `type_args`).
     pub fn lifetimes(&self) -> impl Iterator<Item = Lifetime> + use<'_> {
-        self.dfs_iter().filter_map(Self::lifetime)
+        RsTypeKindIter::new(self, true).filter_map(Self::lifetime)
     }
 
     /// Returns the pointer or reference target.
@@ -1224,9 +1494,30 @@ impl RsTypeKind {
 
     /// Returns the reference lifetime, or None if this is not a reference.
     pub fn lifetime(&self) -> Option<Lifetime> {
-        match self.unalias() {
+        match self {
             Self::Reference { lifetime, .. } | Self::RvalueReference { lifetime, .. } => {
                 Some(lifetime.clone())
+            }
+            Self::Record { uniform_repr_template_type: Some(template), .. } => template.lifetime(),
+            // TODO(zarko): Extend to allow multiple lifetimes.
+            Self::Record { lifetimes, .. } => {
+                if lifetimes.len() == 1 {
+                    Some(lifetimes[0].clone())
+                } else {
+                    None
+                }
+            }
+            Self::TypeAlias { lifetimes, underlying_type, .. } => {
+                // TODO(b/517949862): this checks for a single lifetime because lifetime() can
+                // only return a single lifetime, not for any inherent property of aliases; it
+                // needs to be updated to fully support multiple lifetime parameters.
+                if lifetimes.len() == 1 {
+                    Some(lifetimes[0].clone())
+                } else if lifetimes.is_empty() {
+                    underlying_type.lifetime()
+                } else {
+                    None
+                }
             }
             _ => None,
         }
@@ -1236,7 +1527,7 @@ impl RsTypeKind {
     /// `RsTypeKind::Pointer` with kind
     /// `RustPtrKind::CcPtr(PointerTypeKind::Owned)` will emit the corresponding
     /// owning Rust type rather than a raw pointer.
-    pub fn to_token_stream_with_owned_ptr_type(&self, db: &dyn BindingsGenerator) -> TokenStream {
+    pub fn to_token_stream_with_owned_ptr_type(&self, db: &BindingsGenerator) -> TokenStream {
         // If it's not an owned pointer, just use the default implementation.
         let Some(pointee) = self.as_owned_ptr() else {
             return self.to_token_stream(db);
@@ -1248,7 +1539,7 @@ impl RsTypeKind {
             )
         };
 
-        let owned_ptr_type = record.owned_ptr_type.as_ref().expect(
+        let owned_ptr_type = record.owned_ptr_config.as_ref().map(|cfg| cfg.owned_ptr_type.as_ref()).expect(
             "CRUBIT_OWNED_POINTER annotated pointers should point to a struct with an associated CRUBIT_OWNED_POINTEE",
         );
 
@@ -1256,40 +1547,43 @@ impl RsTypeKind {
         quote! { #crate_path #path }
     }
 
-    /// Similar to to_token_stream, but replacing RsTypeKind:Record with Self
-    /// when the underlying Record matches the given one.
-    pub fn to_token_stream_replacing_by_self(
+    /// Similar to to_token_stream, but replacing RsTypeKind with Self
+    /// when the underlying type matches the given one.
+    pub fn to_token_stream_replacing_by_self<'a>(
         &self,
-        db: &dyn BindingsGenerator,
-        self_record: Option<&Record>,
+        db: impl Deref<Target = BindingsGenerator<'a>> + Copy,
+        self_type: Option<&RsTypeKind>,
     ) -> TokenStream {
         match self {
             RsTypeKind::Pointer { pointee, kind, mutability } => {
                 let mutability = mutability.format_for_pointer();
-                let pointee_ = pointee.to_token_stream_replacing_by_self(db, self_record);
+                let pointee_ = pointee.to_token_stream_replacing_by_self(db, self_type);
                 if let RustPtrKind::Slice = kind {
                     quote! {* #mutability [#pointee_] }
                 } else {
                     quote! {* #mutability #pointee_ }
                 }
             }
-            RsTypeKind::Reference { referent, mutability, lifetime } => {
+            RsTypeKind::Reference { referent, mutability, lifetime, is_cref } => {
                 let mut_ = mutability.format_for_reference();
                 let lifetime = lifetime.format_for_reference();
-                let referent_ = referent.to_token_stream_replacing_by_self(db, self_record);
-                let mut tokens = quote! {& #lifetime #mut_ #referent_};
-                if mutability == &Mutability::Mut && !referent.is_unpin() {
-                    // TODO(b/239661934): Add a `use ::core::pin::Pin` to the crate, and use
-                    // `Pin`. This either requires deciding how to qualify pin at
-                    // RsTypeKind-creation time, or returning a non-TokenStream type from here (and
-                    // not implementing ToTokens, but instead some other interface.)
+                let referent_ = referent.to_token_stream_replacing_by_self(db, self_type);
+                let mut tokens = if *is_cref {
+                    match mutability {
+                        Mutability::Mut => quote! { ::cref::CMut<#lifetime, #referent_> },
+                        Mutability::Const => quote! { ::cref::CRef<#lifetime, #referent_> },
+                    }
+                } else {
+                    quote! {& #lifetime #mut_ #referent_ }
+                };
+                if mutability == &Mutability::Mut && !referent.is_unpin() && !is_cref {
+                    // CRef/CMut imply Pin; Pin<CRef<...>>/Pin<CMut<...>> are meaningless.
                     tokens = quote! {::core::pin::Pin< #tokens >};
                 }
                 tokens
             }
             RsTypeKind::RvalueReference { referent, mutability, lifetime } => {
-                let referent_ = referent.to_token_stream_replacing_by_self(db, self_record);
-                // TODO(b/239661934): Add a `use ::ctor::RvalueReference` (etc.) to the crate.
+                let referent_ = referent.to_token_stream_replacing_by_self(db, self_type);
                 if mutability == &Mutability::Mut {
                     quote! {::ctor::RvalueReference<#lifetime, #referent_>}
                 } else {
@@ -1299,15 +1593,14 @@ impl RsTypeKind {
             RsTypeKind::FuncPtr { option, cc_calling_conv, return_type, param_types } => {
                 let param_types_ = param_types
                     .iter()
-                    .map(|type_| type_.to_token_stream_replacing_by_self(db, self_record));
+                    .map(|type_| type_.to_token_stream_replacing_by_self(db, self_type));
                 let abi = cc_calling_conv.rs_extern_abi();
                 let mut tokens = quote! { extern #abi fn( #( #param_types_ ),* ) };
-                if let Some(return_frag) =
-                    return_type.format_as_return_type_fragment(db, self_record)
+                if let Some(return_frag) = return_type.format_as_return_type_fragment(db, self_type)
                 {
                     quote! { -> #return_frag }.to_tokens(&mut tokens);
                 }
-                if param_types.iter().any(|p| db.is_rs_type_kind_unsafe(p.clone())) {
+                if param_types.iter().any(|p| db.rs_type_kind_safety(p.clone()).is_some()) {
                     tokens = quote! { unsafe #tokens }
                 }
                 if *option {
@@ -1315,15 +1608,15 @@ impl RsTypeKind {
                 }
                 tokens
             }
-            RsTypeKind::Record { record, .. } => {
-                if self_record == Some(record) {
+            RsTypeKind::Record { .. } => {
+                if Some(self) == self_type {
                     quote! { Self }
                 } else {
                     self.to_token_stream(db)
                 }
             }
             RsTypeKind::BridgeType { .. } => self.to_token_stream(db),
-            RsTypeKind::ExistingRustType(_) => self.to_token_stream(db),
+            RsTypeKind::ExistingRustType { .. } => self.to_token_stream(db),
             _ => self.to_token_stream(db),
         }
     }
@@ -1331,7 +1624,7 @@ impl RsTypeKind {
     /// Returns a `Display`able type for this `RsTypeKind`.
     pub fn display<'a, 'db>(
         &'a self,
-        db: &'a dyn BindingsGenerator<'db>,
+        db: &'a BindingsGenerator<'db>,
     ) -> impl std::fmt::Display + use<'a, 'db> {
         DisplayRsTypeKind { rs_type_kind: self, db }
     }
@@ -1346,13 +1639,114 @@ impl RsTypeKind {
             _ => false,
         }
     }
+
+    /// Returns the passing convention for this `RsTypeKind`.
+    ///
+    /// This is used to determine how the type should be passed across the FFI boundary.
+    pub fn passing_convention(&self) -> PassingConvention {
+        if self.is_owned_ptr() {
+            // owned_ptr is a subset of is_c_abi_compatible_by_value, so must be checked before.
+            PassingConvention::OwnedPtr
+        } else if self.is_void() {
+            // void is a subset of is_c_abi_compatible_by_value, so must be checked before.
+            PassingConvention::Void
+        } else if self.is_bridge_type() {
+            PassingConvention::ComposablyBridged
+        } else if !self.is_unpin() {
+            PassingConvention::Ctor
+        } else if self.is_c_abi_compatible_by_value() {
+            PassingConvention::AbiCompatible
+        } else {
+            PassingConvention::LayoutCompatible
+        }
+    }
+}
+
+/// Recursively interpolates a token stream that contains a spelled out Rust type.
+///
+/// Interpolation variables are spalled with braces, e.g. `MyType<{T}>`. They must contain a single
+/// ident, otherwise an error is returned.
+pub fn interpolate_spelled_rust_type(
+    rust_type: TokenStream,
+    substs: &mut impl Iterator<Item = Result<TokenStream>>,
+) -> Result<TokenStream> {
+    rust_type
+        .into_iter()
+        .map(|tt| -> Result<TokenStream> {
+            let TokenTree::Group(group) = &tt else { return Ok(TokenStream::from(tt)) };
+
+            if group.delimiter() != Delimiter::Brace {
+                return Ok(TokenStream::from(TokenTree::Group(Group::new(
+                    group.delimiter(),
+                    interpolate_spelled_rust_type(group.stream(), substs)?,
+                ))));
+            }
+
+            ensure!(
+                group.stream().is_empty(),
+                "Interpolated arguments cannot be provided inline, found `{:?}`",
+                group.stream()
+            );
+            substs.next().unwrap_or_else(|| {
+                bail!("Not enough interpolated arguments");
+            })
+        })
+        .collect()
+}
+
+/// The classification of how a type should cross the FFI boundary.
+///
+/// Code that generates functions thunks and impls should match on this type instead of manually
+/// checking properties of the RsTypeKind, which are subject to change or evolve over time.
+pub enum PassingConvention {
+    /// ABI compatible types may be passed by value across the C boundary.
+    AbiCompatible,
+
+    /// Layout compatible types have the same layout, but may have different ABIs.
+    /// Notably, a pointer to a Rust instance of this type may be reinterpreted as
+    /// a pointer to a C++ instance of this type, and vice versa.
+    ///
+    /// As input: caller passes a pointer to value, callee does std::move/mem::take.
+    /// As output: caller passes an outptr, callee moves value into it.
+    LayoutCompatible,
+
+    /// The type can engage in composable bridging, meaning it gets encoded/decoded into a bridge
+    /// buffer when it crosses the boundary.
+    ///
+    /// As input: caller allocates a stack buffer, encodes the value, and passes
+    ///           a pointer to the buffer, callee decodes from the buffer.
+    /// As output: caller passes an outptr to a stack buffer, callee encodes the value,
+    ///            caller decodes the result.
+    ComposablyBridged,
+
+    /// The type is not Rust movable, and instead must be moved using the `ctor` crate.
+    ///
+    /// As input: caller provides an `impl Ctor`, and we use
+    ///           `Pin::into_inner_unchecked(ctor::emplace!(value))` to give C++ a pointer that it
+    ///           can move the value out of.
+    /// As output: The function is not actually called; instead, Rust immediately returns an
+    ///            `FnCtor` which, when is a lazily invoked thunk that will call the function when
+    ///            it is emplaced somewhere and has a pointer where it can store the result.
+    Ctor,
+
+    /// The type in Rust is represented as a heap allocated ptr to the C++ object.
+    /// As input: the caller just passes the inner pointer, which can be done by just transmuting
+    ///           the repr(transparent) Rust wrapper to the pointer.
+    /// As output: the caller just receives the pointer and transmutes it to the owned ptr type.
+    OwnedPtr,
+
+    /// The `void` type.
+    ///
+    /// As input: this case is unreachable.
+    /// As output: do nothing.
+    Void,
 }
 
 /// A type that implements [`std::fmt::Display`] for [`RsTypeKind`], which
 /// requires a [`BindingsGenerator`] to be able to format the type.
 pub struct DisplayRsTypeKind<'a, 'db> {
     rs_type_kind: &'a RsTypeKind,
-    db: &'a dyn BindingsGenerator<'db>,
+    db: &'a BindingsGenerator<'db>,
 }
 
 impl std::fmt::Display for DisplayRsTypeKind<'_, '_> {
@@ -1370,8 +1764,67 @@ impl std::fmt::Display for DisplayRsTypeKind<'_, '_> {
     }
 }
 
+pub enum PrimitiveName {
+    NativeType(&'static str),
+    Ffi11Type(&'static str),
+}
+
+impl PrimitiveName {
+    pub fn from_primitive(primitive: Primitive) -> Self {
+        use PrimitiveName::*;
+        match primitive {
+            Primitive::Bool => NativeType("bool"),
+            Primitive::Void => Ffi11Type("c_void"),
+            Primitive::Float => NativeType("f32"),
+            Primitive::Double => NativeType("f64"),
+            Primitive::Char => Ffi11Type("c_char"),
+            Primitive::SignedChar => Ffi11Type("c_schar"),
+            Primitive::UnsignedChar => Ffi11Type("c_uchar"),
+            Primitive::Short => Ffi11Type("c_short"),
+            Primitive::Int => Ffi11Type("c_int"),
+            Primitive::Long => Ffi11Type("c_long"),
+            Primitive::LongLong => Ffi11Type("c_longlong"),
+            Primitive::UnsignedShort => Ffi11Type("c_ushort"),
+            Primitive::UnsignedInt => Ffi11Type("c_uint"),
+            Primitive::UnsignedLong => Ffi11Type("c_ulong"),
+            Primitive::UnsignedLongLong => Ffi11Type("c_ulonglong"),
+            Primitive::PtrdiffT
+            | Primitive::StdPtrdiffT
+            | Primitive::IntptrT
+            | Primitive::StdIntptrT => NativeType("isize"),
+            Primitive::SizeT
+            | Primitive::StdSizeT
+            | Primitive::UintptrT
+            | Primitive::StdUintptrT => NativeType("usize"),
+            Primitive::Int8T | Primitive::StdInt8T => NativeType("i8"),
+            Primitive::Int16T | Primitive::StdInt16T => NativeType("i16"),
+            Primitive::Int32T | Primitive::StdInt32T => NativeType("i32"),
+            Primitive::Int64T | Primitive::StdInt64T => NativeType("i64"),
+            Primitive::Uint8T | Primitive::StdUint8T => NativeType("u8"),
+            Primitive::Char16T | Primitive::Uint16T | Primitive::StdUint16T => NativeType("u16"),
+            Primitive::Char32T | Primitive::Uint32T | Primitive::StdUint32T => NativeType("u32"),
+            Primitive::Uint64T | Primitive::StdUint64T => NativeType("u64"),
+        }
+    }
+    fn to_token_stream(&self) -> TokenStream {
+        fn ident(name: &'static str) -> Ident {
+            Ident::new(name, proc_macro2::Span::call_site())
+        }
+        match self {
+            PrimitiveName::NativeType(name) => ident(name).to_token_stream(),
+            PrimitiveName::Ffi11Type(name) => {
+                let name = ident(name);
+                quote! { ::ffi_11::#name }
+            }
+        }
+    }
+}
+
 impl RsTypeKind {
-    pub fn to_token_stream(&self, db: &dyn BindingsGenerator) -> TokenStream {
+    pub fn to_token_stream<'a>(
+        &self,
+        db: impl Deref<Target = BindingsGenerator<'a>> + Copy,
+    ) -> TokenStream {
         match self {
             // errors become opaque blobs
             RsTypeKind::Error { symbol, .. } => {
@@ -1388,22 +1841,25 @@ impl RsTypeKind {
                     quote! {* #mutability #pointee_tokens }
                 }
             }
-            RsTypeKind::Reference { referent, mutability, lifetime } => {
-                let mut_ = mutability.format_for_reference();
+            RsTypeKind::Reference { referent, mutability, lifetime, is_cref } => {
                 let lifetime = lifetime.format_for_reference();
                 let referent_tokens = referent.to_token_stream(db);
-                let mut tokens = quote! {& #lifetime #mut_ #referent_tokens};
-                if mutability == &Mutability::Mut && !referent.is_unpin() {
-                    // TODO(b/239661934): Add a `use ::core::pin::Pin` to the crate, and use
-                    // `Pin`. This either requires deciding how to qualify pin at
-                    // RsTypeKind-creation time, or returning a non-TokenStream type from here (and
-                    // not implementing ToTokens, but instead some other interface.)
+                let mut tokens = if *is_cref {
+                    match mutability {
+                        Mutability::Mut => quote! { ::cref::CMut<#lifetime, #referent_tokens> },
+                        Mutability::Const => quote! { ::cref::CRef<#lifetime, #referent_tokens> },
+                    }
+                } else {
+                    let mut_ = mutability.format_for_reference();
+                    quote! {& #lifetime #mut_ #referent_tokens}
+                };
+                if mutability == &Mutability::Mut && !referent.is_unpin() && !is_cref {
+                    // CRef/CMut imply Pin; Pin<CRef<...>>/Pin<CMut<...>> are meaningless.
                     tokens = quote! { ::core::pin::Pin< #tokens > };
                 }
                 tokens
             }
             RsTypeKind::RvalueReference { referent, mutability, lifetime } => {
-                // TODO(b/239661934): Add a `use ::ctor::RvalueReference` (etc.) to the crate.
                 let referent_tokens = referent.to_token_stream(db);
                 if mutability == &Mutability::Mut {
                     quote! {::ctor::RvalueReference<#lifetime, #referent_tokens>}
@@ -1418,7 +1874,7 @@ impl RsTypeKind {
                 if let Some(return_frag) = return_type.format_as_return_type_fragment(db, None) {
                     quote! { -> #return_frag }.to_tokens(&mut tokens);
                 }
-                if param_types.iter().any(|p| db.is_rs_type_kind_unsafe(p.clone())) {
+                if param_types.iter().any(|p| db.rs_type_kind_safety(p.clone()).is_some()) {
                     tokens = quote! { unsafe #tokens }
                 }
                 if *option {
@@ -1435,138 +1891,67 @@ impl RsTypeKind {
                 crate_path,
                 uniform_repr_template_type,
                 owned_ptr_type: _,
+                lifetimes,
             } => {
                 if let Some(generic_monomorphization) = uniform_repr_template_type {
-                    return generic_monomorphization.to_token_stream(db);
+                    return generic_monomorphization.to_token_stream(&db);
                 }
-                let ident = make_rs_ident(record.rs_name.identifier.as_ref());
-                quote! { #crate_path #ident }
+                let arity = (db.codegen_functions().decl_lifetime_arity)(&db, record.id()).expect("RsTypeKind::to_token_stream: can't determine lifetime arity");
+                if arity == 0 || lifetimes.len() == arity || record.is_raw_string_view() {
+                    // Use the safe projection.
+                    let lts = if lifetimes.is_empty() {
+                        quote! {}
+                    } else {
+                        quote! { <#( #lifetimes ),* > }
+                    };
+                    let ident = make_rs_ident(record.rs_name.identifier.as_ref());
+                    quote! { #crate_path #ident #lts }
+                } else {
+                    // Until we can get unsafe binders, the unsafe projection of a type with
+                    // lifetime parameters is that type instantiated at all 'static.
+                    let statics = std::iter::repeat_n(make_rs_lifetime_ident("static"), arity);
+                    let ident = make_rs_ident(record.rs_name.identifier.as_ref());
+                    quote! { #crate_path #ident <#( #statics ),* > }
+                }
             }
             RsTypeKind::Enum { enum_, crate_path } => {
                 let ident = make_rs_ident(&enum_.rs_name.identifier);
                 quote! { #crate_path #ident }
             }
-            RsTypeKind::TypeAlias { type_alias, crate_path, .. } => {
-                let ident = make_rs_ident(&type_alias.rs_name.identifier);
-                quote! { #crate_path #ident }
+            RsTypeKind::TypeAlias { type_alias, crate_path, lifetimes, .. } => {
+                let mut ident = make_rs_ident(&type_alias.rs_name.identifier);
+                let mut crate_path = crate_path.clone();
+                // Check to see if the underlying type is a special template specialization kind
+                // that we need to use an alternate name for if lifetimes are provided.
+                if !lifetimes.is_empty()
+                    && let RsTypeKind::Record { record, .. } = self.unalias()
+                    && matches!(
+                        record.template_specialization,
+                        Some(TemplateSpecialization {
+                            kind: TemplateSpecializationKind::StdStringView,
+                            ..
+                        })
+                    )
+                {
+                    // Use the custom `string_view` implementation.
+                    ident = make_rs_ident("string_view");
+                    // Remove `__u`.
+                    let mut new_crate_path: CratePath = (*crate_path).clone();
+                    new_crate_path.namespace_qualifier.namespaces.pop();
+                    crate_path = Rc::new(new_crate_path);
+                };
+                let lts = if lifetimes.is_empty() {
+                    quote! {}
+                } else {
+                    quote! { <#( #lifetimes ),* > }
+                };
+                quote! { #crate_path #ident #lts }
             }
             RsTypeKind::Primitive(primitive) => {
-                let ir = db.ir();
-                let features = db.ir().target_crubit_features(&ir.flat_ir().current_target);
-                let enable_ffi11_types = features.contains(CrubitFeature::CustomFfiTypes);
-                match primitive {
-                    Primitive::Bool => quote! { bool },
-                    Primitive::Void => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_void }
-                        } else {
-                            quote! { ::core::ffi::c_void }
-                        }
-                    }
-                    Primitive::Float => quote! { f32 },
-                    Primitive::Double => quote! { f64 },
-                    Primitive::Char => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_char }
-                        } else {
-                            quote! { ::core::ffi::c_char }
-                        }
-                    }
-                    Primitive::SignedChar => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_schar }
-                        } else {
-                            quote! { ::core::ffi::c_schar }
-                        }
-                    }
-                    Primitive::UnsignedChar => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_uchar }
-                        } else {
-                            quote! { ::core::ffi::c_uchar }
-                        }
-                    }
-                    Primitive::Short => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_short }
-                        } else {
-                            quote! { ::core::ffi::c_short }
-                        }
-                    }
-                    Primitive::Int => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_int }
-                        } else {
-                            quote! { ::core::ffi::c_int }
-                        }
-                    }
-                    Primitive::Long => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_long }
-                        } else {
-                            quote! { ::core::ffi::c_long }
-                        }
-                    }
-                    Primitive::LongLong => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_longlong }
-                        } else {
-                            quote! { ::core::ffi::c_longlong }
-                        }
-                    }
-                    Primitive::UnsignedShort => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_ushort }
-                        } else {
-                            quote! { ::core::ffi::c_ushort }
-                        }
-                    }
-                    Primitive::UnsignedInt => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_uint }
-                        } else {
-                            quote! { ::core::ffi::c_uint }
-                        }
-                    }
-                    Primitive::UnsignedLong => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_ulong }
-                        } else {
-                            quote! { ::core::ffi::c_ulong }
-                        }
-                    }
-                    Primitive::UnsignedLongLong => {
-                        if enable_ffi11_types {
-                            quote! { ::ffi_11::c_ulonglong }
-                        } else {
-                            quote! { ::core::ffi::c_ulonglong }
-                        }
-                    }
-                    Primitive::Char16T => quote! { u16 },
-                    Primitive::Char32T => quote! { u32 },
-                    Primitive::PtrdiffT
-                    | Primitive::StdPtrdiffT
-                    | Primitive::IntptrT
-                    | Primitive::StdIntptrT => quote! { isize },
-                    Primitive::SizeT
-                    | Primitive::StdSizeT
-                    | Primitive::UintptrT
-                    | Primitive::StdUintptrT => quote! { usize },
-                    Primitive::Int8T | Primitive::StdInt8T => quote! { i8 },
-                    Primitive::Int16T | Primitive::StdInt16T => quote! { i16 },
-                    Primitive::Int32T | Primitive::StdInt32T => quote! { i32 },
-                    Primitive::Int64T | Primitive::StdInt64T => quote! { i64 },
-                    Primitive::Uint8T | Primitive::StdUint8T => quote! { u8 },
-                    Primitive::Uint16T | Primitive::StdUint16T => quote! { u16 },
-                    Primitive::Uint32T | Primitive::StdUint32T => quote! { u32 },
-                    Primitive::Uint64T | Primitive::StdUint64T => quote! { u64 },
-                }
+                PrimitiveName::from_primitive(*primitive).to_token_stream()
             }
             RsTypeKind::BridgeType { bridge_type, original_type } => {
                 match bridge_type {
-                    BridgeRsTypeKind::BridgeVoidConverters { rust_name, .. } => {
-                        fully_qualify_type(db, ir::Item::Record(original_type.clone()), rust_name)
-                    }
                     BridgeRsTypeKind::Bridge { rust_name, generic_types, .. } => {
                         let path = fully_qualify_type(
                             db,
@@ -1581,7 +1966,7 @@ impl RsTypeKind {
 
                         let generic_types_tokens =
                             generic_types.iter().map(|t| t.to_token_stream(db));
-                        quote! { #path < #(#generic_types_tokens),* > }
+                        quote! { #path<#(#generic_types_tokens),*> }
                     }
                     BridgeRsTypeKind::ProtoMessageBridge { rust_name } => {
                         fully_qualify_type(db, ir::Item::Record(original_type.clone()), rust_name)
@@ -1597,31 +1982,32 @@ impl RsTypeKind {
                     }
                     BridgeRsTypeKind::StdString { in_cc_std } => {
                         if *in_cc_std {
-                            quote! { crate::std::string }
+                            quote! { crate::std::string_wrapper }
                         } else {
-                            quote! { ::cc_std::std::string }
+                            quote! { ::cc_std::std::string_wrapper }
+                        }
+                    }
+                    BridgeRsTypeKind::Callable(callable) => {
+                        let callable_spelling = callable.dyn_fn_spelling(&db);
+                        quote! { ::alloc::boxed::Box<#callable_spelling> }
+                    }
+                    BridgeRsTypeKind::C9Co { has_reference_param, result_type, lifetime, .. } => {
+                        let result_type_tokens = if result_type.is_void() {
+                            quote! { () }
+                        } else {
+                            result_type.to_token_stream(db)
+                        };
+                        // When there are reference parameters, the coroutine must finish before they are
+                        // invalidated (http://shortn/_XPma06AwZh).
+                        match (lifetime, has_reference_param) {
+                            (Some(lt), _) => quote! { ::co::Co<#lt, #result_type_tokens> },
+                            (_, false) => quote! { ::co::Co<'static, #result_type_tokens> },
+                            (_, true) => quote! { ::co::Co<'_, #result_type_tokens> },
                         }
                     }
                 }
             }
-            RsTypeKind::ExistingRustType(existing_rust_type) => fully_qualify_type(
-                db,
-                ir::Item::ExistingRustType(existing_rust_type.clone()),
-                &existing_rust_type.rs_name,
-            ),
-            RsTypeKind::C9Co { have_reference_param, result_type, .. } => {
-                let result_type_tokens = if result_type.is_void() {
-                    quote! { () }
-                } else {
-                    result_type.to_token_stream(db)
-                };
-                // When there are reference parameters, the coroutine must finish before they are
-                // invalidated (http://shortn/_XPma06AwZh).
-                match have_reference_param {
-                    false => quote! { ::co::Co<'static, #result_type_tokens> },
-                    true => quote! { ::co::Co<'_, #result_type_tokens> },
-                }
-            }
+            RsTypeKind::ExistingRustType { rust_type, .. } => rust_type.parse().expect("ExistingRustType.rust_type should parse as a TokenStream because it was constructed from one."),
         }
     }
 }
@@ -1633,17 +2019,17 @@ impl RsTypeKind {
 ///
 /// This has _very_ limited support for other type expressions, like `&T`,
 /// and special-cases well known builtin types like `char`.
-fn fully_qualify_type(
-    db: &dyn BindingsGenerator,
+fn fully_qualify_type<'a>(
+    db: impl Deref<Target = BindingsGenerator<'a>> + Copy,
     item: ir::Item,
     type_expression: &str,
 ) -> TokenStream {
     let root_crate = || {
-        let target = item.defining_target().cloned().or_else(|| item.owning_target()).unwrap();
+        let target = db.defining_target(item.id()).or_else(|| item.owning_target()).unwrap();
         if db.ir().is_current_target(&target) {
             quote! { crate }
         } else {
-            let ident = make_rs_ident(target.target_name());
+            let ident = make_rs_ident(&target.target_name_escaped());
             quote! { :: #ident }
         }
     };
@@ -1695,33 +2081,27 @@ fn fully_qualify_type_impl(
         return quote! { #prefix #suffix };
     }
 
-    // Otherwise, we assume it's a path.
-    let is_absolute_path = type_expression_suffix.starts_with("::");
-    // If the name starts with "::", then it is an absolute path. In this case, we
-    // need to skip the first part of the split, since it returns the empty string.
-    // Note: Crubit can generate poorly formatted names, like `:: foo :: bar`, so we also
-    // need to trim whitespace to create valid identifiers.
-    let name_parts = type_expression_suffix
-        .split("::")
-        .skip(is_absolute_path as usize)
-        .map(str::trim)
-        .map(make_rs_ident);
+    let type_expression = type_expression_suffix
+        .parse::<TokenStream>()
+        .expect("Type expression should parse as a TokenStream");
 
-    let top_level_crate = if is_absolute_path {
-        quote! {}
+    if type_expression_suffix.starts_with("::") {
+        quote! { #prefix #type_expression }
     } else {
-        root_crate()
-    };
-    quote! { #prefix  #top_level_crate :: #(#name_parts)::* }
+        let top_level_crate = root_crate();
+        quote! { #prefix #top_level_crate::#type_expression }
+    }
 }
 
 struct RsTypeKindIter<'ty> {
     todo: Vec<&'ty RsTypeKind>,
+    /// If true, traversal stops at type aliases and will not inspect their `underlying_type`.
+    ignore_type_alias_underlying: bool,
 }
 
 impl<'ty> RsTypeKindIter<'ty> {
-    pub fn new(ty: &'ty RsTypeKind) -> Self {
-        Self { todo: vec![ty] }
+    pub fn new(ty: &'ty RsTypeKind, ignore_type_alias_underlying: bool) -> Self {
+        Self { todo: vec![ty], ignore_type_alias_underlying }
     }
 }
 
@@ -1741,14 +2121,17 @@ impl<'ty> Iterator for RsTypeKindIter<'ty> {
                     RsTypeKind::Pointer { pointee, .. } => self.todo.push(pointee),
                     RsTypeKind::Reference { referent, .. } => self.todo.push(referent),
                     RsTypeKind::RvalueReference { referent, .. } => self.todo.push(referent),
-                    RsTypeKind::TypeAlias { underlying_type: t, .. } => self.todo.push(t),
+                    RsTypeKind::TypeAlias { underlying_type: t, .. } => {
+                        if !self.ignore_type_alias_underlying {
+                            self.todo.push(t);
+                        }
+                    }
                     RsTypeKind::FuncPtr { return_type, param_types, .. } => {
                         self.todo.push(return_type);
                         self.todo.extend(param_types.iter().rev());
                     }
                     RsTypeKind::BridgeType { bridge_type, .. } => match bridge_type {
-                        BridgeRsTypeKind::BridgeVoidConverters { .. }
-                        | BridgeRsTypeKind::ProtoMessageBridge { .. }
+                        BridgeRsTypeKind::ProtoMessageBridge { .. }
                         | BridgeRsTypeKind::Bridge { .. } => {}
                         BridgeRsTypeKind::StdOptional(t) => self.todo.push(t),
                         BridgeRsTypeKind::StdPair(t1, t2) => {
@@ -1756,11 +2139,15 @@ impl<'ty> Iterator for RsTypeKindIter<'ty> {
                             self.todo.push(t1);
                         }
                         BridgeRsTypeKind::StdString { .. } => {}
+                        BridgeRsTypeKind::Callable(callable) => {
+                            self.todo.push(&callable.return_type);
+                            self.todo.extend(callable.param_types.iter().rev());
+                        }
+                        BridgeRsTypeKind::C9Co { result_type, .. } => {
+                            self.todo.push(result_type);
+                        }
                     },
-                    RsTypeKind::ExistingRustType(_) => {}
-                    RsTypeKind::C9Co { result_type, .. } => {
-                        self.todo.push(result_type);
-                    }
+                    RsTypeKind::ExistingRustType { .. } => {}
                 };
                 Some(curr)
             }
@@ -1772,20 +2159,26 @@ impl<'ty> Iterator for RsTypeKindIter<'ty> {
 mod tests {
     use super::*;
     use arc_anyhow::Result;
+    use error_report::anyhow;
     use googletest::prelude::*;
     use token_stream_matchers::assert_rs_matches;
 
     fn make_existing_rust_type(name: Rc<str>, is_same_abi: bool) -> RsTypeKind {
-        RsTypeKind::ExistingRustType(Rc::new(ExistingRustType {
-            rs_name: name,
-            cc_name: "".into(),
-            type_parameters: Vec::new(),
-            owning_target: BazelLabel("//new/for/testing".into()),
-            size_align: None,
-            is_same_abi,
-            id: ItemId::new_for_testing(0),
-            must_bind: false,
-        }))
+        RsTypeKind::new_existing_rust_type(
+            EmptyDatabase,
+            Rc::new(ExistingRustType {
+                rs_name: name.clone(),
+                cc_name: "".into(),
+                unique_name: name.clone(),
+                template_args: Vec::new(),
+                owning_target: BazelLabel("//new/for/testing".into()),
+                size_align: None,
+                is_same_abi,
+                id: ItemId::new_for_testing(0),
+                must_bind: false,
+            }),
+        )
+        .expect("Should succeed because all fallible operations come from BindingsGenerated, which EmptyDatabase cannot successfully deref to (it panics).")
     }
 
     #[gtest]
@@ -1802,21 +2195,27 @@ mod tests {
                 return_type: Rc::new(c),
             }
         };
-        let dfs_names = f
+        let dfs_names: Vec<String> = f
             .dfs_iter()
             .map(|t| match t {
                 RsTypeKind::FuncPtr { .. } => "fn".to_string(),
-                RsTypeKind::ExistingRustType(existing_rust_type) => {
+                RsTypeKind::ExistingRustType { existing_rust_type, .. } => {
                     existing_rust_type.rs_name.to_string()
                 }
                 _ => unreachable!("Only FuncPtr and ExistingRustType kinds are used in this test"),
             })
-            .collect_vec();
+            .collect();
         assert_eq!(vec!["fn", "::A", "::B", "::C"], dfs_names);
     }
 
+    #[derive(Copy, Clone)]
     struct EmptyDatabase;
-    impl<'db> BindingsGenerator<'db> for EmptyDatabase {}
+    impl Deref for EmptyDatabase {
+        type Target = BindingsGenerator<'static>;
+        fn deref(&self) -> &Self::Target {
+            panic!("Tried to use the empty bindings generator query group.")
+        }
+    }
 
     #[gtest]
     fn test_lifetime_elision_for_references() {
@@ -1825,8 +2224,9 @@ mod tests {
             referent,
             mutability: Mutability::Const,
             lifetime: Lifetime::new("_"),
+            is_cref: false,
         };
-        assert_rs_matches!(reference.to_token_stream(&EmptyDatabase), quote! {&::T});
+        assert_rs_matches!(reference.to_token_stream(EmptyDatabase), quote! {&::T});
     }
 
     #[gtest]
@@ -1838,7 +2238,7 @@ mod tests {
             lifetime: Lifetime::new("_"),
         };
         assert_rs_matches!(
-            reference.to_token_stream(&EmptyDatabase),
+            reference.to_token_stream(EmptyDatabase),
             quote! {RvalueReference<'_, ::T>}
         );
     }
@@ -1883,6 +2283,7 @@ mod tests {
             referent: Rc::new(int.clone()),
             mutability: Mutability::Const,
             lifetime: Lifetime::new("_"),
+            is_cref: false,
         };
         for func_ptr in [
             RsTypeKind::FuncPtr {
@@ -1898,20 +2299,20 @@ mod tests {
                 param_types: Rc::from([reference]),
             },
         ] {
-            let (all_required_features, reason) = func_ptr.required_crubit_features(
-                &EmptyDatabase,
-                <flagset::FlagSet<CrubitFeature>>::default(),
+            let reasons = func_ptr.missing_feature_descriptions_of_type(
+                &BazelLabel("//fake".into()),
+                CrubitFeature::Types.into(),
             );
-            assert_eq!(
-                all_required_features,
-                CrubitFeature::Experimental | CrubitFeature::Supported
-            );
-            assert_eq!(reason, "references are not supported");
+            assert_eq!(reasons, vec!["references are not yet supported"]);
         }
     }
 
     fn make_crate_path() -> Rc<CratePath> {
-        let ns = NamespaceQualifier { namespaces: vec![], nested_records: vec![] };
+        let ns = NamespaceQualifier {
+            namespaces: vec![],
+            nested_records: vec![],
+            use_leading_colons: true,
+        };
         Rc::new(CratePath {
             crate_ident: None,
             crate_root_path: ns.clone(),
@@ -1937,6 +2338,7 @@ mod tests {
             enum_: Rc::new(Enum {
                 cc_name: Identifier { identifier: "MyEnum".into() },
                 rs_name: Identifier { identifier: "MyEnum".into() },
+                unique_name: "MyEnum".into(),
                 id: ItemId::new_for_testing(0),
                 owning_target: BazelLabel("//foo/bar".into()),
                 source_loc: "some_file.h:123".into(),
@@ -1944,11 +2346,16 @@ mod tests {
                     variant: CcTypeVariant::Primitive(Primitive::Int32T),
                     is_const: false,
                     unknown_attr: "".into(),
+                    explicit_lifetimes: vec![],
                 },
                 enumerators: Some(vec![]),
                 unknown_attr: None,
                 enclosing_item_id: None,
                 must_bind: false,
+                detected_formatter: false,
+                deprecated: None,
+                doc_comment: None,
+                nodiscard: None,
             }),
             crate_path: make_crate_path(),
         };
@@ -1962,6 +2369,7 @@ mod tests {
             incomplete_record: Rc::new(IncompleteRecord {
                 cc_name: Identifier { identifier: "MyStruct".into() },
                 rs_name: Identifier { identifier: "MyStruct".into() },
+                unique_name: "MyStruct".into(),
                 id: ItemId::new_for_testing(0),
                 owning_target: BazelLabel("//foo/bar".into()),
                 unknown_attr: None,
@@ -1986,21 +2394,29 @@ mod tests {
             type_alias: Rc::new(TypeAlias {
                 cc_name: Identifier { identifier: "MyAlias".into() },
                 rs_name: Identifier { identifier: "MyAlias".into() },
+                unique_name: "MyAlias".into(),
                 id: ItemId::new_for_testing(1),
                 owning_target: BazelLabel("//foo/bar".into()),
                 doc_comment: None,
                 unknown_attr: None,
                 underlying_type: CcType {
-                    variant: CcTypeVariant::Decl(ItemId::new_for_testing(0)),
+                    variant: CcTypeVariant::Decl {
+                        id: ItemId::new_for_testing(0),
+                        template_args: None,
+                    },
                     is_const: false,
                     unknown_attr: "".into(),
+                    explicit_lifetimes: vec![],
                 },
                 source_loc: "some_file.h:123".into(),
                 enclosing_item_id: None,
                 must_bind: false,
+                deprecated: None,
+                lifetime_inputs: vec![],
             }),
             underlying_type: Rc::new(make_incomplete_record()),
             crate_path: make_crate_path(),
+            lifetimes: vec![],
         };
 
         expect_that!(alias_incomplete_record.allowed_behind_single_element_ptr(), eq(true));

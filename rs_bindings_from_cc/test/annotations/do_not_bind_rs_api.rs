@@ -4,20 +4,19 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/annotations:do_not_bind
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 pub mod crubit {
     pub mod test {
-        /// Generated from: rs_bindings_from_cc/test/annotations/do_not_bind.h;l=12
         #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
         #[repr(C)]
         ///CRUBIT_ANNOTATE: cpp_type=crubit :: test :: ArgumentToBoundOverload
@@ -31,7 +30,6 @@ pub mod crubit {
             type Kind = ::cxx::kind::Trivial;
         }
 
-        /// Generated from: rs_bindings_from_cc/test/annotations/do_not_bind.h;l=12
         impl Default for ArgumentToBoundOverload {
             #[inline(always)]
             fn default() -> Self {
@@ -45,7 +43,6 @@ pub mod crubit {
             }
         }
 
-        /// Generated from: rs_bindings_from_cc/test/annotations/do_not_bind.h;l=13
         #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
         #[repr(C)]
         ///CRUBIT_ANNOTATE: cpp_type=crubit :: test :: ArgumentToUnboundOverload
@@ -59,7 +56,6 @@ pub mod crubit {
             type Kind = ::cxx::kind::Trivial;
         }
 
-        /// Generated from: rs_bindings_from_cc/test/annotations/do_not_bind.h;l=13
         impl Default for ArgumentToUnboundOverload {
             #[inline(always)]
             fn default() -> Self {
@@ -73,7 +69,6 @@ pub mod crubit {
             }
         }
 
-        /// Generated from: rs_bindings_from_cc/test/annotations/do_not_bind.h;l=16
         #[inline(always)]
         pub fn DoNotBindFn(mut __param_0: crate::crubit::test::ArgumentToBoundOverload) {
             unsafe {
@@ -81,11 +76,9 @@ pub mod crubit {
             }
         }
 
-        // Generated from: rs_bindings_from_cc/test/annotations/do_not_bind.h;l=26
-        // Error while generating bindings for function 'crubit::test::FunctionWithDoNotBindArgument':
-        // Parameter #0 is not supported: Unsupported type 'crubit::test::DoNotBindStruct': No generated bindings found for 'DoNotBindStruct'
+        // error: function `crubit::test::FunctionWithDoNotBindArgument` could not be bound
+        //   Parameter #0 is not supported: Unsupported type 'crubit::test::DoNotBindStruct': No generated bindings found for 'DoNotBindStruct'
 
-        /// Generated from: rs_bindings_from_cc/test/annotations/do_not_bind.h;l=28
         #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
         #[repr(C)]
         ///CRUBIT_ANNOTATE: cpp_type=crubit :: test :: StructWithDoNotBindConstructor
@@ -99,10 +92,10 @@ pub mod crubit {
             type Kind = ::cxx::kind::Trivial;
         }
 
-        /// Generated from: rs_bindings_from_cc/test/annotations/do_not_bind.h;l=31
         impl From<crate::crubit::test::ArgumentToBoundOverload> for StructWithDoNotBindConstructor {
             #[inline(always)]
-            fn from(mut __param_0: crate::crubit::test::ArgumentToBoundOverload) -> Self {
+            fn from(args: crate::crubit::test::ArgumentToBoundOverload) -> Self {
+                let mut __param_0 = args;
                 let mut tmp = ::core::mem::MaybeUninit::<Self>::zeroed();
                 unsafe {
                     crate::detail::__rust_thunk___ZN6crubit4test30StructWithDoNotBindConstructorC1ENS0_23ArgumentToBoundOverloadE(&raw mut tmp as*mut _,&mut __param_0);
@@ -121,7 +114,6 @@ pub mod crubit {
             }
         }
 
-        /// Generated from: rs_bindings_from_cc/test/annotations/do_not_bind.h;l=34
         #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
         #[repr(C)]
         ///CRUBIT_ANNOTATE: cpp_type=crubit :: test :: StructWithDoNotBindMethod
@@ -135,17 +127,19 @@ pub mod crubit {
             type Kind = ::cxx::kind::Trivial;
         }
         impl StructWithDoNotBindMethod {
-            /// Generated from: rs_bindings_from_cc/test/annotations/do_not_bind.h;l=36
+            /// # Safety
+            ///
+            /// The caller must ensure that the following unsafe arguments are not misused by the function:
+            /// * `__this`: raw pointer
             #[inline(always)]
             pub unsafe fn DoNotBindMethod(
                 __this: *mut Self,
                 mut __param_0: crate::crubit::test::ArgumentToBoundOverload,
             ) {
-                crate::detail::__rust_thunk___ZN6crubit4test25StructWithDoNotBindMethod15DoNotBindMethodENS0_23ArgumentToBoundOverloadE(__this,&mut __param_0)
+                unsafe { self::struct_with_do_not_bind_method::DoNotBindMethod(__this, __param_0) }
             }
         }
 
-        /// Generated from: rs_bindings_from_cc/test/annotations/do_not_bind.h;l=34
         impl Default for StructWithDoNotBindMethod {
             #[inline(always)]
             fn default() -> Self {
@@ -158,20 +152,26 @@ pub mod crubit {
                 }
             }
         }
+
+        pub mod struct_with_do_not_bind_method {
+            /// # Safety
+            ///
+            /// The caller must ensure that the following unsafe arguments are not misused by the function:
+            /// * `__this`: raw pointer
+            #[inline(always)]
+            pub(crate) unsafe fn DoNotBindMethod(
+                __this: *mut crate::crubit::test::StructWithDoNotBindMethod,
+                mut __param_0: crate::crubit::test::ArgumentToBoundOverload,
+            ) {
+                unsafe {
+                    crate::detail::__rust_thunk___ZN6crubit4test25StructWithDoNotBindMethod15DoNotBindMethodENS0_23ArgumentToBoundOverloadE(__this,&mut __param_0)
+                }
+            }
+        }
     }
 }
 
 // namespace crubit::test
-
-// Generated from: nowhere/llvm/src/libcxx/include/__type_traits/integral_constant.h;l=21
-// Error while generating bindings for struct 'std::integral_constant<bool, false>':
-// Can't generate bindings for std::integral_constant<bool, false>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/annotations:do_not_bind needs [//features:wrapper] for std::integral_constant<bool, false> (crate::__CcTemplateInstNSt3__u17integral_constantIbLb0EEE is a template instantiation)
-
-// Generated from: nowhere/llvm/src/libcxx/include/__type_traits/integral_constant.h;l=21
-// Error while generating bindings for struct 'std::integral_constant<bool, true>':
-// Can't generate bindings for std::integral_constant<bool, true>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/annotations:do_not_bind needs [//features:wrapper] for std::integral_constant<bool, true> (crate::__CcTemplateInstNSt3__u17integral_constantIbLb1EEE is a template instantiation)
 
 mod detail {
     #[allow(unused_imports)]

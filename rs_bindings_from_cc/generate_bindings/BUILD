@@ -1,3 +1,6 @@
+load("@protobuf//bazel:cc_proto_library.bzl", "cc_proto_library")
+load("@protobuf//bazel:proto_library.bzl", "proto_library")
+load("@protobuf//rust:defs.bzl", "rust_proto_library")
 load(
     "@rules_rust//rust:defs.bzl",
     "rust_library",
@@ -6,6 +9,40 @@ load(
 load(
     "//common:multiplatform_testing.bzl",
     "multiplatform_rust_test",
+)
+
+proto_library(
+    name = "generate_bindings_proto",
+    srcs = ["generate_bindings.proto"],
+    visibility = ["//:__subpackages__"],
+    deps = ["//rs_bindings_from_cc:ir_proto"],
+)
+
+cc_proto_library(
+    name = "generate_bindings_cc_proto",
+    visibility = ["//:__subpackages__"],
+    deps = [":generate_bindings_proto"],
+)
+
+rust_proto_library(
+    name = "generate_bindings_rust_proto",
+    visibility = ["//:__subpackages__"],
+    deps = [":generate_bindings_proto"],
+)
+
+rust_library(
+    name = "cc_api_ffi",
+    srcs = ["cc_api_ffi.rs"],
+    visibility = [
+        "//cargo:__subpackages__",
+        "//rs_bindings_from_cc:__subpackages__",
+    ],
+    deps = [
+        ":cc_api",
+        ":generate_bindings_rust_proto",
+        "//common:ffi_types",
+        "@protobuf//rust:protobuf",
+    ],
 )
 
 rust_library(
@@ -19,15 +56,19 @@ rust_library(
     ],
     deps = [
         ":generate_bindings",
+        ":generate_bindings_rust_proto",
+        "//common:arc_anyhow",
         "//common:error_report",
-        "//common:ffi_types",
+        "//rs_bindings_from_cc:ir",
         "//rs_bindings_from_cc/generate_bindings/database",
+        "@protobuf//rust:protobuf",
     ],
 )
 
 rust_library(
     name = "generate_bindings",
     srcs = [
+        "generate_dyn_callable.rs",
         "lib.rs",
     ],
     visibility = [
@@ -42,6 +83,7 @@ rust_library(
         ":generate_function_thunk",
         ":generate_struct_and_union",
         ":has_bindings",
+        ":lifetime_defaults_transform",
         ":rs_type_kind",
         "//common:arc_anyhow",
         "//common:code_gen_utils",
@@ -50,7 +92,7 @@ rust_library(
         "//common:dyn_format",
         "//common:error_report",
         "//common:errors",
-        "//common:ffi_types",
+        "//common:kythe_metadata",
         "//common:token_stream_printer",
         "//rs_bindings_from_cc:ir",
         "//rs_bindings_from_cc/generate_bindings/database",
@@ -122,6 +164,7 @@ rust_library(
     deps = [
         ":cpp_type_name",
         ":generate_comment",
+        ":lifetime_defaults_transform",
         "//common:arc_anyhow",
         "//common:code_gen_utils",
         "//common:crubit_feature",
@@ -196,7 +239,6 @@ rust_library(
         "//common:arc_anyhow",
         "//common:dyn_format",
         "//common:error_report",
-        "//common:ffi_types",
         "//rs_bindings_from_cc:ir",
         "//rs_bindings_from_cc/generate_bindings/database",
     ],
@@ -215,12 +257,13 @@ rust_library(
         "//common:code_gen_utils",
         "//common:crubit_feature",
         "//common:error_report",
-        "//common:ffi_types",
         "//rs_bindings_from_cc:ir",
         "//rs_bindings_from_cc/generate_bindings/database",
         "@crate_index//:itertools",  # v0_13
+        "@crate_index//:once_cell",  # v1
         "@crate_index//:proc-macro2",
         "@crate_index//:quote",  # v1
+        "@crate_index//:regex",  # v1
     ],
 )
 
@@ -237,7 +280,6 @@ rust_test(
         ":generate_comment",
         "//common:arc_anyhow",
         "//common:error_report",
-        "//common:ffi_types",
         "//common:token_stream_matchers",
         "//rs_bindings_from_cc:ir",
         "//rs_bindings_from_cc:ir_matchers",
@@ -283,6 +325,7 @@ multiplatform_rust_test(
         ":multiplatform_ir_testing",
         ":test_generators",
         "//common:arc_anyhow",
+        "//common:crubit_feature",
         "//common:token_stream_matchers",
         "@crate_index//:googletest",
         "@crate_index//:quote",  # v1
@@ -300,9 +343,11 @@ rust_library(
     ],
     deps = [
         ":cpp_type_name",
+        ":lifetime_defaults_transform",
         "//common:arc_anyhow",
         "//common:code_gen_utils",
         "//common:crubit_abi_type",
+        "//common:crubit_feature",
         "//common:error_report",
         "//rs_bindings_from_cc:ir",
         "//rs_bindings_from_cc/generate_bindings/database",
@@ -330,6 +375,7 @@ rust_library(
         ":generate_comment",
         ":generate_function_thunk",
         ":has_bindings",
+        ":lifetime_defaults_transform",
         "//common:arc_anyhow",
         "//common:code_gen_utils",
         "//common:crubit_abi_type",
@@ -388,6 +434,7 @@ rust_library(
     deps = [
         "//common:arc_anyhow",
         "//common:crubit_feature",
+        "//common:error_report",
         "//rs_bindings_from_cc:ir",
         "//rs_bindings_from_cc/generate_bindings/database",
         "@crate_index//:heck",  # v0_5
@@ -407,7 +454,9 @@ rust_library(
         "//common:arc_anyhow",
         "//common:code_gen_utils",
         "//common:crubit_abi_type",
+        "//common:crubit_feature",
         "//common:error_report",
+        "//common:memoized",
         "//rs_bindings_from_cc:ir",
         "//rs_bindings_from_cc/generate_bindings/database",
         "@crate_index//:itertools",  # v0_13
@@ -426,10 +475,13 @@ multiplatform_rust_test(
         "not_run:arm",
         "not_run:mac",
     ],
+    visibility = ["//cargo:__subpackages__"],
     deps = [
+        ":generate_bindings",
         ":lifetime_defaults_transform",
         ":multiplatform_ir_testing",
         "//common:arc_anyhow",
+        "//common:error_report",
         "//common:multiplatform_testing",
         "//rs_bindings_from_cc:ir",
         "//rs_bindings_from_cc:ir_matchers",
@@ -453,7 +505,10 @@ rust_library(
     deps = [
         ":cpp_type_name",
         ":has_bindings",
+        ":lifetime_defaults_transform",
         "//common:arc_anyhow",
+        "//common:crubit_feature",
+        "//common:error_report",
         "//rs_bindings_from_cc:ir",
         "//rs_bindings_from_cc/generate_bindings/database",
     ],

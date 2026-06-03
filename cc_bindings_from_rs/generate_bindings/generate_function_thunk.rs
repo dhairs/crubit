@@ -2,10 +2,11 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+use crate::generate_function::fn_arg_idents;
 use crate::{
-    does_type_implement_trait, ensure_ty_is_pointer_like, format_cc_ident,
-    format_param_types_for_cc, format_ret_ty_for_cc, is_bridged_type, is_c_abi_compatible_by_value,
-    liberate_and_deanonymize_late_bound_regions, BridgedType, BridgedTypeConversionInfo, RsSnippet,
+    does_type_implement_trait, format_cc_ident, format_param_types_for_cc, is_bridged_type,
+    is_c_abi_compatible_by_value, liberate_and_deanonymize_late_bound_regions, BridgedBuiltin,
+    BridgedType, BridgedTypeConversionInfo, RsSnippet, TypeLocation,
 };
 use arc_anyhow::{Context, Result};
 use code_gen_utils::escape_non_identifier_chars;
@@ -13,14 +14,16 @@ use code_gen_utils::make_rs_ident;
 use code_gen_utils::CcConstQualifier;
 use crubit_abi_type::CrubitAbiTypeToRustExprTokens;
 use database::code_snippet::{CcPrerequisites, CcSnippet, ExternCDecl};
-use database::{AdtCoreBindings, BindingsGenerator, SugaredTy};
+use database::BindingsGenerator;
 use error_report::{anyhow, bail, ensure};
 use itertools::Itertools;
 use proc_macro2::{Ident, TokenStream};
-use query_compiler::post_analysis_typing_env;
+use query_compiler::{post_analysis_typing_env, try_normalize};
 use quote::format_ident;
 use quote::quote;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+#[rustversion::since(2026-04-22)]
+use rustc_middle::ty::Flags;
+use rustc_middle::ty::{self, Ty, TyCtxt, TypingEnv};
 use rustc_span::def_id::DefId;
 use rustc_span::symbol::{kw, sym, Symbol};
 use rustc_type_ir::inherent::Region;
@@ -32,8 +35,17 @@ use std::ops::AddAssign;
 ///
 /// Tuples are passed via a pointer to an array of `void*` where
 /// each pointer points to the corresponding element of the tuple.
-fn tuple_c_abi_c_type(possibly_tuple_ty: ty::Ty) -> Option<TokenStream> {
+fn tuple_c_abi_c_type(
+    db: &BindingsGenerator<'_>,
+    possibly_tuple_ty: ty::Ty,
+) -> Option<TokenStream> {
     let ty::TyKind::Tuple(_) = possibly_tuple_ty.kind() else { return None };
+    if db
+        .crate_features(db.source_crate_num())
+        .contains(crubit_feature::CrubitFeature::LayoutCompatTuple)
+    {
+        return None;
+    }
     // Sized array types are sadly not usable by-pointer in C++.
     Some(quote! { void** })
 }
@@ -43,25 +55,43 @@ fn tuple_c_abi_c_type(possibly_tuple_ty: ty::Ty) -> Option<TokenStream> {
 ///
 /// Tuples are passed via a pointer to an array of `*const c_void` where
 /// each pointer points to the corresponding element of the tuple.
-fn tuple_c_abi_rs_type(possibly_tuple_ty: ty::Ty) -> Option<TokenStream> {
+fn tuple_c_abi_rs_type(
+    db: &BindingsGenerator<'_>,
+    possibly_tuple_ty: ty::Ty,
+) -> Option<TokenStream> {
     let ty::TyKind::Tuple(tuple_tys) = possibly_tuple_ty.kind() else { return None };
+    if db
+        .crate_features(db.source_crate_num())
+        .contains(crubit_feature::CrubitFeature::LayoutCompatTuple)
+    {
+        return None;
+    }
     let num_elements = tuple_tys.len();
     Some(quote! { *const [*const core::ffi::c_void; #num_elements] })
 }
 
 fn is_drop_not_default<'tcx>(tcx: ty::TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> bool {
-    if !ty.needs_drop(
-        tcx,
-        ty::TypingEnv {
-            typing_mode: ty::TypingMode::PostAnalysis,
-            param_env: ty::ParamEnv::empty(),
-        },
-    ) {
+    if !ty.needs_drop(tcx, ty::TypingEnv::fully_monomorphized()) {
         return false;
     }
     let trait_id =
         tcx.get_diagnostic_item(sym::Default).expect("Couldn't find `core::default::Default`");
     !does_type_implement_trait(tcx, ty, trait_id, [])
+}
+
+/// Returns true for types that appear as both bridged types and layout-compatible types.
+///
+/// For example, `Option<T>` will be bridged as `std::optional<T>` in function signatures, but
+/// appears as `rs_std::Option<T>` in struct fields.
+fn is_bridged_layout_compat_type<'tcx>(db: &BindingsGenerator<'tcx>, ret_ty: ty::Ty<'tcx>) -> bool {
+    let is_nonempty_tuple = || {
+        let ty::TyKind::Tuple(fields) = ret_ty.kind() else { return false };
+        !fields.is_empty()
+    };
+    ret_ty
+        .ty_adt_def()
+        .is_some_and(|adt| matches!(BridgedBuiltin::new(db, adt), Some(BridgedBuiltin::Option)))
+        || is_nonempty_tuple()
 }
 
 /// Returns a C ABI-compatible C type to pass a [inner_ty; _].
@@ -80,22 +110,25 @@ fn array_c_abi_c_type<'tcx>(tcx: ty::TyCtxt<'tcx>, inner_ty: ty::Ty<'tcx>) -> Re
 
 /// Formats a C++ declaration of a C-ABI-compatible-function wrapper around a Rust function.
 pub fn generate_thunk_decl<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     sig_mid: &ty::FnSig<'tcx>,
-    sig_hir: Option<&rustc_hir::FnDecl<'tcx>>,
     thunk_name: &Ident,
     has_self_param: bool,
-) -> Result<CcSnippet> {
+    is_constructor: bool,
+) -> Result<CcSnippet<'tcx>> {
     let tcx = db.tcx();
     let mut prereqs = CcPrerequisites::default();
-    let main_api_ret_type = format_ret_ty_for_cc(db, sig_mid, sig_hir)?.into_tokens(&mut prereqs);
+    let main_api_ret_type = db
+        .format_ty_for_cc(sig_mid.output(), TypeLocation::FnReturn { is_constructor })
+        .with_context(|| format!("Error formatting function return type `{}`", sig_mid.output()))?
+        .into_tokens(&mut prereqs);
 
     let mut thunk_params = {
-        let cpp_types = format_param_types_for_cc(db, sig_mid, sig_hir, has_self_param)?;
+        let cpp_types = format_param_types_for_cc(db, sig_mid, has_self_param)?;
         sig_mid
             .inputs()
             .iter()
-            .zip(cpp_types.into_iter())
+            .zip(cpp_types)
             .map(|(&ty, cpp_type)| -> Result<TokenStream> {
                 let cpp_type = cpp_type.snippet.into_tokens(&mut prereqs);
                 let bridged_type_opt = is_bridged_type(db, ty)?;
@@ -113,15 +146,28 @@ pub fn generate_thunk_decl<'tcx>(
                     }
                 } else if is_c_abi_compatible_by_value(tcx, ty) {
                     Ok(quote! { #cpp_type })
-                } else if let Some(tuple_abi) = tuple_c_abi_c_type(ty) {
+                } else if let Some(tuple_abi) = tuple_c_abi_c_type(db, ty) {
                     Ok(tuple_abi)
                 } else if let ty::TyKind::Array(inner_ty, _) = ty.kind() {
                     array_c_abi_c_type(db.tcx(), *inner_ty)
                 } else if let Some(adt_def) = ty.ty_adt_def() {
-                    let core = db.generate_adt_core(adt_def.did())?;
-                    db.generate_move_ctor_and_assignment_operator(core).map_err(|e| {
-                        anyhow!("Can't pass a type by value without a move constructor: {}", e.err)
+                    // If the type is a standard template specialization (like Option or Result)
+                    // from the external `core` library, passing the generic `Option` DefId causes
+                    // the compiler to try to analyze the layout of `Option<T>`, which fails because `T`
+                    // does not have a fixed layout. Passing `None` forces the query to fall back to
+                    // a fully monomorphized typing environment to layout the concrete type (e.g., `Option<i32>`).
+                    let always_specialize_generics = db.crate_features(db.source_crate_num())
+                        .contains(crubit_feature::CrubitFeature::AlwaysSpecializeGenericsInCppApiFromRust);
+                    let def_id = if always_specialize_generics && db.parse_rs_std_template_specialization(ty).is_some() {
+                        None
+                    } else {
+                        Some(adt_def.did())
+                    };
+                    db.has_move_ctor_and_assignment_operator(def_id, ty).ok_or_else(|| {
+                        anyhow!("Can't pass type `{ty}` by value without a move constructor. See crubit.rs/rust/movable_types for what types are C++ movable.")
                     })?;
+                    Ok(quote! { #cpp_type* })
+                } else if let ty::TyKind::Tuple(_) = ty.kind() {
                     Ok(quote! { #cpp_type* })
                 } else {
                     bail!("Unknown type")
@@ -134,7 +180,10 @@ pub fn generate_thunk_decl<'tcx>(
     // TODO: b/ 459482188 - The order of this check must align with the order in `cc_return_value_from_c_abi`.
     // We should centralize this logic so that the order exists in a singular location used by both
     // places.
-    let thunk_ret_type = if let Some(briging) = is_bridged_type(db, sig_mid.output())? {
+    let thunk_ret_type = if is_constructor && is_bridged_layout_compat_type(db, sig_mid.output()) {
+        thunk_params.push(quote! { #main_api_ret_type* __ret_ptr });
+        quote! { void }
+    } else if let Some(briging) = is_bridged_type(db, sig_mid.output())? {
         match briging {
             BridgedType::Legacy { .. } => {
                 thunk_params.push(quote! { #main_api_ret_type* __ret_ptr });
@@ -147,7 +196,7 @@ pub fn generate_thunk_decl<'tcx>(
         }
     } else if is_c_abi_compatible_by_value(tcx, sig_mid.output()) {
         main_api_ret_type
-    } else if let Some(tuple_abi) = tuple_c_abi_c_type(sig_mid.output()) {
+    } else if let Some(tuple_abi) = tuple_c_abi_c_type(db, sig_mid.output()) {
         thunk_params.push(quote! { #tuple_abi __ret_ptr });
         quote! { void }
     } else if let ty::TyKind::Array(inner_ty, _) = sig_mid.output().kind() {
@@ -161,9 +210,8 @@ pub fn generate_thunk_decl<'tcx>(
 
     let mut attributes = vec![];
     // Attribute: noreturn
-    let rs_return_type =
-        SugaredTy::fn_output(sig_mid, if db.enable_hir_types() { sig_hir } else { None });
-    if *rs_return_type.mid().kind() == ty::TyKind::Never {
+    let rs_return_type = sig_mid.output();
+    if *rs_return_type.kind() == ty::TyKind::Never {
         attributes.push(quote! {[[noreturn]]});
     }
 
@@ -182,9 +230,9 @@ pub fn generate_thunk_decl<'tcx>(
 /// Expects an exising local of type `cpp_type` named `local_name` and shadows it
 /// with a local of type `ty` named `local_name`.
 fn convert_bridged_type_from_c_abi_to_rust<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     ty: ty::Ty<'tcx>,
-    bridged_type: &BridgedType,
+    bridged_type: &BridgedType<'tcx>,
     local_name: &Ident,
     extern_c_decls: &mut BTreeSet<ExternCDecl>,
 ) -> Result<TokenStream> {
@@ -197,9 +245,17 @@ fn convert_bridged_type_from_c_abi_to_rust<'tcx>(
     match bridged_type {
         BridgedType::Legacy { conversion_info, .. } => {
             let convert = match conversion_info {
-                BridgedTypeConversionInfo::PointerLikeTransmute => quote! {
-                    #temp_name.write(::core::mem::transmute(#local_name));
-                },
+                BridgedTypeConversionInfo::PointerLikeTransmute { is_pointer } => {
+                    if *is_pointer {
+                        quote! {
+                            #temp_name.write(::core::mem::transmute(#local_name));
+                        }
+                    } else {
+                        quote! {
+                            #temp_name.write((#local_name as *const #rs_type).read());
+                        }
+                    }
+                }
                 BridgedTypeConversionInfo::ExternCFuncConverters {
                     cpp_to_rust_converter, ..
                 } => {
@@ -236,7 +292,7 @@ fn convert_bridged_type_from_c_abi_to_rust<'tcx>(
 /// Converts a local named `local_name` from its C ABI-compatible type
 /// `*const [*const core::ffi::c_void; <tuple_tys.len()>]` to a tuple of Rust types.
 fn convert_tuple_from_c_abi_to_rust<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     tuple_tys: &[ty::Ty<'tcx>],
     local_name: &Ident,
     extern_c_decls: &mut BTreeSet<ExternCDecl>,
@@ -265,7 +321,7 @@ fn convert_tuple_from_c_abi_to_rust<'tcx>(
 /// Returns code to convert a local named `local_name` from its C ABI-compatible type to its Rust
 /// type.
 fn convert_value_from_c_abi_to_rust<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     ty: ty::Ty<'tcx>,
     local_name: &Ident,
     extern_c_decls: &mut BTreeSet<ExternCDecl>,
@@ -283,7 +339,11 @@ fn convert_value_from_c_abi_to_rust<'tcx>(
     if is_c_abi_compatible_by_value(tcx, ty) {
         return Ok(quote! {});
     }
-    if let ty::TyKind::Tuple(tuple_tys) = ty.kind() {
+    if let ty::TyKind::Tuple(tuple_tys) = ty.kind()
+        && !db
+            .crate_features(db.source_crate_num())
+            .contains(crubit_feature::CrubitFeature::LayoutCompatTuple)
+    {
         return convert_tuple_from_c_abi_to_rust(db, tuple_tys, local_name, extern_c_decls);
     }
     // Non-C-ABI-compatible-by-value types are passed by
@@ -292,7 +352,7 @@ fn convert_value_from_c_abi_to_rust<'tcx>(
 }
 
 fn c_abi_for_param_type<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     ty: ty::Ty<'tcx>,
 ) -> Result<TokenStream> {
     let tcx = db.tcx();
@@ -304,7 +364,7 @@ fn c_abi_for_param_type<'tcx>(
     } else if is_c_abi_compatible_by_value(tcx, ty) {
         let rs_type = db.format_ty_for_rs(ty)?;
         Ok(quote! { #rs_type })
-    } else if let Some(tuple_abi) = tuple_c_abi_rs_type(ty) {
+    } else if let Some(tuple_abi) = tuple_c_abi_rs_type(db, ty) {
         Ok(quote! { #tuple_abi })
     } else {
         let rs_type = db.format_ty_for_rs(ty)?;
@@ -314,24 +374,21 @@ fn c_abi_for_param_type<'tcx>(
     }
 }
 
-#[rustversion::before(2025-03-19)]
+#[rustversion::all(before(1.94), before(2025-03-19))]
 pub(crate) fn ident_or_opt_ident(i: &rustc_span::Ident) -> Option<&rustc_span::Ident> {
     Some(i)
 }
 
-#[rustversion::since(2025-03-19)]
+#[rustversion::any(since(1.94), since(2025-03-19))]
 pub(crate) fn ident_or_opt_ident(i: &Option<rustc_span::Ident>) -> Option<&rustc_span::Ident> {
     i.as_ref()
 }
 
 /// Returns an iterator which yields arbitrary unique names for the parameters
 /// of the function identified by `fn_def_id`.
-pub fn thunk_param_names(
-    tcx: ty::TyCtxt<'_>,
-    fn_def_id: DefId,
-) -> impl Iterator<Item = Ident> + '_ {
-    tcx.fn_arg_idents(fn_def_id).iter().enumerate().map(|(i, ident)| {
-        let Some(ident) = ident_or_opt_ident(ident) else {
+fn thunk_param_names(tcx: ty::TyCtxt<'_>, fn_def_id: DefId) -> impl Iterator<Item = Ident> + '_ {
+    fn_arg_idents(tcx, fn_def_id).into_iter().enumerate().map(|(i, ident)| {
+        let Some(ident) = ident_or_opt_ident(&ident) else {
             return format_ident!("__param_{i}");
         };
         // TODO(jeanpierreda): Deduplicate the logic after the next rustc rollout.
@@ -380,7 +437,7 @@ fn add_extern_c_decl(
 
 /// Writes a Rust value out into the memory pointed to a `*mut c_void` pointed to by `c_ptr`.
 fn write_rs_value_to_c_abi_ptr<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     rs_value: &Ident,
     c_ptr: &Ident,
     rs_type: ty::Ty<'tcx>,
@@ -394,10 +451,7 @@ fn write_rs_value_to_c_abi_ptr<'tcx>(
     Ok(if let Some(bridged_type) = is_bridged_type(db, rs_type)? {
         match bridged_type {
             BridgedType::Legacy { conversion_info, .. } => match conversion_info {
-                BridgedTypeConversionInfo::PointerLikeTransmute => {
-                    ensure_ty_is_pointer_like(db, rs_type)?;
-                    write_directly()?
-                }
+                BridgedTypeConversionInfo::PointerLikeTransmute { .. } => write_directly()?,
                 BridgedTypeConversionInfo::ExternCFuncConverters {
                     rust_to_cpp_converter, ..
                 } => {
@@ -432,7 +486,11 @@ fn write_rs_value_to_c_abi_ptr<'tcx>(
         }
     } else if is_c_abi_compatible_by_value(tcx, rs_type) {
         write_directly()?
-    } else if let ty::TyKind::Tuple(tuple_tys) = rs_type.kind() {
+    } else if let ty::TyKind::Tuple(tuple_tys) = rs_type.kind()
+        && !db
+            .crate_features(db.source_crate_num())
+            .contains(crubit_feature::CrubitFeature::LayoutCompatTuple)
+    {
         let num_elements = tuple_tys.len();
         let rs_element_names =
             (0..num_elements).map(|i| format_ident!("{rs_value}_{i}")).collect_vec();
@@ -459,14 +517,14 @@ fn write_rs_value_to_c_abi_ptr<'tcx>(
         }
     } else if let ty::TyKind::Array { .. } = rs_type.kind() {
         write_directly()?
-    } else if rs_type.ty_adt_def().is_some() {
+    } else if rs_type.ty_adt_def().is_some() || matches!(rs_type.kind(), ty::TyKind::Tuple(_)) {
         write_directly()?
     } else {
         bail!("Attempted to write out unknown type from Rust to C")
     })
 }
 
-fn replace_all_regions_with_static<'tcx, T>(tcx: TyCtxt<'tcx>, value: T) -> T
+pub(crate) fn replace_all_regions_with_static<'tcx, T>(tcx: TyCtxt<'tcx>, value: T) -> T
 where
     T: ty::TypeFoldable<TyCtxt<'tcx>>,
 {
@@ -498,11 +556,12 @@ where
 /// - `<::crate_name::some_module::SomeStruct as
 ///   ::core::default::Default>::default`
 pub fn generate_thunk_impl<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     fn_def_id: DefId,
     sig: &ty::FnSig<'tcx>,
     thunk_name: &str,
     fully_qualified_fn_name: TokenStream,
+    is_constructor: bool,
 ) -> Result<RsSnippet> {
     let tcx = db.tcx();
 
@@ -540,7 +599,6 @@ pub fn generate_thunk_impl<'tcx>(
     let fn_args: Vec<Ident> =
         param_names_and_types.into_iter().map(|(rs_name, _ty)| rs_name).collect();
     let output_is_bridged = is_bridged_type(db, sig.output())?;
-
     let thunk_return_type;
     let thunk_return_expression;
     if output_is_bridged.is_none() && is_c_abi_compatible_by_value(tcx, sig.output()) {
@@ -555,7 +613,9 @@ pub fn generate_thunk_impl<'tcx>(
         let rs_return_value_ident = format_ident!("__rs_return_value");
         thunk_return_type = quote! { () };
 
-        let return_ptr_type = if let Some(BridgedType::Composable(_)) = output_is_bridged {
+        let return_ptr_type = if is_constructor && is_bridged_layout_compat_type(db, sig.output()) {
+            quote! { *mut core::ffi::c_void }
+        } else if let Some(BridgedType::Composable(_)) = output_is_bridged {
             // Composable bridging writes its Crubit ABI form in an unsigned char array.
             quote! { *mut core::ffi::c_uchar }
         } else {
@@ -594,8 +654,12 @@ pub fn generate_thunk_impl<'tcx>(
 
 /// Returns `Ok(())` if no thunk is required.
 /// Otherwise returns an error the describes why the thunk is needed.
-pub fn is_thunk_required(tcx: TyCtxt<'_>, sig: &ty::FnSig) -> Result<()> {
-    match sig.abi {
+pub fn is_thunk_required<'tcx>(tcx: TyCtxt<'tcx>, sig: &ty::FnSig<'tcx>) -> Result<()> {
+    #[rustversion::before(2026-04-19)]
+    let abi = sig.abi;
+    #[rustversion::since(2026-04-19)]
+    let abi = sig.abi();
+    match abi {
         // "C" ABI is okay: since https://rust-lang.github.io/rfcs/2945-c-unwind-abi.html has been
         // accepted, a Rust panic that "escapes" a "C" ABI function is a defined crash. See
         // https://doc.rust-lang.org/nomicon/ffi.html#ffi-and-unwinding.
@@ -623,37 +687,42 @@ pub fn is_thunk_required(tcx: TyCtxt<'_>, sig: &ty::FnSig) -> Result<()> {
     Ok(())
 }
 
-pub struct TraitThunks {
+pub struct TraitThunks<'tcx> {
     pub method_name_to_cc_thunk_name: HashMap<Symbol, Ident>,
-    pub cc_thunk_decls: CcSnippet,
+    pub cc_thunk_decls: CcSnippet<'tcx>,
     pub rs_thunk_impls: RsSnippet,
 }
 
 pub fn generate_trait_thunks<'tcx>(
-    db: &dyn BindingsGenerator<'tcx>,
+    db: &BindingsGenerator<'tcx>,
     trait_id: DefId,
     // We do not support other generic args, yet.
     type_args: &[Ty<'tcx>],
-    adt: &AdtCoreBindings<'tcx>,
-) -> Result<TraitThunks> {
+    self_ty: Ty<'tcx>,
+    def_id: Option<DefId>,
+    rs_fully_qualified_name: TokenStream,
+    is_constructor: bool,
+) -> Result<TraitThunks<'tcx>> {
     let tcx = db.tcx();
     assert!(tcx.is_trait(trait_id));
 
-    let self_ty = adt.self_ty;
     let is_drop_trait = Some(trait_id) == tcx.lang_items().drop_trait();
     if is_drop_trait {
         // To support "drop glue" we don't require that `self_ty` directly implements
         // the `Drop` trait.  Instead we require the caller to check
         // `needs_drop`.
-        assert!(self_ty.needs_drop(tcx, post_analysis_typing_env(tcx, adt.def_id)));
+        let typing_env = def_id
+            .map(|id| post_analysis_typing_env(tcx, id))
+            .unwrap_or_else(ty::TypingEnv::fully_monomorphized);
+        assert!(self_ty.needs_drop(tcx, typing_env));
     } else if !does_type_implement_trait(
         tcx,
         self_ty,
         trait_id,
         type_args.iter().copied().map(ty::GenericArg::from),
     ) {
-        let display_name = db
-            .symbol_canonical_name(adt.def_id)
+        let display_name = def_id
+            .and_then(|id| db.symbol_canonical_name(id))
             .map(|canon| {
                 let parts = canon.rs_name_parts().map(|s| format!("{}", s)).collect::<Vec<_>>();
                 parts.join("::")
@@ -663,13 +732,30 @@ pub fn generate_trait_thunks<'tcx>(
         bail!("`{display_name}` doesn't implement the `{trait_name}` trait");
     }
 
+    fn is_supported_trait_method<'tcx>(tcx: TyCtxt<'tcx>, method_def_id: DefId) -> bool {
+        // We want to check the `self` type of the method (and not the enclosing impl) so that we see Pin<Self>/Box<Self>.
+        let fn_sig = crate::normalize_ty(
+            tcx,
+            tcx.param_env(method_def_id),
+            tcx.fn_sig(method_def_id).instantiate_identity(),
+        )
+        .skip_binder();
+        // If our method has no parameters, we treat it as supported.
+        let Some(self_ty) = fn_sig.inputs().first() else {
+            return true;
+        };
+        // We don't support trait methods that use `Box<Self>` or `Pin<Self>` yet.
+        self_ty.pinned_ty().is_none() && self_ty.boxed_ty().is_none()
+    }
+
     let mut method_name_to_cc_thunk_name = HashMap::new();
     let mut cc_thunk_decls = CcSnippet::default();
     let mut rs_thunk_impls = RsSnippet::default();
     let methods = tcx
         .associated_items(trait_id)
         .in_definition_order()
-        .filter(|item| matches!(item.kind, ty::AssocKind::Fn { .. }));
+        .filter(|item| matches!(item.kind, ty::AssocKind::Fn { .. }))
+        .filter(|item| is_supported_trait_method(tcx, item.def_id));
     for method in methods {
         let substs = {
             let generics = tcx.generics_of(method.def_id);
@@ -688,7 +774,7 @@ pub fn generate_trait_thunks<'tcx>(
         };
 
         let thunk_name = {
-            if db.no_thunk_name_mangling() {
+            if db.is_golden_test() {
                 let print_types = type_args.iter().map(|ty| format!("{}", ty)).collect_vec();
                 let method_name = if print_types.is_empty() {
                     escape_non_identifier_chars(method.name().as_str())
@@ -701,42 +787,49 @@ pub fn generate_trait_thunks<'tcx>(
                 };
                 format!("__crubit_thunk_{}", method_name)
             } else {
-                #[rustversion::since(2025-05-06)]
+                #[rustversion::any(since(1.94), since(2025-05-06))]
                 let instance = ty::Instance::new_raw(method.def_id, substs);
-                #[rustversion::before(2025-05-06)]
+                #[rustversion::all(before(1.94), before(2025-05-06))]
                 let instance = ty::Instance::new(method.def_id, substs);
 
                 let symbol = tcx.symbol_name(instance);
                 format!(
-                    "__crubit_thunk_{}_{}",
-                    tcx.crate_hash(db.source_crate_num()).to_hex(),
+                    "__crubit_thunk_{:x}_{}",
+                    tcx.stable_crate_id(db.source_crate_num()),
                     &escape_non_identifier_chars(symbol.name)
                 )
             }
         };
 
-        let sig_mid = liberate_and_deanonymize_late_bound_regions(
+        // We normalize here to expand associated types to their underlying type.
+        let sig_mid = try_normalize(
             tcx,
-            tcx.fn_sig(method.def_id).instantiate(tcx, substs),
-            method.def_id,
-        );
-        // TODO(b/254096006): Preserve the HIR here, if possible?
-        // Cannot in general (e.g. blanket impl from another crate), but should be able
-        // to for traits defined or implemented in the current crate.
-        let sig_hir = None;
+            ty::PseudoCanonicalInput {
+                typing_env: TypingEnv::non_body_analysis(tcx, method.def_id),
+                value: crate::normalize_ty(
+                    tcx,
+                    tcx.param_env(method.def_id),
+                    tcx.fn_sig(method.def_id).instantiate(tcx, substs),
+                ),
+            },
+        )
+        .expect("Normalization should succeed since this code typechecked");
+        #[rustversion::since(2026-04-19)]
+        let sig_mid = ty::Unnormalized::new(sig_mid);
+        let sig_mid = liberate_and_deanonymize_late_bound_regions(tcx, sig_mid, method.def_id);
 
         let thunk_name_cc_ident = format_cc_ident(db, &thunk_name)?;
         cc_thunk_decls.add_assign(generate_thunk_decl(
             db,
             &sig_mid,
-            sig_hir,
             &thunk_name_cc_ident,
-            /*has_self_param=*/ true,
+            /*has_self_param=*/ method.is_method(),
+            is_constructor,
         )?);
         method_name_to_cc_thunk_name.insert(method.name(), thunk_name_cc_ident);
 
         rs_thunk_impls += {
-            let struct_name = &adt.rs_fully_qualified_name;
+            let struct_name = &rs_fully_qualified_name;
             if is_drop_trait {
                 // Manually formatting (instead of depending on `generate_thunk_impl`)
                 // to avoid https://doc.rust-lang.org/error_codes/E0040.html
@@ -787,6 +880,7 @@ pub fn generate_trait_thunks<'tcx>(
                     &sig_mid,
                     &thunk_name,
                     fully_qualified_fn_name,
+                    is_constructor,
                 )?
             }
         };

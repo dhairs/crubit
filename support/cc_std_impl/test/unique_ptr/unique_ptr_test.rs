@@ -10,6 +10,7 @@ static INSTANCE_COUNTER: AtomicI32 = AtomicI32::new(0);
 /// A struct with the same size and alignment as `int`.
 /// The number of alive instances is tracked by `INSTANCE_COUNTER`.
 #[repr(transparent)]
+#[derive(Debug, PartialEq)]
 struct InstanceCounted(std::ffi::c_int);
 
 impl Drop for InstanceCounted {
@@ -54,6 +55,18 @@ fn test_unique_ptr_get_returns_non_owned_pointer() {
 }
 
 #[gtest]
+fn test_unique_ptr_as_mut_null() {
+    let mut up = unsafe { cc_std::std::unique_ptr::<InstanceCounted>::new(std::ptr::null_mut()) };
+    assert_eq!(up.as_mut(), None);
+}
+
+#[gtest]
+fn test_unique_ptr_as_mut_non_null() {
+    let mut up = InstanceCounted::new_unique_ptr();
+    assert_eq!(up.as_mut().unwrap().0, 123456);
+}
+
+#[gtest]
 fn test_unique_ptr_release_returns_owned_pointer() {
     let mut up = InstanceCounted::new_unique_ptr();
     let pointer = up.get();
@@ -76,6 +89,26 @@ fn test_unique_ptr_destroyed_in_rust() {
     drop(up);
 }
 
+#[gtest]
+fn test_unique_ptr_void_ptr_destroyed_in_rust() {
+    drop(test_helpers::unique_ptr_test::create_unique_ptr_void_ptr());
+}
+
+#[gtest]
+fn test_unique_ptr_short_destroyed_in_rust() {
+    drop(test_helpers::unique_ptr_test::create_unique_ptr_short());
+}
+
+#[gtest]
+fn test_unique_ptr_two_words_destroyed_in_rust() {
+    drop(test_helpers::unique_ptr_test::create_unique_ptr_two_words());
+}
+
+#[gtest]
+fn test_unique_ptr_char_destroyed_in_rust() {
+    drop(test_helpers::unique_ptr_test::create_unique_ptr_char());
+}
+
 /// Tests the behavior when a unique_ptr created in Rust is destroyed in C++.
 ///
 /// For example, ASan can flag any poor behavior here.
@@ -84,4 +117,34 @@ fn test_unique_ptr_destroyed_in_cpp() {
     let mut up = test_helpers::unique_ptr_test::create_unique_ptr();
     let up = unsafe { cc_std::std::unique_ptr::new(up.release()) };
     test_helpers::unique_ptr_test::destroy_unique_ptr(up);
+}
+
+#[gtest]
+fn test_unique_ptr_with_virtual_destructor() {
+    let mut p = test_helpers::unique_ptr_test::create_virtual_base();
+    assert_eq!(
+        std::any::Any::type_id(&p),
+        std::any::TypeId::of::<cc_std::std::virtual_unique_ptr<test_helpers::unique_ptr_test::Base>>(
+        )
+    );
+    unsafe {
+        assert!(test_helpers::unique_ptr_test::Base::is_derived(
+            <std::pin::Pin<&mut _>>::into_inner_unchecked(p.as_pin().unwrap())
+        ));
+    }
+    drop(p);
+    assert_eq!(test_helpers::unique_ptr_test::get_derived_destructor_count(), 1);
+}
+
+#[gtest]
+fn test_unique_ptr_with_custom_delete() {
+    let p = test_helpers::unique_ptr_test::create_custom_delete();
+    assert_eq!(
+        std::any::Any::type_id(&p),
+        std::any::TypeId::of::<
+            cc_std::std::virtual_unique_ptr<test_helpers::unique_ptr_test::CustomDelete>,
+        >()
+    );
+    drop(p);
+    assert_eq!(test_helpers::unique_ptr_test::get_custom_delete_count(), 1);
 }

@@ -1,6 +1,7 @@
 """Importers for various types of `Decl`s"""
 
 load("@rules_cc//cc:cc_library.bzl", "cc_library")
+load("@rules_cc//cc:cc_test.bzl", "cc_test")
 
 package(
     default_applicable_licenses = ["//:license"],
@@ -31,8 +32,10 @@ cc_library(
         "//rs_bindings_from_cc:bazel_types",
         "//rs_bindings_from_cc:cc_ir",
         "//rs_bindings_from_cc:decl_importer",
+        "@abseil-cpp//absl/algorithm:container",
         "@abseil-cpp//absl/base:nullability",
         "@abseil-cpp//absl/container:flat_hash_set",
+        "@abseil-cpp//absl/functional:any_invocable",
         "@abseil-cpp//absl/log",
         "@abseil-cpp//absl/log:check",
         "@abseil-cpp//absl/log:die_if_null",
@@ -54,12 +57,28 @@ cc_library(
     deps = [
         "//lifetime_annotations:type_lifetimes",
         "//rs_bindings_from_cc:ast_util",
+        "//rs_bindings_from_cc:bazel_types",
         "//rs_bindings_from_cc:cc_ir",
         "//rs_bindings_from_cc:decl_importer",
         "@abseil-cpp//absl/algorithm:container",
         "@abseil-cpp//absl/status:statusor",
         "@llvm-project//clang:ast",
         "@llvm-project//clang:basic",
+    ],
+)
+
+cc_library(
+    name = "enum_constant",
+    srcs = ["enum_constant.cc"],
+    hdrs = ["enum_constant.h"],
+    deps = [
+        "//rs_bindings_from_cc:ast_util",
+        "//rs_bindings_from_cc:cc_ir",
+        "//rs_bindings_from_cc:decl_importer",
+        "@abseil-cpp//absl/status:statusor",
+        "@llvm-project//clang:ast",
+        "@llvm-project//clang:basic",
+        "@llvm-project//llvm:Support",
     ],
 )
 
@@ -73,6 +92,7 @@ cc_library(
         "//rs_bindings_from_cc:decl_importer",
         "@abseil-cpp//absl/log:check",
         "@llvm-project//clang:ast",
+        "@llvm-project//clang:basic",
         "@llvm-project//llvm:Support",
     ],
 )
@@ -96,7 +116,6 @@ cc_library(
     hdrs = ["function.h"],
     deps = [
         "//common:annotation_reader",
-        "//common:status_macros",
         "//lifetime_annotations",
         "//lifetime_annotations:lifetime",
         "//lifetime_annotations:lifetime_error",
@@ -106,7 +125,9 @@ cc_library(
         "//rs_bindings_from_cc:cc_ir",
         "//rs_bindings_from_cc:decl_importer",
         "//rs_bindings_from_cc:recording_diagnostic_consumer",
+        "@abseil-cpp//absl/algorithm:container",
         "@abseil-cpp//absl/container:btree",
+        "@abseil-cpp//absl/container:flat_hash_set",
         "@abseil-cpp//absl/log:check",
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
@@ -170,10 +191,22 @@ cc_library(
         "//common:status_macros",
         "//rs_bindings_from_cc:cc_ir",
         "//rs_bindings_from_cc:decl_importer",
+        "@abseil-cpp//absl/base:nullability",
         "@abseil-cpp//absl/status",
         "@abseil-cpp//absl/status:statusor",
+        "@abseil-cpp//absl/strings",
         "@abseil-cpp//absl/strings:string_view",
         "@llvm-project//clang:ast",
         "@llvm-project//llvm:Support",
+    ],
+)
+
+cc_test(
+    name = "cxx_record_test",
+    srcs = ["cxx_record_test.cc"],
+    deps = [
+        ":cxx_record",
+        "//testing/base/public:gunit_main",
+        "@abseil-cpp//absl/strings:string_view",
     ],
 )

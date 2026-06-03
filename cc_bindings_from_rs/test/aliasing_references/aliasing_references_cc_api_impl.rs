@@ -4,12 +4,13 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // aliasing_references_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #![allow(unused_unsafe, deprecated, non_snake_case, unreachable_code)]
 #![allow(improper_ctypes_definitions)]
 #![deny(warnings)]
 
+extern crate alloc;
+extern crate core;
 const _: () = assert!(::std::mem::size_of::<::aliasing_references_golden::NonFreezeType>() == 4);
 const _: () = assert!(::std::mem::align_of::<::aliasing_references_golden::NonFreezeType>() == 4);
 #[unsafe(no_mangle)]
@@ -82,6 +83,13 @@ unsafe extern "C" fn __crubit_thunk_shared_uself_uand_ushared_uref_uallows_ualia
 const _: () =
     assert!(::core::mem::offset_of!(::aliasing_references_golden::SomeStruct, field) == 0);
 #[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_mut_uref_uand_umut_uslice(
+    __param_0: &'static mut i32,
+    __param_1: &'static mut [i32],
+) -> () {
+    unsafe { ::aliasing_references_golden::mut_ref_and_mut_slice(__param_0, __param_1) }
+}
+#[unsafe(no_mangle)]
 unsafe extern "C" fn __crubit_thunk_mut_uref_uand_ushared_urefs(
     __param_0: &'static mut i32,
     __param_1: &'static i32,
@@ -90,6 +98,20 @@ unsafe extern "C" fn __crubit_thunk_mut_uref_uand_ushared_urefs(
     unsafe {
         ::aliasing_references_golden::mut_ref_and_shared_refs(__param_0, __param_1, __param_2)
     }
+}
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_mut_uref_uand_ushared_uslice(
+    __param_0: &'static mut i32,
+    __param_1: &'static [i32],
+) -> () {
+    unsafe { ::aliasing_references_golden::mut_ref_and_shared_slice(__param_0, __param_1) }
+}
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_mut_uref_uand_ustr(
+    __param_0: &'static mut i32,
+    __param_1: &'static str,
+) -> () {
+    unsafe { ::aliasing_references_golden::mut_ref_and_str(__param_0, __param_1) }
 }
 #[unsafe(no_mangle)]
 unsafe extern "C" fn __crubit_thunk_mut_urefs(

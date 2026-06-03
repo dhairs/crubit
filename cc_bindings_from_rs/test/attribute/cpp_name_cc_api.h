@@ -4,26 +4,28 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // cpp_name_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_ATTRIBUTE_CPP_NAME_GOLDEN
 #define THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_ATTRIBUTE_CPP_NAME_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 #include "support/internal/slot.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 #include <utility>
 
 namespace cpp_name {
 
 // CRUBIT_ANNOTATE: cpp_name=Replaced
-//
-// Generated from:
-// cc_bindings_from_rs/test/attribute/cpp_name.rs;l=6
 struct CRUBIT_INTERNAL_RUST_TYPE(":: cpp_name_golden :: Original") alignas(4)
     [[clang::trivial_abi]] Replaced final {
  public:
@@ -39,19 +41,14 @@ struct CRUBIT_INTERNAL_RUST_TYPE(":: cpp_name_golden :: Original") alignas(4)
   Replaced(const Replaced&) = delete;
   Replaced& operator=(const Replaced&) = delete;
   Replaced(::crubit::UnsafeRelocateTag, Replaced&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
 
   // CRUBIT_ANNOTATE: cpp_name=create
-  //
-  // Generated from:
-  // cc_bindings_from_rs/test/attribute/cpp_name.rs;l=12
   static ::cpp_name::Replaced create();
 
   union {
-    // Generated from:
-    // cc_bindings_from_rs/test/attribute/cpp_name.rs;l=7
-    std::int32_t x;
+    ::std::int32_t x;
   };
 
  private:
@@ -64,9 +61,9 @@ static_assert(
 static_assert(
     alignof(Replaced) == 4,
     "Verify that ADT layout didn't change since this header got generated");
-static_assert(std::is_trivially_destructible_v<Replaced>);
-static_assert(std::is_trivially_move_constructible_v<Replaced>);
-static_assert(std::is_trivially_move_assignable_v<Replaced>);
+static_assert(::std::is_trivially_destructible_v<Replaced>);
+static_assert(::std::is_trivially_move_constructible_v<::cpp_name::Replaced>);
+static_assert(::std::is_trivially_move_assignable_v<::cpp_name::Replaced>);
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_new(::cpp_name::Replaced* __ret_ptr);
 }
@@ -74,10 +71,12 @@ inline ::cpp_name::Replaced Replaced::create() {
   crubit::Slot<::cpp_name::Replaced> __return_value_ret_val_holder;
   auto* __return_value_storage = __return_value_ret_val_holder.Get();
   __crubit_internal::__crubit_thunk_new(__return_value_storage);
-  return std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
 }
 inline void Replaced::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(Replaced, x));
 }
 }  // namespace cpp_name
+
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_CC_BINDINGS_FROM_RS_TEST_ATTRIBUTE_CPP_NAME_GOLDEN

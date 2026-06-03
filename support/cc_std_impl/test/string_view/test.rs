@@ -9,6 +9,7 @@ use std::sync::LazyLock;
 use string_view_cc_apis::crubit_string_view::GetDefault;
 use string_view_cc_apis::crubit_string_view::GetHelloWorld;
 use string_view_cc_apis::crubit_string_view::GetInvalidUTF;
+use string_view_cc_apis::crubit_string_view::Identity;
 
 /// Converts a raw_string_view to a &'static str.
 ///
@@ -17,6 +18,28 @@ use string_view_cc_apis::crubit_string_view::GetInvalidUTF;
 unsafe fn to_str(sv: raw_string_view) -> &'static str {
     let bytes: &'static [u8] = unsafe { &*<*const [u8]>::from(sv) };
     core::str::from_utf8(bytes).unwrap()
+}
+
+#[gtest]
+fn test_len_and_empty() {
+    let original: &'static str = "";
+    let sv: string_view = original.into();
+    assert_eq!(sv.len(), 0);
+    assert!(sv.is_empty());
+
+    let original: &'static str = "12345";
+    let sv: string_view = original.into();
+    assert_eq!(sv.len(), 5);
+    assert_eq!(sv.is_empty(), false);
+}
+
+#[gtest]
+fn test_contains() {
+    let original: &'static str = "12345";
+    let sv: string_view = original.into();
+    assert!(sv.contains(&b'1'));
+    assert!(sv.contains(&b'5'));
+    assert_eq!(sv.contains(&b'0'), false);
 }
 
 /// An empty slice round trips, but the pointer value may change.
@@ -65,15 +88,23 @@ fn test_ffi_default_string_view_livetype() {
 fn test_ffi_livetype() {
     let rsv = GetHelloWorld();
     let sv = unsafe { rsv.as_live() };
-    let msg = unsafe { sv.to_str() }.unwrap_or("failed");
+    let msg = sv.to_str().unwrap_or("failed");
     assert_eq!(msg, "Hello, world!");
+}
+
+#[gtest]
+fn test_ffi_identity() {
+    let sv = GetInvalidUTF();
+    // TODO(b/485559322): use `unsafe{}` once Identity is (correctly) marked unsafe to call.
+    let sv2 = Identity(sv);
+    assert_eq!(sv.as_raw_bytes(), sv2.as_raw_bytes());
 }
 
 #[gtest]
 fn test_roundtrip_livetype() {
     let original: &'static str = "this is a string";
     let sv: string_view = original.into();
-    assert_eq!(unsafe { sv.to_str() }.unwrap_or("failed"), original);
+    assert_eq!(sv.to_str().unwrap_or("failed"), original);
 }
 
 #[gtest]
@@ -107,13 +138,9 @@ fn exercise_as_static_live() {
     let sv_static: string_view<'static> = unsafe { static_rsv.as_static_live() };
 
     assert_eq!(sv_static.len(), TEST_LITERAL.len(), "Length should match");
-    assert_eq!(
-        unsafe { sv_static.as_bytes() },
-        TEST_LITERAL.as_bytes(),
-        "Byte content should match"
-    );
+    assert_eq!(sv_static.as_bytes(), TEST_LITERAL.as_bytes(), "Byte content should match");
 
-    match unsafe { sv_static.to_str() } {
+    match sv_static.to_str() {
         Ok(s) => {
             assert_eq!(s, TEST_LITERAL, "String content should match");
             let _proof_is_static: &'static str = s; // Confirms 'static lifetime
@@ -131,4 +158,51 @@ fn test_invalid_utf8() {
         sv.err().unwrap().to_string(),
         contains_substring("utf-8").ignoring_unicode_case()
     );
+}
+
+#[gtest]
+fn test_debug_impl() {
+    // Empty string.
+    let s = "";
+    let sv = string_view::from(s);
+    assert_eq!(format!("{sv:?}"), r#""""#);
+
+    // Null-terminated string.
+    let s = "Hello World\0";
+    let sv = string_view::from(s.as_bytes());
+    assert_eq!(format!("{sv:?}"), r#""Hello World\0""#);
+
+    // String with a double quote and a backslash.
+    let s: &[u8] = &[b'{', b'"', b',', b'\\', b'}'];
+    let sv = string_view::from(s);
+    assert_eq!(format!("{sv:?}"), r#""{\",\\}""#);
+
+    // String with mixed valid and invalid UTF-8.
+    let s: &[u8] = &[b'A', 0xf1, b'B', 0xf2, b'C', 0xf3];
+    let sv = string_view::from(s);
+    assert_eq!(format!("{sv:?}"), r#""A\xf1B\xf2C\xf3""#);
+
+    // Note: the byte 0 is a special case and is printed as "\0". All other values are formatted as
+    // "\x##".
+    let s: &[u8] = &[0, 1, 2, 3];
+    let sv = string_view::from(s);
+    assert_eq!(format!("{sv:?}"), r#""\0\x01\x02\x03""#);
+}
+
+#[gtest]
+fn test_display_impl() {
+    // Empty string.
+    let s = "";
+    let sv = string_view::from(s);
+    assert_eq!(sv.display().to_string(), "");
+
+    // Valid UTF-8.
+    let s = "Hello World";
+    let sv = string_view::from(s);
+    assert_eq!(sv.display().to_string(), "Hello World");
+
+    // Invalid UTF-8.
+    let s: &[u8] = &[b'A', 0xf1, b'B', 0xf2, b'C'];
+    let sv = string_view::from(s);
+    assert_eq!(sv.display().to_string(), "A�B�C");
 }

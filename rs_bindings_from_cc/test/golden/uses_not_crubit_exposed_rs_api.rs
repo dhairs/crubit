@@ -6,18 +6,19 @@
 // //rs_bindings_from_cc/test/golden:uses_not_crubit_exposed_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
-// Error while generating bindings for function 'UseNotCrubitExposed':
-// Can't generate bindings for UseNotCrubitExposed, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:uses_not_crubit_exposed_cc needs [//features:wrapper] for UseNotCrubitExposed (the type of not_crubit_exposed (parameter #0): error: Can't generate bindings for NotCrubitExposed, because of missing required features (<internal link>):
-// rs_bindings_from_cc/test/golden/not_crubit_exposed.h needs [//features:supported] for NotCrubitExposed)
+// error: function `UseNotCrubitExposed` could not be bound
+//   Unsupported parameter type `NotCrubitExposed not_crubit_exposed`:
+//     Crubit is not enabled on defining target:
+//       rs_bindings_from_cc/test/golden/not_crubit_exposed.h
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C, align(4))]
@@ -42,6 +43,23 @@ impl Default for CannotUpcastInCrubit {
         }
     }
 }
+
+pub mod c9 { // error: class `c9::Co` could not be bound
+             //   Class templates are not yet supported
+}
+
+// namespace c9
+
+// error: function `ReturnsCo` could not be bound
+//   Cannot use an error type `c9 :: Co < NotCrubitExposed >` by value:
+//     `c9::Co<NotCrubitExposed>` is unsupported because `NotCrubitExposed` is unavailable:
+//     Crubit is not enabled on defining target:
+//         rs_bindings_from_cc/test/golden/not_crubit_exposed.h
+
+// error: class `c9::Co<NotCrubitExposed>` could not be bound
+//   `c9::Co<NotCrubitExposed>` is unsupported because `NotCrubitExposed` is unavailable:
+//   Crubit is not enabled on defining target:
+//       rs_bindings_from_cc/test/golden/not_crubit_exposed.h
 
 mod detail {
     #[allow(unused_imports)]

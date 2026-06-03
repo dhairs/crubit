@@ -19,7 +19,7 @@ use arc_anyhow::{anyhow, bail, Result};
 use either::Either;
 use rustc_interface::interface::Compiler;
 use rustc_middle::ty::TyCtxt; // See also <internal link>/ty.html#import-conventions
-use rustc_session::config::ErrorOutputType;
+use rustc_session::config::{ErrorOutputType, Input};
 use rustc_session::EarlyDiagCtxt;
 
 /// Wrapper around `rustc_driver::RunCompiler::run` that exposes a
@@ -36,14 +36,26 @@ where
     F: FnOnce(TyCtxt) -> Result<R> + Send,
     R: Send,
 {
-    // Calling `init_logger` 1) here and 2) via `sync::LazyLock` helps to ensure
-    // that logging is intialized exactly once, even if the `run_compiler`
-    // function is invoked by mutliple unit tests running in parallel on
-    // separate threads.  This is important for avoiding flaky/racy
-    // panics related to 1) multiple threads entering
-    // `!tracing::dispatcher::has_been_set()` code in `rustc_driver_impl/src/
-    // lib.rs` and 2) `rustc_log/src/lib.rs` assumming that
-    // `tracing::subscriber::set_global_default` always succeeds.
+    run_compiler_with_optional_input(rustc_args, None, callback)
+}
+
+pub fn run_compiler_with_input<F, R>(rustc_args: &[String], input: String, callback: F) -> Result<R>
+where
+    F: FnOnce(TyCtxt) -> Result<R> + Send,
+    R: Send,
+{
+    run_compiler_with_optional_input(rustc_args, Some(input), callback)
+}
+
+fn run_compiler_with_optional_input<F, R>(
+    rustc_args: &[String],
+    input: Option<String>,
+    callback: F,
+) -> Result<R>
+where
+    F: FnOnce(TyCtxt) -> Result<R> + Send,
+    R: Send,
+{
     use std::sync::LazyLock;
     static ENV_LOGGER_INIT: LazyLock<()> = LazyLock::new(|| {
         let early_error_handler = EarlyDiagCtxt::new(ErrorOutputType::default());
@@ -54,7 +66,7 @@ where
     });
     LazyLock::force(&ENV_LOGGER_INIT);
 
-    AfterAnalysisCallback::new(rustc_args, callback).run()
+    AfterAnalysisCallback::new(rustc_args, callback, input).run()
 }
 
 struct AfterAnalysisCallback<'a, F, R>
@@ -64,6 +76,7 @@ where
 {
     args: &'a [String],
     callback_or_result: Either<F, Result<R>>,
+    input: Option<String>,
 }
 
 impl<'a, F, R> AfterAnalysisCallback<'a, F, R>
@@ -71,8 +84,8 @@ where
     F: FnOnce(TyCtxt) -> Result<R> + Send,
     R: Send,
 {
-    fn new(args: &'a [String], callback: F) -> Self {
-        Self { args, callback_or_result: Either::Left(callback) }
+    fn new(args: &'a [String], callback: F, input: Option<String>) -> Self {
+        Self { args, callback_or_result: Either::Left(callback), input }
     }
 
     #[cfg_accessible(rustc_driver::run_compiler)]
@@ -122,11 +135,26 @@ where
 {
     /// Configures how `rustc` internals work when invoked via `run_compiler`.
     /// Note that `run_compiler_test_support` uses a separate `Config`.
+    #[allow(rustc::internal)]
     fn config(&mut self, config: &mut rustc_interface::interface::Config) {
+        // When we're generating bindings for an rmeta, we don't have a meaningful source file to
+        // pass to `rustc`. We provide a placeholder input so that `rustc` will load our rmeta and
+        // process it.
+        if let Some(input) = &self.input {
+            config.input = Input::Str {
+                name: rustc_span::FileName::Custom("lib.rs".into()),
+                input: input.clone(),
+            };
+        }
         // Silence warnings in the target crate to avoid reporting them twice: once when
         // compiling the crate via `rustc` and once when "compiling" the crate
         // via `cc_bindings_from_rs` (the `config` here affects the latter one).
         config.opts.lint_opts.push(("warnings".to_string(), rustc_lint_defs::Level::Allow));
+        // Needed for when using a target.json; avoids:
+        // error loading target specification: custom targets are unstable and require `-Zunstable-options`
+        // TODO: use `Session::unstable_options` instead of
+        // `unstable_opts.unstable_options` and remove the function #[allow(rustc::internal)].
+        config.opts.unstable_opts.unstable_options = true;
     }
 
     fn after_analysis<'tcx>(
@@ -150,7 +178,6 @@ mod tests {
     use super::*;
     use run_compiler_test_support::setup_rustc_target_for_testing;
     use run_compiler_test_support::sysroot_path;
-    use std::path::PathBuf;
     use tempfile::tempdir;
 
     const DEFAULT_RUST_SOURCE_FOR_TESTING: &'static str = r#" pub mod public_module {

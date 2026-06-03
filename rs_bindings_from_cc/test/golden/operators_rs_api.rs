@@ -6,18 +6,13 @@
 // //rs_bindings_from_cc/test/golden:operators_cc
 
 #![rustfmt::skip]
-#![feature(
-    allocator_api,
-    cfg_sanitize,
-    custom_inner_attributes,
-    impl_trait_in_assoc_type,
-    negative_impls
-)]
+#![feature(custom_inner_attributes, impl_trait_in_assoc_type, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
@@ -47,27 +42,29 @@ impl Default for AddableConstMember {
     }
 }
 
-// Error while generating bindings for constructor 'AddableConstMember::AddableConstMember':
-// Can't generate bindings for AddableConstMember::AddableConstMember, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableConstMember::AddableConstMember (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableConstMember::AddableConstMember` could not be bound
+//   Unsupported parameter type `const AddableConstMember& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddableConstMember::AddableConstMember':
-// Can't generate bindings for AddableConstMember::AddableConstMember, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableConstMember::AddableConstMember (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableConstMember::AddableConstMember` could not be bound
+//   Unsupported parameter type `AddableConstMember&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableConstMember::operator=':
-// Can't generate bindings for AddableConstMember::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableConstMember::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableConstMember::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableConstMember::operator=` could not be bound
+//   Unsupported parameter type `const AddableConstMember& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableConstMember&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableConstMember::operator=':
-// Can't generate bindings for AddableConstMember::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableConstMember::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableConstMember::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableConstMember::operator=` could not be bound
+//   Unsupported parameter type `AddableConstMember&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableConstMember&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableConstMember::operator+':
-// Can't generate bindings for AddableConstMember::operator+, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableConstMember::operator+ (the type of rhs (parameter #1): references are not supported)
+// error: function `AddableConstMember::operator+` could not be bound
+//   Unsupported parameter type `const AddableConstMember& rhs`:
+//     references are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C, align(4))]
@@ -96,27 +93,29 @@ impl Default for AddableNonConstMember {
     }
 }
 
-// Error while generating bindings for constructor 'AddableNonConstMember::AddableNonConstMember':
-// Can't generate bindings for AddableNonConstMember::AddableNonConstMember, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableNonConstMember::AddableNonConstMember (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableNonConstMember::AddableNonConstMember` could not be bound
+//   Unsupported parameter type `const AddableNonConstMember& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddableNonConstMember::AddableNonConstMember':
-// Can't generate bindings for AddableNonConstMember::AddableNonConstMember, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableNonConstMember::AddableNonConstMember (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableNonConstMember::AddableNonConstMember` could not be bound
+//   Unsupported parameter type `AddableNonConstMember&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableNonConstMember::operator=':
-// Can't generate bindings for AddableNonConstMember::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableNonConstMember::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableNonConstMember::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableNonConstMember::operator=` could not be bound
+//   Unsupported parameter type `const AddableNonConstMember& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableNonConstMember&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableNonConstMember::operator=':
-// Can't generate bindings for AddableNonConstMember::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableNonConstMember::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableNonConstMember::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableNonConstMember::operator=` could not be bound
+//   Unsupported parameter type `AddableNonConstMember&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableNonConstMember&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableNonConstMember::operator+':
-// Can't generate bindings for AddableNonConstMember::operator+, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableNonConstMember::operator+ (the type of rhs (parameter #1): references are not supported)
+// error: function `AddableNonConstMember::operator+` could not be bound
+//   Unsupported parameter type `const AddableNonConstMember& rhs`:
+//     references are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C, align(4))]
@@ -145,28 +144,31 @@ impl Default for AddableFriend {
     }
 }
 
-// Error while generating bindings for constructor 'AddableFriend::AddableFriend':
-// Can't generate bindings for AddableFriend::AddableFriend, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFriend::AddableFriend (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableFriend::AddableFriend` could not be bound
+//   Unsupported parameter type `const AddableFriend& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddableFriend::AddableFriend':
-// Can't generate bindings for AddableFriend::AddableFriend, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFriend::AddableFriend (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableFriend::AddableFriend` could not be bound
+//   Unsupported parameter type `AddableFriend&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableFriend::operator=':
-// Can't generate bindings for AddableFriend::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFriend::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFriend::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableFriend::operator=` could not be bound
+//   Unsupported parameter type `const AddableFriend& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableFriend&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableFriend::operator=':
-// Can't generate bindings for AddableFriend::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFriend::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFriend::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableFriend::operator=` could not be bound
+//   Unsupported parameter type `AddableFriend&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableFriend&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'operator+':
-// Can't generate bindings for operator+, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+ (the type of lhs (parameter #0): references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+ (the type of rhs (parameter #1): references are not supported)
+// error: function `operator+` could not be bound
+//   Unsupported parameter type `const AddableFriend& lhs`:
+//     references are not yet supported
+//   Unsupported parameter type `const AddableFriend& rhs`:
+//     references are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -192,23 +194,25 @@ impl Default for AddableFreeByConstRef {
     }
 }
 
-// Error while generating bindings for constructor 'AddableFreeByConstRef::AddableFreeByConstRef':
-// Can't generate bindings for AddableFreeByConstRef::AddableFreeByConstRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByConstRef::AddableFreeByConstRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableFreeByConstRef::AddableFreeByConstRef` could not be bound
+//   Unsupported parameter type `const AddableFreeByConstRef& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddableFreeByConstRef::AddableFreeByConstRef':
-// Can't generate bindings for AddableFreeByConstRef::AddableFreeByConstRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByConstRef::AddableFreeByConstRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableFreeByConstRef::AddableFreeByConstRef` could not be bound
+//   Unsupported parameter type `AddableFreeByConstRef&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableFreeByConstRef::operator=':
-// Can't generate bindings for AddableFreeByConstRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByConstRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByConstRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableFreeByConstRef::operator=` could not be bound
+//   Unsupported parameter type `const AddableFreeByConstRef& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableFreeByConstRef&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableFreeByConstRef::operator=':
-// Can't generate bindings for AddableFreeByConstRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByConstRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByConstRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableFreeByConstRef::operator=` could not be bound
+//   Unsupported parameter type `AddableFreeByConstRef&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableFreeByConstRef&`:
+//     references are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -234,23 +238,25 @@ impl Default for AddableFreeByMutRef {
     }
 }
 
-// Error while generating bindings for constructor 'AddableFreeByMutRef::AddableFreeByMutRef':
-// Can't generate bindings for AddableFreeByMutRef::AddableFreeByMutRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByMutRef::AddableFreeByMutRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableFreeByMutRef::AddableFreeByMutRef` could not be bound
+//   Unsupported parameter type `const AddableFreeByMutRef& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddableFreeByMutRef::AddableFreeByMutRef':
-// Can't generate bindings for AddableFreeByMutRef::AddableFreeByMutRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByMutRef::AddableFreeByMutRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableFreeByMutRef::AddableFreeByMutRef` could not be bound
+//   Unsupported parameter type `AddableFreeByMutRef&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableFreeByMutRef::operator=':
-// Can't generate bindings for AddableFreeByMutRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByMutRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByMutRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableFreeByMutRef::operator=` could not be bound
+//   Unsupported parameter type `const AddableFreeByMutRef& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableFreeByMutRef&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableFreeByMutRef::operator=':
-// Can't generate bindings for AddableFreeByMutRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByMutRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByMutRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableFreeByMutRef::operator=` could not be bound
+//   Unsupported parameter type `AddableFreeByMutRef&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableFreeByMutRef&`:
+//     references are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -276,23 +282,25 @@ impl Default for AddableFreeByValue {
     }
 }
 
-// Error while generating bindings for constructor 'AddableFreeByValue::AddableFreeByValue':
-// Can't generate bindings for AddableFreeByValue::AddableFreeByValue, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByValue::AddableFreeByValue (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableFreeByValue::AddableFreeByValue` could not be bound
+//   Unsupported parameter type `const AddableFreeByValue& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddableFreeByValue::AddableFreeByValue':
-// Can't generate bindings for AddableFreeByValue::AddableFreeByValue, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByValue::AddableFreeByValue (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableFreeByValue::AddableFreeByValue` could not be bound
+//   Unsupported parameter type `AddableFreeByValue&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableFreeByValue::operator=':
-// Can't generate bindings for AddableFreeByValue::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByValue::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByValue::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableFreeByValue::operator=` could not be bound
+//   Unsupported parameter type `const AddableFreeByValue& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableFreeByValue&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableFreeByValue::operator=':
-// Can't generate bindings for AddableFreeByValue::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByValue::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByValue::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableFreeByValue::operator=` could not be bound
+//   Unsupported parameter type `AddableFreeByValue&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableFreeByValue&`:
+//     references are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -318,52 +326,56 @@ impl Default for AddableFreeByRValueRef {
     }
 }
 
-// Error while generating bindings for constructor 'AddableFreeByRValueRef::AddableFreeByRValueRef':
-// Can't generate bindings for AddableFreeByRValueRef::AddableFreeByRValueRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByRValueRef::AddableFreeByRValueRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableFreeByRValueRef::AddableFreeByRValueRef` could not be bound
+//   Unsupported parameter type `const AddableFreeByRValueRef& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddableFreeByRValueRef::AddableFreeByRValueRef':
-// Can't generate bindings for AddableFreeByRValueRef::AddableFreeByRValueRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByRValueRef::AddableFreeByRValueRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableFreeByRValueRef::AddableFreeByRValueRef` could not be bound
+//   Unsupported parameter type `AddableFreeByRValueRef&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableFreeByRValueRef::operator=':
-// Can't generate bindings for AddableFreeByRValueRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByRValueRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByRValueRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableFreeByRValueRef::operator=` could not be bound
+//   Unsupported parameter type `const AddableFreeByRValueRef& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableFreeByRValueRef&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableFreeByRValueRef::operator=':
-// Can't generate bindings for AddableFreeByRValueRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByRValueRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableFreeByRValueRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableFreeByRValueRef::operator=` could not be bound
+//   Unsupported parameter type `AddableFreeByRValueRef&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableFreeByRValueRef&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'operator+':
-// Can't generate bindings for operator+, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+ (the type of lhs (parameter #0): references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+ (the type of rhs (parameter #1): references are not supported)
+// error: function `operator+` could not be bound
+//   Unsupported parameter type `const AddableFreeByConstRef& lhs`:
+//     references are not yet supported
+//   Unsupported parameter type `const AddableFreeByConstRef& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'operator+':
-// Can't generate bindings for operator+, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+ (the type of lhs (parameter #0): references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+ (the type of rhs (parameter #1): references are not supported)
+// error: function `operator+` could not be bound
+//   Unsupported parameter type `AddableFreeByMutRef& lhs`:
+//     references are not yet supported
+//   Unsupported parameter type `AddableFreeByMutRef& rhs`:
+//     references are not yet supported
 
 impl ::core::ops::Add<Self> for crate::AddableFreeByValue {
     type Output = crate::AddableFreeByValue;
     #[inline(always)]
     fn add(mut self, mut rhs: Self) -> Self::Output {
         unsafe {
-            let mut __return = ::core::mem::MaybeUninit::<Self>::uninit();
+            let mut __crubit_return = ::core::mem::MaybeUninit::<Self>::uninit();
             crate::detail::__rust_thunk___Zpl18AddableFreeByValueS_(
-                &raw mut __return as *mut ::core::ffi::c_void,
+                &raw mut __crubit_return as *mut ::core::ffi::c_void,
                 &mut self,
                 &mut rhs,
             );
-            __return.assume_init()
+            __crubit_return.assume_init()
         }
     }
 }
 
-// Error while generating bindings for function 'operator+':
-// Rvalue reference types are not yet supported as first parameter of operators (b/219826128)
+// error: function `operator+` could not be bound
+//   Rvalue reference types are not yet supported as first parameter of operators (b/219826128)
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -389,31 +401,33 @@ impl Default for Overloaded {
     }
 }
 
-// Error while generating bindings for constructor 'Overloaded::Overloaded':
-// Can't generate bindings for Overloaded::Overloaded, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for Overloaded::Overloaded (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `Overloaded::Overloaded` could not be bound
+//   Unsupported parameter type `const Overloaded& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'Overloaded::Overloaded':
-// Can't generate bindings for Overloaded::Overloaded, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for Overloaded::Overloaded (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `Overloaded::Overloaded` could not be bound
+//   Unsupported parameter type `Overloaded&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Overloaded::operator=':
-// Can't generate bindings for Overloaded::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for Overloaded::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for Overloaded::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `Overloaded::operator=` could not be bound
+//   Unsupported parameter type `const Overloaded& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `Overloaded&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Overloaded::operator=':
-// Can't generate bindings for Overloaded::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for Overloaded::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for Overloaded::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `Overloaded::operator=` could not be bound
+//   Unsupported parameter type `Overloaded&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `Overloaded&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'operator+':
-// Can't generate bindings for operator+, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+ (the type of lhs (parameter #0): references are not supported)
+// error: function `operator+` could not be bound
+//   Unsupported parameter type `const Overloaded& lhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'operator+':
-// Can't generate bindings for operator+, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+ (the type of lhs (parameter #0): references are not supported)
+// error: function `operator+` could not be bound
+//   Unsupported parameter type `const Overloaded& lhs`:
+//     references are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -439,29 +453,31 @@ impl Default for IncompatibleLHS {
     }
 }
 
-// Error while generating bindings for constructor 'IncompatibleLHS::IncompatibleLHS':
-// Can't generate bindings for IncompatibleLHS::IncompatibleLHS, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for IncompatibleLHS::IncompatibleLHS (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `IncompatibleLHS::IncompatibleLHS` could not be bound
+//   Unsupported parameter type `const IncompatibleLHS& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'IncompatibleLHS::IncompatibleLHS':
-// Can't generate bindings for IncompatibleLHS::IncompatibleLHS, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for IncompatibleLHS::IncompatibleLHS (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `IncompatibleLHS::IncompatibleLHS` could not be bound
+//   Unsupported parameter type `IncompatibleLHS&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'IncompatibleLHS::operator=':
-// Can't generate bindings for IncompatibleLHS::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for IncompatibleLHS::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for IncompatibleLHS::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `IncompatibleLHS::operator=` could not be bound
+//   Unsupported parameter type `const IncompatibleLHS& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `IncompatibleLHS&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'IncompatibleLHS::operator=':
-// Can't generate bindings for IncompatibleLHS::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for IncompatibleLHS::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for IncompatibleLHS::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `IncompatibleLHS::operator=` could not be bound
+//   Unsupported parameter type `IncompatibleLHS&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `IncompatibleLHS&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'operator+':
-// Non-record-nor-reference operator parameters are not yet supported, found ::core::ffi::c_int
+// error: function `operator+` could not be bound
+//   Non-record-nor-reference operator parameters are not yet supported, found ::ffi_11::c_int
 
-// Error while generating bindings for function 'operator+':
-// Expected first operator parameter to be a record or incomplete record, found ::core::ffi::c_int
+// error: function `operator+` could not be bound
+//   Expected first operator parameter to be a record or incomplete record, found ::ffi_11::c_int
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C, align(4))]
@@ -490,36 +506,38 @@ impl Default for AddableReturnsVoid {
     }
 }
 
-// Error while generating bindings for constructor 'AddableReturnsVoid::AddableReturnsVoid':
-// Can't generate bindings for AddableReturnsVoid::AddableReturnsVoid, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableReturnsVoid::AddableReturnsVoid (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableReturnsVoid::AddableReturnsVoid` could not be bound
+//   Unsupported parameter type `const AddableReturnsVoid& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddableReturnsVoid::AddableReturnsVoid':
-// Can't generate bindings for AddableReturnsVoid::AddableReturnsVoid, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableReturnsVoid::AddableReturnsVoid (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableReturnsVoid::AddableReturnsVoid` could not be bound
+//   Unsupported parameter type `AddableReturnsVoid&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableReturnsVoid::operator=':
-// Can't generate bindings for AddableReturnsVoid::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableReturnsVoid::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableReturnsVoid::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableReturnsVoid::operator=` could not be bound
+//   Unsupported parameter type `const AddableReturnsVoid& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableReturnsVoid&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableReturnsVoid::operator=':
-// Can't generate bindings for AddableReturnsVoid::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableReturnsVoid::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableReturnsVoid::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableReturnsVoid::operator=` could not be bound
+//   Unsupported parameter type `AddableReturnsVoid&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableReturnsVoid&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableReturnsVoid::operator+':
-// Can't generate bindings for AddableReturnsVoid::operator+, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableReturnsVoid::operator+ (the type of rhs (parameter #1): references are not supported)
+// error: function `AddableReturnsVoid::operator+` could not be bound
+//   Unsupported parameter type `const AddableReturnsVoid& rhs`:
+//     references are not yet supported
 
 #[::ctor::recursively_pinned(PinnedDrop)]
 #[repr(C, align(4))]
 ///CRUBIT_ANNOTATE: cpp_type=AddableConstMemberNonunpin
 pub struct AddableConstMemberNonunpin {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 0],
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 0],
     /// Reason for representing this field as a blob of bytes:
     /// Types of non-public C++ fields can be elided away
-    pub(crate) field_: [::core::mem::MaybeUninit<u8>; 4],
+    pub(crate) field_: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 4],
 }
 impl !Send for AddableConstMemberNonunpin {}
 impl !Sync for AddableConstMemberNonunpin {}
@@ -529,38 +547,39 @@ unsafe impl ::cxx::ExternType for AddableConstMemberNonunpin {
 }
 
 impl ::ctor::CtorNew<()> for AddableConstMemberNonunpin {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN26AddableConstMemberNonunpinC1Ev(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                 );
             })
         }
     }
 }
 
-// Error while generating bindings for constructor 'AddableConstMemberNonunpin::AddableConstMemberNonunpin':
-// Can't generate bindings for AddableConstMemberNonunpin::AddableConstMemberNonunpin, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableConstMemberNonunpin::AddableConstMemberNonunpin (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddableConstMemberNonunpin::AddableConstMemberNonunpin` could not be bound
+//   Unsupported parameter type `const AddableConstMemberNonunpin& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableConstMemberNonunpin::operator=':
-// Can't generate bindings for AddableConstMemberNonunpin::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableConstMemberNonunpin::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableConstMemberNonunpin::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddableConstMemberNonunpin::operator=` could not be bound
+//   Unsupported parameter type `const AddableConstMemberNonunpin& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddableConstMemberNonunpin&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddableConstMemberNonunpin::operator+':
-// Can't generate bindings for AddableConstMemberNonunpin::operator+, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddableConstMemberNonunpin::operator+ (the type of rhs (parameter #1): references are not supported)
+// error: function `AddableConstMemberNonunpin::operator+` could not be bound
+//   Unsupported parameter type `const AddableConstMemberNonunpin& rhs`:
+//     references are not yet supported
 
 impl ::ctor::PinnedDrop for AddableConstMemberNonunpin {
     #[inline(always)]
     unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        crate::detail::__rust_thunk___ZN26AddableConstMemberNonunpinD1Ev(self)
+        unsafe { crate::detail::__rust_thunk___ZN26AddableConstMemberNonunpinD1Ev(self) }
     }
 }
 
@@ -588,27 +607,29 @@ impl Default for AddAssignMemberInt {
     }
 }
 
-// Error while generating bindings for constructor 'AddAssignMemberInt::AddAssignMemberInt':
-// Can't generate bindings for AddAssignMemberInt::AddAssignMemberInt, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberInt::AddAssignMemberInt (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignMemberInt::AddAssignMemberInt` could not be bound
+//   Unsupported parameter type `const AddAssignMemberInt& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddAssignMemberInt::AddAssignMemberInt':
-// Can't generate bindings for AddAssignMemberInt::AddAssignMemberInt, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberInt::AddAssignMemberInt (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignMemberInt::AddAssignMemberInt` could not be bound
+//   Unsupported parameter type `AddAssignMemberInt&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignMemberInt::operator=':
-// Can't generate bindings for AddAssignMemberInt::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberInt::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberInt::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignMemberInt::operator=` could not be bound
+//   Unsupported parameter type `const AddAssignMemberInt& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignMemberInt&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignMemberInt::operator=':
-// Can't generate bindings for AddAssignMemberInt::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberInt::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberInt::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignMemberInt::operator=` could not be bound
+//   Unsupported parameter type `AddAssignMemberInt&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignMemberInt&`:
+//     references are not yet supported
 
-impl ::core::ops::AddAssign<::core::ffi::c_int> for AddAssignMemberInt {
+impl ::core::ops::AddAssign<::ffi_11::c_int> for AddAssignMemberInt {
     #[inline(always)]
-    fn add_assign<'a>(&'a mut self, rhs: ::core::ffi::c_int) {
+    fn add_assign<'a>(&'a mut self, rhs: ::ffi_11::c_int) {
         unsafe {
             crate::detail::__rust_thunk___ZN18AddAssignMemberIntpLEi(self, rhs);
         }
@@ -639,28 +660,31 @@ impl Default for AddAssignMemberByConstRef {
     }
 }
 
-// Error while generating bindings for constructor 'AddAssignMemberByConstRef::AddAssignMemberByConstRef':
-// Can't generate bindings for AddAssignMemberByConstRef::AddAssignMemberByConstRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberByConstRef::AddAssignMemberByConstRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignMemberByConstRef::AddAssignMemberByConstRef` could not be bound
+//   Unsupported parameter type `const AddAssignMemberByConstRef& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddAssignMemberByConstRef::AddAssignMemberByConstRef':
-// Can't generate bindings for AddAssignMemberByConstRef::AddAssignMemberByConstRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberByConstRef::AddAssignMemberByConstRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignMemberByConstRef::AddAssignMemberByConstRef` could not be bound
+//   Unsupported parameter type `AddAssignMemberByConstRef&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignMemberByConstRef::operator=':
-// Can't generate bindings for AddAssignMemberByConstRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberByConstRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberByConstRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignMemberByConstRef::operator=` could not be bound
+//   Unsupported parameter type `const AddAssignMemberByConstRef& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignMemberByConstRef&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignMemberByConstRef::operator=':
-// Can't generate bindings for AddAssignMemberByConstRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberByConstRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberByConstRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignMemberByConstRef::operator=` could not be bound
+//   Unsupported parameter type `AddAssignMemberByConstRef&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignMemberByConstRef&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignMemberByConstRef::operator+=':
-// Can't generate bindings for AddAssignMemberByConstRef::operator+=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberByConstRef::operator+= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignMemberByConstRef::operator+= (the type of rhs (parameter #1): references are not supported)
+// error: function `AddAssignMemberByConstRef::operator+=` could not be bound
+//   Unsupported parameter type `const AddAssignMemberByConstRef& rhs`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignMemberByConstRef&`:
+//     references are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -686,23 +710,25 @@ impl Default for AddAssignFreeByConstRef {
     }
 }
 
-// Error while generating bindings for constructor 'AddAssignFreeByConstRef::AddAssignFreeByConstRef':
-// Can't generate bindings for AddAssignFreeByConstRef::AddAssignFreeByConstRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByConstRef::AddAssignFreeByConstRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignFreeByConstRef::AddAssignFreeByConstRef` could not be bound
+//   Unsupported parameter type `const AddAssignFreeByConstRef& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddAssignFreeByConstRef::AddAssignFreeByConstRef':
-// Can't generate bindings for AddAssignFreeByConstRef::AddAssignFreeByConstRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByConstRef::AddAssignFreeByConstRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignFreeByConstRef::AddAssignFreeByConstRef` could not be bound
+//   Unsupported parameter type `AddAssignFreeByConstRef&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignFreeByConstRef::operator=':
-// Can't generate bindings for AddAssignFreeByConstRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByConstRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByConstRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignFreeByConstRef::operator=` could not be bound
+//   Unsupported parameter type `const AddAssignFreeByConstRef& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignFreeByConstRef&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignFreeByConstRef::operator=':
-// Can't generate bindings for AddAssignFreeByConstRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByConstRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByConstRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignFreeByConstRef::operator=` could not be bound
+//   Unsupported parameter type `AddAssignFreeByConstRef&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignFreeByConstRef&`:
+//     references are not yet supported
 
 impl ::core::ops::AddAssign<&Self> for crate::AddAssignFreeByConstRef {
     #[inline(always)]
@@ -737,28 +763,31 @@ impl Default for AddAssignFreeByValue {
     }
 }
 
-// Error while generating bindings for constructor 'AddAssignFreeByValue::AddAssignFreeByValue':
-// Can't generate bindings for AddAssignFreeByValue::AddAssignFreeByValue, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByValue::AddAssignFreeByValue (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignFreeByValue::AddAssignFreeByValue` could not be bound
+//   Unsupported parameter type `const AddAssignFreeByValue& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddAssignFreeByValue::AddAssignFreeByValue':
-// Can't generate bindings for AddAssignFreeByValue::AddAssignFreeByValue, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByValue::AddAssignFreeByValue (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignFreeByValue::AddAssignFreeByValue` could not be bound
+//   Unsupported parameter type `AddAssignFreeByValue&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignFreeByValue::operator=':
-// Can't generate bindings for AddAssignFreeByValue::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByValue::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByValue::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignFreeByValue::operator=` could not be bound
+//   Unsupported parameter type `const AddAssignFreeByValue& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignFreeByValue&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignFreeByValue::operator=':
-// Can't generate bindings for AddAssignFreeByValue::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByValue::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFreeByValue::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignFreeByValue::operator=` could not be bound
+//   Unsupported parameter type `AddAssignFreeByValue&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignFreeByValue&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'operator+=':
-// Can't generate bindings for operator+=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+= (the type of lhs (parameter #0): references are not supported)
+// error: function `operator+=` could not be bound
+//   Unsupported parameter type `AddAssignFreeByValue& lhs`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignFreeByValue&`:
+//     references are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -784,23 +813,25 @@ impl Default for AddAssignFriendByConstRef {
     }
 }
 
-// Error while generating bindings for constructor 'AddAssignFriendByConstRef::AddAssignFriendByConstRef':
-// Can't generate bindings for AddAssignFriendByConstRef::AddAssignFriendByConstRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByConstRef::AddAssignFriendByConstRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignFriendByConstRef::AddAssignFriendByConstRef` could not be bound
+//   Unsupported parameter type `const AddAssignFriendByConstRef& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddAssignFriendByConstRef::AddAssignFriendByConstRef':
-// Can't generate bindings for AddAssignFriendByConstRef::AddAssignFriendByConstRef, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByConstRef::AddAssignFriendByConstRef (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignFriendByConstRef::AddAssignFriendByConstRef` could not be bound
+//   Unsupported parameter type `AddAssignFriendByConstRef&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignFriendByConstRef::operator=':
-// Can't generate bindings for AddAssignFriendByConstRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByConstRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByConstRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignFriendByConstRef::operator=` could not be bound
+//   Unsupported parameter type `const AddAssignFriendByConstRef& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignFriendByConstRef&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignFriendByConstRef::operator=':
-// Can't generate bindings for AddAssignFriendByConstRef::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByConstRef::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByConstRef::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignFriendByConstRef::operator=` could not be bound
+//   Unsupported parameter type `AddAssignFriendByConstRef&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignFriendByConstRef&`:
+//     references are not yet supported
 
 impl ::core::ops::AddAssign<&Self> for crate::AddAssignFriendByConstRef {
     #[inline(always)]
@@ -835,28 +866,31 @@ impl Default for AddAssignFriendByValue {
     }
 }
 
-// Error while generating bindings for constructor 'AddAssignFriendByValue::AddAssignFriendByValue':
-// Can't generate bindings for AddAssignFriendByValue::AddAssignFriendByValue, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByValue::AddAssignFriendByValue (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignFriendByValue::AddAssignFriendByValue` could not be bound
+//   Unsupported parameter type `const AddAssignFriendByValue& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddAssignFriendByValue::AddAssignFriendByValue':
-// Can't generate bindings for AddAssignFriendByValue::AddAssignFriendByValue, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByValue::AddAssignFriendByValue (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignFriendByValue::AddAssignFriendByValue` could not be bound
+//   Unsupported parameter type `AddAssignFriendByValue&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignFriendByValue::operator=':
-// Can't generate bindings for AddAssignFriendByValue::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByValue::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByValue::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignFriendByValue::operator=` could not be bound
+//   Unsupported parameter type `const AddAssignFriendByValue& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignFriendByValue&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignFriendByValue::operator=':
-// Can't generate bindings for AddAssignFriendByValue::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByValue::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignFriendByValue::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignFriendByValue::operator=` could not be bound
+//   Unsupported parameter type `AddAssignFriendByValue&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignFriendByValue&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'operator+=':
-// Can't generate bindings for operator+=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+= (the type of lhs (parameter #0): references are not supported)
+// error: function `operator+=` could not be bound
+//   Unsupported parameter type `AddAssignFriendByValue& lhs`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignFriendByValue&`:
+//     references are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -884,38 +918,40 @@ impl Default for AddAssignProhibitedConstMember {
     }
 }
 
-// Error while generating bindings for constructor 'AddAssignProhibitedConstMember::AddAssignProhibitedConstMember':
-// Can't generate bindings for AddAssignProhibitedConstMember::AddAssignProhibitedConstMember, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedConstMember::AddAssignProhibitedConstMember (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignProhibitedConstMember::AddAssignProhibitedConstMember` could not be bound
+//   Unsupported parameter type `const AddAssignProhibitedConstMember& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddAssignProhibitedConstMember::AddAssignProhibitedConstMember':
-// Can't generate bindings for AddAssignProhibitedConstMember::AddAssignProhibitedConstMember, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedConstMember::AddAssignProhibitedConstMember (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignProhibitedConstMember::AddAssignProhibitedConstMember` could not be bound
+//   Unsupported parameter type `AddAssignProhibitedConstMember&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignProhibitedConstMember::operator=':
-// Can't generate bindings for AddAssignProhibitedConstMember::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedConstMember::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedConstMember::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignProhibitedConstMember::operator=` could not be bound
+//   Unsupported parameter type `const AddAssignProhibitedConstMember& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignProhibitedConstMember&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignProhibitedConstMember::operator=':
-// Can't generate bindings for AddAssignProhibitedConstMember::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedConstMember::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedConstMember::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignProhibitedConstMember::operator=` could not be bound
+//   Unsupported parameter type `AddAssignProhibitedConstMember&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignProhibitedConstMember&`:
+//     references are not yet supported
 
 #[diagnostic::on_unimplemented(
     message = "binding generation for function failed\nCompound assignment with const left-hand side is not supported, found &'a crate::AddAssignProhibitedConstMember"
 )]
 pub trait BindingFailedFor_ZNK30AddAssignProhibitedConstMemberpLEi {}
-impl<'error> ::core::ops::AddAssign<::core::ffi::c_int> for AddAssignProhibitedConstMember
+impl ::core::ops::AddAssign<::ffi_11::c_int> for AddAssignProhibitedConstMember
 where
-    &'error (): BindingFailedFor_ZNK30AddAssignProhibitedConstMemberpLEi,
+    for<'error> &'error (): BindingFailedFor_ZNK30AddAssignProhibitedConstMemberpLEi,
 {
     #[inline(always)]
-    fn add_assign<'a>(&'a mut self, rhs: ::core::ffi::c_int) {
+    fn add_assign<'a>(&'a mut self, rhs: ::ffi_11::c_int) {
         #![allow(unused_variables)]
         unreachable!(
             "This impl can never be instantiated. \
-                    If this message appears at runtime, please report a <internal link>."
+                    If this message appears at runtime, please report a crubit.rs-bug."
         )
     }
 }
@@ -946,27 +982,29 @@ impl Default for AddAssignProhibitedFriendConstLhs {
     }
 }
 
-// Error while generating bindings for constructor 'AddAssignProhibitedFriendConstLhs::AddAssignProhibitedFriendConstLhs':
-// Can't generate bindings for AddAssignProhibitedFriendConstLhs::AddAssignProhibitedFriendConstLhs, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedFriendConstLhs::AddAssignProhibitedFriendConstLhs (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignProhibitedFriendConstLhs::AddAssignProhibitedFriendConstLhs` could not be bound
+//   Unsupported parameter type `const AddAssignProhibitedFriendConstLhs& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'AddAssignProhibitedFriendConstLhs::AddAssignProhibitedFriendConstLhs':
-// Can't generate bindings for AddAssignProhibitedFriendConstLhs::AddAssignProhibitedFriendConstLhs, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedFriendConstLhs::AddAssignProhibitedFriendConstLhs (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `AddAssignProhibitedFriendConstLhs::AddAssignProhibitedFriendConstLhs` could not be bound
+//   Unsupported parameter type `AddAssignProhibitedFriendConstLhs&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignProhibitedFriendConstLhs::operator=':
-// Can't generate bindings for AddAssignProhibitedFriendConstLhs::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedFriendConstLhs::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedFriendConstLhs::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignProhibitedFriendConstLhs::operator=` could not be bound
+//   Unsupported parameter type `const AddAssignProhibitedFriendConstLhs& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignProhibitedFriendConstLhs&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'AddAssignProhibitedFriendConstLhs::operator=':
-// Can't generate bindings for AddAssignProhibitedFriendConstLhs::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedFriendConstLhs::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for AddAssignProhibitedFriendConstLhs::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `AddAssignProhibitedFriendConstLhs::operator=` could not be bound
+//   Unsupported parameter type `AddAssignProhibitedFriendConstLhs&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `AddAssignProhibitedFriendConstLhs&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'operator+=':
-// Can't generate bindings for operator+=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for operator+= (the type of lhs (parameter #0): references are not supported)
+// error: function `operator+=` could not be bound
+//   Unsupported parameter type `const AddAssignProhibitedFriendConstLhs& lhs`:
+//     references are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -983,14 +1021,7 @@ unsafe impl ::cxx::ExternType for ManyOperators {
 impl ManyOperators {
     #[inline(always)]
     pub fn unary_plus<'a>(&'a self) -> crate::ManyOperators {
-        unsafe {
-            let mut __return = ::core::mem::MaybeUninit::<Self>::uninit();
-            crate::detail::__rust_thunk___ZNK13ManyOperatorspsEv(
-                &raw mut __return as *mut ::core::ffi::c_void,
-                self,
-            );
-            __return.assume_init()
-        }
+        unsafe { self::many_operators::unary_plus(self) }
     }
 }
 
@@ -1005,35 +1036,37 @@ impl Default for ManyOperators {
     }
 }
 
-// Error while generating bindings for constructor 'ManyOperators::ManyOperators':
-// Can't generate bindings for ManyOperators::ManyOperators, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::ManyOperators (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `ManyOperators::ManyOperators` could not be bound
+//   Unsupported parameter type `const ManyOperators& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'ManyOperators::ManyOperators':
-// Can't generate bindings for ManyOperators::ManyOperators, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::ManyOperators (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `ManyOperators::ManyOperators` could not be bound
+//   Unsupported parameter type `ManyOperators&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator=':
-// Can't generate bindings for ManyOperators::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `ManyOperators::operator=` could not be bound
+//   Unsupported parameter type `const ManyOperators& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator=':
-// Can't generate bindings for ManyOperators::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `ManyOperators::operator=` could not be bound
+//   Unsupported parameter type `ManyOperators&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
 
 impl<'a> ::core::ops::Neg for &'a crate::ManyOperators {
     type Output = crate::ManyOperators;
     #[inline(always)]
     fn neg(self) -> Self::Output {
         unsafe {
-            let mut __return = ::core::mem::MaybeUninit::<crate::ManyOperators>::uninit();
+            let mut __crubit_return = ::core::mem::MaybeUninit::<crate::ManyOperators>::uninit();
             crate::detail::__rust_thunk___ZNK13ManyOperatorsngEv(
-                &raw mut __return as *mut ::core::ffi::c_void,
+                &raw mut __crubit_return as *mut ::core::ffi::c_void,
                 self,
             );
-            __return.assume_init()
+            __crubit_return.assume_init()
         }
     }
 }
@@ -1043,108 +1076,132 @@ impl<'a> ::core::ops::Not for &'a crate::ManyOperators {
     #[inline(always)]
     fn not(self) -> Self::Output {
         unsafe {
-            let mut __return = ::core::mem::MaybeUninit::<crate::ManyOperators>::uninit();
+            let mut __crubit_return = ::core::mem::MaybeUninit::<crate::ManyOperators>::uninit();
             crate::detail::__rust_thunk___ZNK13ManyOperatorsntEv(
-                &raw mut __return as *mut ::core::ffi::c_void,
+                &raw mut __crubit_return as *mut ::core::ffi::c_void,
                 self,
             );
-            __return.assume_init()
+            __crubit_return.assume_init()
         }
     }
 }
 
-// Error while generating bindings for function 'ManyOperators::operator~':
-// Bindings for this kind of operator (operator ~ with 1 parameter(s)) are not supported
+// error: function `ManyOperators::operator~` could not be bound
+//   Bindings for this kind of operator (operator ~ with 1 parameter(s)) are not supported
 
-// Error while generating bindings for function 'ManyOperators::operator+':
-// Can't generate bindings for ManyOperators::operator+, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator+ (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator+` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator-':
-// Can't generate bindings for ManyOperators::operator-, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator- (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator-` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator*':
-// Can't generate bindings for ManyOperators::operator*, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator* (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator*` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator/':
-// Can't generate bindings for ManyOperators::operator/, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator/ (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator/` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator%':
-// Can't generate bindings for ManyOperators::operator%, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator% (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator%` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator&':
-// Can't generate bindings for ManyOperators::operator&, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator& (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator&` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator|':
-// Can't generate bindings for ManyOperators::operator|, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator| (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator|` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator^':
-// Can't generate bindings for ManyOperators::operator^, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator^ (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator^` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator<<':
-// Can't generate bindings for ManyOperators::operator<<, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator<< (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator<<` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator>>':
-// Can't generate bindings for ManyOperators::operator>>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator>> (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator>>` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator+=':
-// Can't generate bindings for ManyOperators::operator+=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator+= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator+= (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator+=` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator-=':
-// Can't generate bindings for ManyOperators::operator-=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator-= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator-= (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator-=` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator*=':
-// Can't generate bindings for ManyOperators::operator*=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator*= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator*= (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator*=` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator/=':
-// Can't generate bindings for ManyOperators::operator/=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator/= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator/= (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator/=` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator%=':
-// Can't generate bindings for ManyOperators::operator%=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator%= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator%= (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator%=` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator&=':
-// Can't generate bindings for ManyOperators::operator&=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator&= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator&= (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator&=` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator|=':
-// Can't generate bindings for ManyOperators::operator|=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator|= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator|= (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator|=` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator^=':
-// Can't generate bindings for ManyOperators::operator^=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator^= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator^= (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator^=` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator<<=':
-// Can't generate bindings for ManyOperators::operator<<=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator<<= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator<<= (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator<<=` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'ManyOperators::operator>>=':
-// Can't generate bindings for ManyOperators::operator>>=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator>>= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:operators_cc needs [//features:experimental] for ManyOperators::operator>>= (the type of rhs (parameter #1): references are not supported)
+// error: function `ManyOperators::operator>>=` could not be bound
+//   Unsupported parameter type `const ManyOperators& rhs`:
+//     references are not yet supported
+//   Unsupported return type `ManyOperators&`:
+//     references are not yet supported
+
+pub mod many_operators {
+    #[inline(always)]
+    pub(crate) fn unary_plus<'a>(__this: &'a crate::ManyOperators) -> crate::ManyOperators {
+        unsafe {
+            let mut __crubit_return = ::core::mem::MaybeUninit::<crate::ManyOperators>::uninit();
+            crate::detail::__rust_thunk___ZNK13ManyOperatorspsEv(
+                &raw mut __crubit_return as *mut ::core::ffi::c_void,
+                __this,
+            );
+            __crubit_return.assume_init()
+        }
+    }
+}
 
 mod detail {
     #[allow(unused_imports)]
@@ -1193,8 +1250,8 @@ mod detail {
         #[link_name = "_ZN18AddAssignMemberIntpLEi"]
         pub(crate) unsafe fn __rust_thunk___ZN18AddAssignMemberIntpLEi<'a>(
             __this: &'a mut crate::AddAssignMemberInt,
-            rhs: ::core::ffi::c_int,
-        ) -> ::core::ffi::c_int;
+            rhs: ::ffi_11::c_int,
+        ) -> ::ffi_11::c_int;
         pub(crate) unsafe fn __rust_thunk___ZN25AddAssignMemberByConstRefC1Ev(
             __this: *mut ::core::ffi::c_void,
         );

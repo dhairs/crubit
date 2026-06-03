@@ -5,17 +5,23 @@
 /// Generate the final bindings, including structures for code snippet, feature
 /// gating, etc.
 use crate::db::BindingsGenerator;
-use crate::rs_snippet::RsTypeKind;
-use arc_anyhow::{anyhow, bail, ensure, Error, Result};
+use crate::rs_snippet::{LifetimeOptions, PrimitiveName, RsTypeKind};
+use arc_anyhow::{Error, Result};
 use code_gen_utils::{expect_format_cc_type_name, make_rs_ident, CcInclude};
+use crubit_feature::CrubitFeature;
+use error_report::{anyhow, bail, ensure};
 use ffi_types::FfiU8SliceBox;
 use flagset::FlagSet;
 use heck::ToSnakeCase;
-use ir::{BazelLabel, GenericItem, Item, ItemId, Namespace, RecordType, UnqualifiedIdentifier, IR};
+use ir::{
+    BazelLabel, GenericItem, IntegerConstant, Item, ItemId, Namespace, RecordType,
+    UnqualifiedIdentifier,
+};
 use proc_macro2::{Ident, Literal, TokenStream};
+use quote::format_ident;
 use quote::{quote, ToTokens};
 use std::collections::HashMap;
-use std::fmt::{Display, Formatter};
+use std::fmt::Display;
 use std::num::NonZeroUsize;
 use std::rc::Rc;
 
@@ -51,6 +57,8 @@ pub struct ApiSnippets {
     pub features: FlagSet<Feature>,
 
     pub member_functions: HashMap<ItemId, Vec<TokenStream>>,
+
+    pub free_functions: HashMap<ItemId, Vec<TokenStream>>,
 }
 
 impl ApiSnippets {
@@ -69,6 +77,9 @@ impl ApiSnippets {
         }
         for (item_id, member_functions) in other.member_functions {
             self.member_functions.entry(item_id).or_default().extend(member_functions);
+        }
+        for (item_id, free_methods) in other.free_functions {
+            self.free_functions.entry(item_id).or_default().extend(free_methods);
         }
         self.thunks.extend(other.thunks);
         self.assertions.extend(other.assertions);
@@ -95,41 +106,6 @@ pub struct BindingsTokens {
     pub rs_api_impl: TokenStream,
 }
 
-/// A missing set of crubit features caused by a capability that requires that
-/// feature.
-///
-/// For example, if addition is not implemented due to missing the Experimental
-/// feature on //foo, then we might have something like:
-///
-/// ```
-/// RequiredCrubitFeature {
-///   target: "//foo".into(),
-///   item: "kFoo".into(),
-///   missing_features: CrubitFeature::Experimental.into(),
-///   capability_description: "int addition".into(),
-/// }
-/// ```
-#[derive(Clone, PartialEq, Eq, Debug)]
-pub struct RequiredCrubitFeature {
-    pub target: BazelLabel,
-    pub item: Rc<str>,
-    pub missing_features: flagset::FlagSet<crubit_feature::CrubitFeature>,
-    pub capability_description: Rc<str>,
-}
-
-impl Display for RequiredCrubitFeature {
-    fn fmt(&self, f: &mut Formatter) -> std::fmt::Result {
-        let Self { target, item, missing_features, capability_description } = self;
-        let feature_strings: Vec<&str> =
-            missing_features.into_iter().map(|feature| feature.aspect_hint()).collect();
-        write!(f, "{target} needs [{features}] for {item}", features = feature_strings.join(", "),)?;
-        if !capability_description.is_empty() {
-            write!(f, " ({capability_description})")?;
-        }
-        Ok(())
-    }
-}
-
 /// Returns the list of features required to use the item which are not yet
 /// enabled.
 ///
@@ -138,183 +114,143 @@ impl Display for RequiredCrubitFeature {
 ///
 /// If the item does have a defining target, and it doesn't enable the specified
 /// features, then bindings are suppressed for this item.
-pub fn required_crubit_features(
-    db: &dyn BindingsGenerator,
-    item: &Item,
-) -> Result<Vec<RequiredCrubitFeature>> {
+pub fn missing_feature_descriptions(db: &BindingsGenerator, item: &Item) -> Result<Vec<String>> {
     let mut missing_features = vec![];
 
     let ir = &db.ir();
 
-    let require_any_feature =
-        |missing_features: &mut Vec<RequiredCrubitFeature>,
-         alternative_required_features: flagset::FlagSet<crubit_feature::CrubitFeature>,
-         capability_description: &dyn Fn() -> Rc<str>| {
-            // We refuse to generate bindings if either the definition of an item, or
-            // instantiation (if it is a template) of an item are in a translation unit
-            // which doesn't have the required Crubit features.
-            for target in item.defining_target().into_iter().chain(item.owning_target().as_ref()) {
-                let enabled_features = ir.target_crubit_features(target);
-                if (alternative_required_features & enabled_features).is_empty() {
-                    missing_features.push(RequiredCrubitFeature {
-                        target: target.clone(),
-                        item: item.debug_name(ir),
-                        missing_features: alternative_required_features,
-                        capability_description: capability_description(),
-                    });
-                }
-            }
-        };
+    struct TargetAndFeatures {
+        target: BazelLabel,
+        features: flagset::FlagSet<CrubitFeature>,
+    }
+    let defining_and_owning_target: Vec<TargetAndFeatures> = db
+        .defining_target(item.id())
+        .into_iter()
+        .chain(item.owning_target())
+        .map(|target| TargetAndFeatures { features: ir.target_crubit_features(&target), target })
+        .collect();
 
-    let require_rs_type_kind = |missing_features: &mut Vec<RequiredCrubitFeature>,
-                                rs_type_kind: &RsTypeKind,
-                                context: &dyn Fn() -> Rc<str>| {
-        for target in item.defining_target().into_iter().chain(item.owning_target().as_ref()) {
-            let (missing, desc) =
-                rs_type_kind.required_crubit_features(db, ir.target_crubit_features(target));
-            if !missing.is_empty() {
-                let context = context();
-                let capability_description = if desc.is_empty() {
-                    context
-                } else if context.is_empty() {
-                    desc.into()
-                } else {
-                    format!("{context}: {desc}").into()
-                };
-                missing_features.push(RequiredCrubitFeature {
-                    target: target.clone(),
-                    item: item.debug_name(ir),
-                    missing_features: missing,
-                    capability_description,
-                });
+    let have_feature = |feature: CrubitFeature| -> bool {
+        // We refuse to generate bindings if either the definition of an item, or
+        // instantiation (if it is a template) of an item are in a translation unit
+        // which doesn't have the required Crubit features.
+        for TargetAndFeatures { target, .. } in &defining_and_owning_target {
+            let enabled_features = ir.target_crubit_features(target);
+            if !enabled_features.contains(feature) {
+                return false;
             }
+        }
+        true
+    };
+
+    let missing_features_of_type = |rs_type_kind: &RsTypeKind| -> Option<Vec<String>> {
+        for TargetAndFeatures { target, features } in &defining_and_owning_target {
+            let descriptions = rs_type_kind.missing_feature_descriptions_of_type(target, *features);
+            if !descriptions.is_empty() {
+                return Some(descriptions);
+            }
+        }
+        None
+    };
+
+    let missing_features_of_cc_type = |cc_type: ir::CcType| -> Option<Vec<String>> {
+        match db.rs_type_kind(cc_type) {
+            Ok(rs_type_kind) => missing_features_of_type(&rs_type_kind),
+            Err(e) => Some(vec![e.to_string()]),
         }
     };
 
-    if let Some(unknown_attr) = item.unknown_attr() {
-        require_any_feature(
-            &mut missing_features,
-            crubit_feature::CrubitFeature::Experimental.into(),
-            &|| format!("unknown attribute(s): {unknown_attr}").into(),
-        );
+    let join_missing_with_context = |context: &str, missing: &[String]| -> String {
+        let desc = missing.join("\n").replace('\n', "\n  ");
+        format!("{context}:\n  {desc}")
+    };
+
+    if !have_feature(CrubitFeature::Experimental)
+        && let Some(unknown_attr) = item.unknown_attr()
+    {
+        missing_features.push(format!(
+            "crubit.rs/errors/unknown_attribute: unknown attribute(s): {unknown_attr}"
+        ));
     }
+
     match item {
-        Item::UnsupportedItem(..) => {}
+        Item::Constant(_)
+        | Item::Comment { .. }
+        | Item::GlobalVar(_)
+        | Item::Namespace(_)
+        | Item::UnsupportedItem(..)
+        | Item::UseMod { .. } => {}
+
         Item::Func(func) => {
             if func.rs_name == UnqualifiedIdentifier::Destructor {
                 // We support destructors in supported even though they use some features we
                 // don't generally support with that feature set, because in this
                 // particular case, it's safe.
-                require_any_feature(
-                    &mut missing_features,
-                    crubit_feature::CrubitFeature::Supported.into(),
-                    &|| "destructors".into(),
-                );
+                if !have_feature(CrubitFeature::Types) {
+                    missing_features.push("destructors".to_string());
+                }
             } else {
-                let return_type = db.rs_type_kind(func.return_type.clone())?;
-                require_rs_type_kind(&mut missing_features, &return_type, &|| "return type".into());
-                for (i, param) in func.params.iter().enumerate() {
-                    let param_type = db.rs_type_kind(param.type_.clone())?;
-                    require_rs_type_kind(&mut missing_features, &param_type, &|| {
-                        format!("the type of {} (parameter #{i})", &param.identifier).into()
-                    });
-                }
-                if func.is_extern_c {
-                    require_any_feature(
-                        &mut missing_features,
-                        crubit_feature::CrubitFeature::Supported.into(),
-                        &|| "extern \"C\" function".into(),
-                    );
-                } else {
-                    require_any_feature(
-                        &mut missing_features,
-                        crubit_feature::CrubitFeature::Supported.into(),
-                        &|| "non-extern \"C\" function".into(),
-                    );
-                }
-                if !func.has_c_calling_convention {
-                    require_any_feature(
-                        &mut missing_features,
-                        crubit_feature::CrubitFeature::Experimental.into(),
-                        &|| "non-C calling convention".into(),
-                    );
-                }
-                if func.is_variadic {
-                    require_any_feature(
-                        &mut missing_features,
-                        crubit_feature::CrubitFeature::Experimental.into(),
-                        &|| "variadic function".into(),
-                    );
-                }
-                if func.is_noreturn {
-                    require_any_feature(
-                        &mut missing_features,
-                        crubit_feature::CrubitFeature::Experimental.into(),
-                        &|| "[[noreturn]] attribute".into(),
-                    );
-                }
-                if func.nodiscard.is_some() {
-                    require_any_feature(
-                        &mut missing_features,
-                        crubit_feature::CrubitFeature::Experimental.into(),
-                        &|| "[[nodiscard]] attribute".into(),
-                    );
-                }
-                if func.deprecated.is_some() {
-                    require_any_feature(
-                        &mut missing_features,
-                        crubit_feature::CrubitFeature::Experimental.into(),
-                        &|| "[[deprecated]] attribute".into(),
-                    );
-                }
                 for param in &func.params {
-                    if let Some(unknown_attr) = &param.unknown_attr {
-                        require_any_feature(
-                            &mut missing_features,
-                            crubit_feature::CrubitFeature::Experimental.into(),
-                            &|| {
-                                format!(
-                                    "param {param} has unknown attribute(s): {unknown_attr}",
-                                    param = &param.identifier.identifier
-                                )
-                                .into()
-                            },
-                        );
+                    if let Some(missing) = missing_features_of_cc_type(param.type_.clone()) {
+                        missing_features.push(join_missing_with_context(
+                            &format!(
+                                "Unsupported parameter type `{} {}`",
+                                db.cc_type_debug_name(&param.type_),
+                                param.identifier
+                            ),
+                            &missing,
+                        ));
+                    }
+                }
+                if let Some(missing) = missing_features_of_cc_type(func.return_type.clone()) {
+                    missing_features.push(join_missing_with_context(
+                        &format!(
+                            "Unsupported return type `{}`",
+                            db.cc_type_debug_name(&func.return_type)
+                        ),
+                        &missing,
+                    ));
+                }
+                if !have_feature(CrubitFeature::Experimental) {
+                    if !func.has_c_calling_convention {
+                        missing_features.push("non-C calling convention".to_string());
+                    }
+                    if func.is_variadic {
+                        missing_features.push("variadic function".to_string());
+                    }
+                    if func.is_noreturn {
+                        missing_features.push("[[noreturn]] attribute".to_string());
+                    }
+                    for param in &func.params {
+                        if let Some(unknown_attr) = &param.unknown_attr {
+                            missing_features.push(format!(
+                                "crubit.rs/errors/unknown_attribute: param {param} has unknown attribute(s): {unknown_attr}",
+                                param = &param.identifier.identifier
+                            ));
+                        }
                     }
                 }
             }
         }
-        Item::Record(_) | Item::TypeAlias(_) | Item::Enum(_) => {
-            require_rs_type_kind(
-                &mut missing_features,
-                // We use from_item_raw here because required_crubit_features is itself called
-                // by `BindingsGenerator::rs_type_kind()` in order to decide if it should return
-                // an error.
-                &RsTypeKind::from_item_raw(
-                    db,
-                    item.clone(),
-                    /*have_reference_param=*/ false,
-                    /*is_return_type=*/ true,
-                )?,
-                &|| "".into(),
-            );
-        }
-        Item::GlobalVar(_) => {}
-        Item::Namespace(_) => {
-            require_any_feature(
-                &mut missing_features,
-                crubit_feature::CrubitFeature::Supported.into(),
-                &|| "namespace".into(),
-            );
+        Item::Record(_) | Item::TypeAlias(_) | Item::Enum(_) | Item::ExistingRustType(_) => {
+            // We use from_item_raw here because missing_feature_descriptions is itself called
+            // by `BindingsGenerator::rs_type_kind()` in order to decide if it should return
+            // an error.
+            if let Some(missing) = missing_features_of_type(&RsTypeKind::from_item_raw(
+                db,
+                item.clone(),
+                &LifetimeOptions { is_return_type: true, ..LifetimeOptions::default() },
+                /*template_args=*/ &None,
+                /*lifetimes=*/ &[],
+            )?) {
+                missing_features.extend(missing);
+            }
         }
         Item::IncompleteRecord(_) => {
-            require_any_feature(
-                &mut missing_features,
-                crubit_feature::CrubitFeature::Wrapper.into(),
-                &|| "incomplete type".into(),
-            );
+            if !have_feature(CrubitFeature::Wrapper) {
+                missing_features.push("incomplete type".to_string());
+            }
         }
-        Item::Comment { .. } | Item::ExistingRustType { .. } | Item::UseMod { .. } => {}
     }
     Ok(missing_features)
 }
@@ -368,27 +304,24 @@ pub struct BindingsInfo {
 #[derive(Clone, PartialEq, Eq)]
 pub enum NoBindingsReason {
     MissingRequiredFeatures {
-        context: Rc<str>,
-        missing_features: Vec<RequiredCrubitFeature>,
+        missing_features: Vec<String>,
     },
     DependencyFailed {
-        context: Rc<str>,
-        error: Error,
+        type_name: String,
+        reason: String,
     },
     LeadingDunder {
-        name: Rc<str>,
+        name: String,
     },
+    Visibility(Error),
     /// This is directly unsupported.
-    Unsupported {
-        context: Rc<str>,
-        error: Error,
-    },
+    Unsupported(Error),
     /// This item's parent was a record, but no nested items module could be generated because there
     /// were other records with nested items whose nested items module mapped to the same name.
     ParentModuleNameNotUnique {
-        conflicting_name: Rc<str>,
+        conflicting_name: String,
         /// Invariant: more than 1 element.
-        parent_names_that_map_to_same_name: Vec<Rc<str>>,
+        parent_names_that_map_to_same_name: Vec<String>,
     },
     /// This item's parent was a record, but no nested items module could be generated because there
     /// were other items that occupied the name in that parent's namespace. For example, a struct
@@ -414,45 +347,36 @@ impl std::fmt::Debug for NoBindingsReason {
 impl From<NoBindingsReason> for Error {
     fn from(reason: NoBindingsReason) -> Error {
         match reason {
-            NoBindingsReason::MissingRequiredFeatures { context, missing_features } => {
-                // This maybe could use .context(), but the ordering is backward.
-                let mut all_missing = vec![];
-                for missing in missing_features {
-                    all_missing.push(missing.to_string());
-                }
-                anyhow!(
-                    "Can't generate bindings for {context}, because of missing required features (<internal link>):\n{}",
-                    all_missing.join("\n")
-                )
+            NoBindingsReason::MissingRequiredFeatures { missing_features } => {
+                anyhow!(missing_features.join("\n"))
             }
-            NoBindingsReason::DependencyFailed { context, error } => error.context(format!(
-                "Can't generate bindings for {context} due to missing bindings for its dependency"
-            )),
+            NoBindingsReason::DependencyFailed { type_name, reason } => {
+                anyhow!("depends on `{type_name}` which cannot be bound because {reason}")
+            }
             NoBindingsReason::LeadingDunder { name } => {
                 anyhow!("Skipping generating bindings for '{name}' because it has a leading `__`")
             }
-            NoBindingsReason::Unsupported { context, error } => error.context(format!(
-                "Can't generate bindings for {context}, because it is unsupported"
-            )),
+            NoBindingsReason::Visibility(error) | NoBindingsReason::Unsupported(error) => error,
             NoBindingsReason::ParentModuleNameNotUnique {
                 conflicting_name,
                 parent_names_that_map_to_same_name,
             } => {
                 anyhow!(
-                    "records {parent_names_that_map_to_same_name:?} all have nested items, but all map to the same nested module name: `{conflicting_name}`",
+                    "crubit.rs/errors/nested_type: records {parent_names_that_map_to_same_name:?} all have nested items, but all map to the same nested module name: `{conflicting_name}`",
                 )
             }
             NoBindingsReason::ParentModuleNameOverwritten { conflicting_name } => {
                 anyhow!(
-                    "parent record has nested items, but the module to contain them could not be generated because another item named `{conflicting_name}` already exists",
+                    "crubit.rs/errors/nested_type: parent record has nested items, but the module to contain them could not be generated because another item named `{conflicting_name}` already exists",
                 )
             }
         }
     }
 }
 
-/// The thing that a type name resolves to.
-pub enum ResolvedTypeName {
+/// The thing that a name resolves to.
+#[derive(Debug)]
+pub enum ResolvedName {
     Namespace {
         /// Namespaces with the same canonical namespace id are coalesced together.
         canonical_namespace_id: ItemId,
@@ -460,6 +384,8 @@ pub enum ResolvedTypeName {
     /// An item that is explicitly generated (as opposed to RecordNestedItems, which is implicitly
     /// generated).
     ExplicitItem(ItemId),
+    /// An item that is in the value namespace (functions, constants, etc.).
+    ValueItem(ItemId),
     /// The module that is generated to hold the nested items of a record.
     /// If there's more than one, that means the multiple records with nested items, when
     /// snake_cased, map to the same name. For now, this is treated as an error, but we may want to
@@ -470,10 +396,10 @@ pub enum ResolvedTypeName {
     },
 }
 
-impl ResolvedTypeName {
-    /// If two names resolve to different ResolvedTypeNames, try and coalesce them together.
+impl ResolvedName {
+    /// If two names resolve to different ResolvedNames, try and coalesce them together.
     /// For example, namespaces that correspond to the same canonical namespace id can be flattened.
-    pub fn coalesce(&mut self, other: ResolvedTypeName) -> Result<()> {
+    pub fn coalesce(&mut self, other: ResolvedName) -> Result<()> {
         match (self, other) {
             // RecordNestedItems coalesce together. Right now, this is just to provide a better
             // error message ("several record nested items modules map to the same name"), but we
@@ -508,25 +434,73 @@ impl ResolvedTypeName {
                 );
                 Ok(())
             }
+            (Self::ValueItem(_), Self::ValueItem(_)) => Ok(()), // Keep first one
+            (Self::ExplicitItem(_), Self::ValueItem(_)) => Ok(()), // Keep ExplicitItem
+            (this @ Self::ValueItem(_), other @ Self::ExplicitItem(_)) => {
+                *this = other; // Overwrite with ExplicitItem!
+                Ok(())
+            }
             // Everything else is a conflict, and should never happen.
             _ => bail!("conflicting name occupants"),
         }
     }
 }
 
-pub fn generated_items_to_token_stream(
+pub fn generated_items_to_token_stream<'db>(
     generated_items: &HashMap<ItemId, GeneratedItem>,
-    ir: &IR,
+    db: &'db crate::BindingsGenerator<'db>,
     elements: &[ItemId],
 ) -> TokenStream {
     let mut tokens = quote! {};
-    generated_items_to_tokens(generated_items, ir, elements, &mut tokens);
+    generated_items_to_tokens(generated_items, db, elements, &mut tokens);
     tokens
 }
 
-pub fn generated_items_to_tokens(
+pub fn integer_constant_to_token_stream(
+    integer_constant: IntegerConstant,
+    underlying_type: &RsTypeKind,
+) -> Result<TokenStream> {
+    let RsTypeKind::Primitive(primitive) = *underlying_type.unalias() else {
+        bail!(
+            "integer_constant_to_token_stream called with non-primitive underlying type:\n\
+            {underlying_type:#?}\n"
+        )
+    };
+    let IntegerConstant { is_negative, wrapped_value } = integer_constant;
+    Ok(if underlying_type.is_bool() {
+        if wrapped_value == 0 {
+            quote! {false}
+        } else {
+            quote! {true}
+        }
+    } else {
+        let mut value = if is_negative {
+            Literal::i64_unsuffixed(wrapped_value as i64).into_token_stream()
+        } else {
+            Literal::u64_unsuffixed(wrapped_value).into_token_stream()
+        };
+        if underlying_type.is_char() {
+            value = quote! {
+                #value as u8
+            };
+        }
+        match PrimitiveName::from_primitive(primitive) {
+            PrimitiveName::NativeType(_) => value,
+            PrimitiveName::Ffi11Type(type_name) => {
+                // This is a bit of trickery. In order to have a standard way for the compiler to
+                // produce ffi_11 values of types which are possibly wrapped depending on the
+                // target platform, ffi_11 provides `new_c_int`, `new_c_long`, etc.
+                let new_fn_name =
+                    Ident::new(&format!("new_{type_name}"), proc_macro2::Span::call_site());
+                quote! { ::ffi_11::#new_fn_name(#value) }
+            }
+        }
+    })
+}
+
+pub fn generated_items_to_tokens<'db>(
     generated_items: &HashMap<ItemId, GeneratedItem>,
-    ir: &IR,
+    db: &'db crate::BindingsGenerator<'db>,
     elements: &[ItemId],
     tokens: &mut TokenStream,
 ) {
@@ -545,11 +519,14 @@ pub fn generated_items_to_tokens(
                     derive_attr,
                     recursively_pinned_attr,
                     must_use_attr,
+                    deprecated_attr,
                     align,
+                    internally_mutable_unknown_fields,
                     crubit_annotation,
                     visibility,
                     struct_or_union,
                     ident,
+                    id,
                     head_padding,
                     field_definitions,
                     implements_send,
@@ -557,36 +534,83 @@ pub fn generated_items_to_tokens(
                     cxx_impl,
                     incomplete_definition,
                     upcast_impls,
+                    display_impl,
                     no_unique_address_accessors,
                     items,
                     nested_items,
                     indirect_functions,
-                    owned_type_name,
+                    delete,
+                    owned_ptr_config,
                     member_methods,
+                    free_functions,
+                    lifetime_params,
+                    is_thread_safe,
+                    size,
                 } = record_item.as_ref();
+
+                let type_param_tokens = if !lifetime_params.is_empty() {
+                    quote! { < #( #lifetime_params ),* > }
+                } else {
+                    quote! {}
+                };
 
                 let repr_attrs = std::iter::once(quote! { C }).chain(align.map(|align| {
                     let align = Literal::usize_unsuffixed(align);
                     quote! { align(#align) }
                 }));
 
-                let head_padding = head_padding.map(|n| {
-                    let n = Literal::usize_unsuffixed(n);
-                    quote! { __non_field_data: [::core::mem::MaybeUninit<u8>; #n], }
-                });
+                // For thread-safe types, generate an opaque UnsafeCell body instead of
+                // individual fields. This enables interior mutability, allowing non-const
+                // C++ methods to be called through shared references (&self).
+                let struct_body = if *is_thread_safe {
+                    let size_literal = Literal::usize_unsuffixed(*size);
+                    quote! {
+                        __opaque: ::core::cell::UnsafeCell<[::core::mem::MaybeUninit<u8>; #size_literal]>,
+                    }
+                } else {
+                    let head_padding = head_padding.map(|n| {
+                        let n = Literal::usize_unsuffixed(n);
+                        // TODO(b/481405536): Do this unconditionally.
+                        if *internally_mutable_unknown_fields {
+                            quote! { __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; #n], }
+                        } else {
+                            quote! { __non_field_data: [::core::mem::MaybeUninit<u8>; #n], }
+                        }
+                    });
+                    let lifetime_markers: Vec<TokenStream> = lifetime_params
+                        .iter()
+                        .map(|lt| {
+                            let field_name = format_ident!("__marker_{}", lt.ident);
+                            quote! { #field_name: ::core::marker::PhantomData<& #lt ()> }
+                        })
+                        .collect();
+                    quote! {
+                        #head_padding
+                        #( #field_definitions )*
+                        #( #lifetime_markers )*
+                    }
+                };
 
                 let send_impl = match implements_send {
-                    true => quote! { unsafe impl Send for #ident {} },
-                    false => quote! { impl !Send for #ident {} },
+                    true => {
+                        quote! { unsafe impl #type_param_tokens Send for #ident #type_param_tokens {} }
+                    }
+                    false => {
+                        quote! { impl #type_param_tokens !Send for #ident #type_param_tokens {} }
+                    }
                 };
                 let sync_impl = match implements_sync {
-                    true => quote! { unsafe impl Sync for #ident {} },
-                    false => quote! { impl !Sync for #ident {} },
+                    true => {
+                        quote! { unsafe impl #type_param_tokens Sync for #ident #type_param_tokens {} }
+                    }
+                    false => {
+                        quote! { impl #type_param_tokens !Sync for #ident #type_param_tokens {} }
+                    }
                 };
 
                 let cxx_impl = match cxx_impl {
                     Some(CxxExternTypeImpl { id, kind }) => quote! {
-                        unsafe impl ::cxx::ExternType for #ident {
+                        unsafe impl #type_param_tokens ::cxx::ExternType for #ident #type_param_tokens {
                             type Id = ::cxx::type_id!(#id);
                             type Kind = #kind;
                         }
@@ -596,7 +620,7 @@ pub fn generated_items_to_tokens(
 
                 let no_unique_address_accessors_impl = if !no_unique_address_accessors.is_empty() {
                     Some(quote! {
-                        impl #ident {
+                        impl #type_param_tokens #ident #type_param_tokens {
                             #( #no_unique_address_accessors )*
                         }
                     })
@@ -604,18 +628,34 @@ pub fn generated_items_to_tokens(
                     None
                 };
 
-                let owned_type_def = owned_type_name.as_ref().map(|owned_type_name| {
+                let owned_type_def = owned_ptr_config.as_ref().map(|cfg| {
+                    let owned_type_name = &cfg.owned_type_name;
+                    let drop_meth = &cfg.drop_impl;
+                    let doc_comment = format!(
+                        "Wrapper for a C++ {} owned by Rust. \n\n Style guide: The C++ type to which this refers should be wrapped in an `Arc` or `Mutex` if it is not already thread-safe. \n\n THIS TYPE REQUIRES A MANUAL DROP IMPLEMENTATION. \n You MUST provide an `impl {} {{ pub fn {}(&mut self) {{ ... }} }}` block in a separate Rust file (e.g., via `additional_rust_srcs`). Failure to do so will result in a compile-time error: `method not found in `{}``.",
+                        ident, owned_type_name, drop_meth, owned_type_name
+                    );
                     quote! {
                         __NEWLINE__ __NEWLINE__
                         __COMMENT__ "Generated due to CRUBIT_OWNED_POINTEE annotation."
+                        #[doc = #doc_comment]
                         #[repr(transparent)]
                         pub struct #owned_type_name(::core::ptr::NonNull<#ident>);
+
+                        impl Drop for #owned_type_name {
+                            fn drop(&mut self) {
+                                __COMMENT__ "IMPORTANT: The drop method MUST be implemented in a user-written .rs file (e.g., using `additional_rust_srcs`)."
+                                __COMMENT__ "Crubit cannot automatically generate the destruction logic for this type."
+                                __COMMENT__ "See the struct documentation for more details."
+                                self.#drop_meth();
+                            }
+                        }
                     }
                 });
 
                 let member_methods_impl = if !member_methods.is_empty() {
                     Some(quote! {
-                        impl #ident {
+                        impl #type_param_tokens #ident #type_param_tokens {
                             #( #member_methods )*
                         }
                     })
@@ -628,16 +668,17 @@ pub fn generated_items_to_tokens(
                     #derive_attr
                     #recursively_pinned_attr
                     #must_use_attr
+                    #deprecated_attr
                     #[repr(#(#repr_attrs),*)]
                     #crubit_annotation
-                    #visibility #struct_or_union #ident {
-                        #head_padding
-                        #( #field_definitions )*
+                    #visibility #struct_or_union #ident #type_param_tokens {
+                        #struct_body
                     }
 
                     #send_impl
                     #sync_impl
                     #cxx_impl
+                    #display_impl
 
                     #incomplete_definition
 
@@ -651,7 +692,7 @@ pub fn generated_items_to_tokens(
                 }
                 .to_tokens(tokens);
 
-                generated_items_to_tokens(generated_items, ir, items, tokens);
+                generated_items_to_tokens(generated_items, db, items, tokens);
 
                 quote! { #( #indirect_functions __NEWLINE__ __NEWLINE__ )* }.to_tokens(tokens);
 
@@ -676,7 +717,7 @@ pub fn generated_items_to_tokens(
                             quote! {
                                 unsafe impl oops::Inherits<#base_name> for #derived_name {
                                     unsafe fn upcast_ptr(derived: *const Self) -> *const #base_name {
-                                        #body
+                                        unsafe { #body }
                                     }
                                 }
                                 __NEWLINE__
@@ -695,15 +736,28 @@ pub fn generated_items_to_tokens(
                     }
                 }
 
-                if !nested_items.is_empty() {
-                    let snake_case_name = make_rs_ident(&ident.to_string().to_snake_case());
-                    let nested_items_to_tokens =
-                        generated_items_to_token_stream(generated_items, ir, nested_items);
+                if let Some(DeleteImpl { record_type, thunk_ident, crate_root_path }) = delete {
                     quote! {
-                        pub mod #snake_case_name {
-                            #[allow(unused_imports)]
-                            use super::*; __NEWLINE__
+                        unsafe impl ::operator::Delete for #record_type {
+                            #[inline(always)]
+                            unsafe fn delete(p: *mut Self) {
+                                unsafe { #crate_root_path::detail::#thunk_ident(p); }
+                            }
+                        }
+                        __NEWLINE__
+                        __NEWLINE__
+                    }
+                    .to_tokens(tokens);
+                }
+                let record_ir = db.find_decl::<Rc<ir::Record>>(*id).unwrap();
+                let module_name = db.record_to_associated_module_name(record_ir.clone()).unwrap();
+                if !free_functions.is_empty() || !nested_items.is_empty() {
+                    let nested_items_to_tokens =
+                        generated_items_to_token_stream(generated_items, db, nested_items);
+                    quote! {
+                        pub mod #module_name {
                             __NEWLINE__
+                            #( #free_functions )*
                             #nested_items_to_tokens
                         }
                     }
@@ -722,10 +776,11 @@ pub fn generated_items_to_tokens(
                 // in sometimes getting a canonical namespace that's not in our target.
                 // We do not have to worry about getting items from other targets though because Crubit
                 // only generates items for this target.
-                let namespace =
-                    ir.find_decl::<Rc<Namespace>>(id).expect("should always be a namespace");
-                let is_last_reopened_namespace_in_this_target = ir
-                    .is_last_reopened_namespace(id, namespace.canonical_namespace_id)
+                let current_namespace: &Rc<ir::Namespace> =
+                    db.find_decl::<Rc<Namespace>>(id).expect("should always be a namespace");
+                let is_last_reopened_namespace_in_this_target = db
+                    .ir()
+                    .is_last_reopened_namespace(id, current_namespace.canonical_namespace_id)
                     .expect("should always be a namespace");
 
                 if !is_last_reopened_namespace_in_this_target {
@@ -736,20 +791,21 @@ pub fn generated_items_to_tokens(
                 // It is the representative, so we generate all the items keyed under the
                 // canonical namespace id.
 
-                let Some(GeneratedItem::CanonicalNamespace { items }) =
-                    generated_items.get(&namespace.canonical_namespace_id)
+                let Some(GeneratedItem::CanonicalNamespace { items, deprecated_attr }) =
+                    generated_items.get(&current_namespace.canonical_namespace_id)
                 else {
                     panic!("the entry we generated for the canonical namespace should be a GeneratedItem::CanonicalNamespace");
                 };
 
-                let namespace_tokens = generated_items_to_token_stream(generated_items, ir, items);
+                let namespace_tokens = generated_items_to_token_stream(generated_items, db, items);
 
-                let canonical_namespace: &Rc<ir::Namespace> = ir
-                    .find_decl(namespace.canonical_namespace_id)
-                    .expect("should always be a namespace");
+                let canonical_namespace: &Rc<ir::Namespace> = db
+                    .find_decl(current_namespace.canonical_namespace_id)
+                    .unwrap_or_else(|_| panic!("Namespace canonical_namespace_id {:?} not found as a valid Namespace item.", current_namespace.canonical_namespace_id));
                 let name = make_rs_ident(&canonical_namespace.rs_name.identifier);
 
                 quote! {
+                    #deprecated_attr
                     pub mod #name {
                         #namespace_tokens
                     }
@@ -782,13 +838,26 @@ pub fn generated_items_to_tokens(
                 pub use #mod_name::*;
             }
             .to_tokens(tokens),
-            GeneratedItem::GlobalVar { link_name, visibility, is_mut, ident, type_tokens } => {
+            GeneratedItem::Constant { ident, type_tokens, value, deprecated_attr } => quote! {
+                #deprecated_attr
+                pub const #ident: #type_tokens = #value;
+            }
+            .to_tokens(tokens),
+            GeneratedItem::GlobalVar {
+                link_name,
+                visibility,
+                is_mut,
+                ident,
+                type_tokens,
+                deprecated_attr,
+            } => {
                 let link_name_attr =
                     link_name.as_deref().map(|link_name| quote! { #[link_name = #link_name] });
                 let mut_kw = if *is_mut { Some(quote! { mut }) } else { None };
                 quote! {
-                    extern "C" {
+                    unsafe extern "C" {
                         #link_name_attr
+                        #deprecated_attr
                         #visibility static #mut_kw #ident: #type_tokens;
                     }
                 }
@@ -800,10 +869,19 @@ pub fn generated_items_to_tokens(
                 ident,
                 underlying_type,
                 underlying_nested_module_path,
+                deprecated_attr,
+                lifetime_params,
             } => {
+                let type_param_tokens = if !lifetime_params.is_empty() {
+                    quote! { < #( #lifetime_params ),* > }
+                } else {
+                    quote! {}
+                };
+
                 quote! {
                     #doc_comment
-                    #visibility type #ident = #underlying_type;
+                    #deprecated_attr
+                    #visibility type #ident #type_param_tokens = #underlying_type;
                 }
                 .to_tokens(tokens);
 
@@ -836,6 +914,12 @@ pub enum GeneratedItem {
     Comment {
         message: Rc<str>,
     },
+    Constant {
+        ident: Ident,
+        type_tokens: TokenStream,
+        value: TokenStream,
+        deprecated_attr: Option<DeprecatedAttr>,
+    },
     Enum(TokenStream),
     Func(TokenStream),
     // Box used to mitigate disproportionaly large enum variant lint
@@ -844,6 +928,7 @@ pub enum GeneratedItem {
     CanonicalNamespace {
         /// List of all the items from all the namespaces
         items: Vec<ItemId>,
+        deprecated_attr: Option<DeprecatedAttr>,
     },
     ForwardDeclare {
         visibility: Visibility,
@@ -860,6 +945,7 @@ pub enum GeneratedItem {
         is_mut: bool,
         ident: Ident,
         type_tokens: TokenStream,
+        deprecated_attr: Option<DeprecatedAttr>,
     },
     TypeAlias {
         doc_comment: Option<DocCommentAttr>,
@@ -867,17 +953,39 @@ pub enum GeneratedItem {
         ident: Ident,
         underlying_type: TokenStream,
         underlying_nested_module_path: Option<TokenStream>,
+        deprecated_attr: Option<DeprecatedAttr>,
+        lifetime_params: Vec<syn::Lifetime>,
     },
 }
 
 impl GeneratedItem {
     fn merge(&mut self, other: GeneratedItem) {
+        fn merge_deprecated_text(s1: &str, s2: &str) -> String {
+            match (s1, s2) {
+                ("", s2) => s2.to_string(),
+                (s1, "") => s1.to_string(),
+                (s1, s2) => format!("{}, {}", s1, s2),
+            }
+        }
         match (self, other) {
             (
-                GeneratedItem::CanonicalNamespace { items },
-                GeneratedItem::CanonicalNamespace { items: other_items },
+                GeneratedItem::CanonicalNamespace { items, deprecated_attr },
+                GeneratedItem::CanonicalNamespace {
+                    items: other_items,
+                    deprecated_attr: other_deprecated_attr,
+                },
             ) => {
                 items.extend(other_items);
+                match (&deprecated_attr, &other_deprecated_attr) {
+                    (Some(a), Some(b)) => {
+                        if a.0 != b.0 {
+                            *deprecated_attr =
+                                Some(DeprecatedAttr(merge_deprecated_text(&a.0, &b.0).into()))
+                        }
+                    }
+                    (_, None) => (),
+                    (None, _) => *deprecated_attr = other_deprecated_attr,
+                };
             }
             (
                 GeneratedItem::Comment { message },
@@ -894,16 +1002,25 @@ impl GeneratedItem {
 }
 
 #[derive(Clone, Debug)]
+pub struct OwnedPtrConfig {
+    pub owned_type_name: Ident,
+    pub drop_impl: Ident,
+}
+
+#[derive(Clone, Debug)]
 pub struct Record {
     pub doc_comment_attr: Option<DocCommentAttr>,
     pub derive_attr: DeriveAttr,
     pub recursively_pinned_attr: Option<RecursivelyPinnedAttr>,
     pub must_use_attr: Option<MustUseAttr>,
+    pub deprecated_attr: Option<DeprecatedAttr>,
     pub align: Option<usize>,
+    pub internally_mutable_unknown_fields: bool,
     pub crubit_annotation: DocCommentAttr,
     pub visibility: Visibility,
     pub struct_or_union: StructOrUnion,
     pub ident: Ident,
+    pub id: ItemId,
     pub head_padding: Option<usize>,
     pub field_definitions: Vec<FieldDefinition>,
     pub implements_send: bool,
@@ -911,14 +1028,22 @@ pub struct Record {
     pub cxx_impl: Option<CxxExternTypeImpl>,
     pub incomplete_definition: Option<TokenStream>,
     pub upcast_impls: Vec<Result<UpcastImpl, String>>,
+    pub display_impl: Option<DisplayImpl>,
     pub no_unique_address_accessors: Vec<NoUniqueAddressAccessor>,
     pub items: Vec<ItemId>,
     pub nested_items: Vec<ItemId>,
     /// Functions that get attached either by a trait or from a base class.
     pub indirect_functions: Vec<TokenStream>,
-    /// The name of the owning wrapper type when the type was annotated with CRUBIT_OWNED_POINTEE.
-    pub owned_type_name: Option<Ident>,
+    pub delete: Option<DeleteImpl>,
+    /// The owning wrapper type configuration when the type was annotated with CRUBIT_OWNED_POINTEE.
+    pub owned_ptr_config: Option<OwnedPtrConfig>,
     pub member_methods: Vec<TokenStream>,
+    pub free_functions: Vec<TokenStream>,
+    pub lifetime_params: Vec<syn::Lifetime>,
+    /// Whether this type is annotated as thread-safe (CRUBIT_THREAD_SAFE).
+    pub is_thread_safe: bool,
+    /// The size of the type in bytes (needed for opaque UnsafeCell wrapping).
+    pub size: usize,
 }
 
 #[derive(Clone, Debug)]
@@ -929,9 +1054,41 @@ pub struct UpcastImpl {
 }
 
 #[derive(Clone, Debug)]
+pub struct DeleteImpl {
+    pub record_type: TokenStream,
+    pub thunk_ident: Ident,
+    pub crate_root_path: TokenStream,
+}
+
+#[derive(Clone, Debug)]
 pub enum UpcastImplBody {
     PointerOffset { offset: i64 },
     CastThunk { crate_root_path: Option<Ident>, cast_fn_name: Ident },
+}
+
+#[derive(Clone, Debug)]
+pub struct DisplayImpl {
+    pub type_name: Ident,
+    pub fmt_fn_name: Ident,
+}
+
+impl ToTokens for DisplayImpl {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        let Self { type_name, fmt_fn_name } = self;
+        quote! {
+            impl ::core::fmt::Display for #type_name {
+                fn fmt(&self, f: &mut ::core::fmt::Formatter<'_>) -> ::core::fmt::Result {
+                    let mut f = ::lossy_formatter::LossyFormatter::new(f);
+                    if unsafe { crate::detail::#fmt_fn_name(self, &mut f) } {
+                        ::core::result::Result::Ok(())
+                    } else {
+                        ::core::result::Result::Err(::core::fmt::Error)
+                    }
+                }
+            }
+        }
+        .to_tokens(tokens);
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -985,6 +1142,19 @@ impl ToTokens for MustUseAttr {
 }
 
 #[derive(Clone, Debug)]
+pub struct DeprecatedAttr(pub Rc<str>);
+
+impl ToTokens for DeprecatedAttr {
+    fn to_tokens(&self, tokens: &mut TokenStream) {
+        match self.0.as_ref() {
+            "" => quote! { #[deprecated] },
+            message => quote! { #[deprecated = #message] },
+        }
+        .to_tokens(tokens);
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct CxxExternTypeImpl {
     pub id: Rc<str>,
     pub kind: CxxKind,
@@ -1025,18 +1195,25 @@ impl ToTokens for StructOrUnion {
 /// Quotes as the type of a type-less, unaligned block of memory that can hold a
 /// specified number of bits, rounded up to the next multiple of 8.
 #[derive(Copy, Clone, Debug)]
-pub struct BitPadding(pub NonZeroUsize);
+pub struct BitPadding {
+    pub size: NonZeroUsize,
+    pub internally_mutable: bool,
+}
 
 impl BitPadding {
     fn padding_size_in_bytes(self) -> usize {
-        self.0.get().div_ceil(8)
+        self.size.get().div_ceil(8)
     }
 }
 
 impl ToTokens for BitPadding {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         let n = Literal::usize_unsuffixed(self.padding_size_in_bytes());
-        quote! { [::core::mem::MaybeUninit<u8>; #n] }.to_tokens(tokens);
+        if self.internally_mutable {
+            quote! { [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; #n] }.to_tokens(tokens);
+        } else {
+            quote! { [::core::mem::MaybeUninit<u8>; #n] }.to_tokens(tokens);
+        }
     }
 }
 
@@ -1065,6 +1242,7 @@ pub enum FieldDefinition {
         field_index: usize,
         padding: Option<BitPadding>,
         doc_comment: Option<DocCommentAttr>,
+        deprecated_attr: Option<DeprecatedAttr>,
         visibility: Visibility,
         ident: Ident,
         field_type: FieldType,
@@ -1093,6 +1271,7 @@ impl ToTokens for FieldDefinition {
                 field_index,
                 padding,
                 doc_comment,
+                deprecated_attr,
                 visibility,
                 ident,
                 field_type,
@@ -1105,6 +1284,7 @@ impl ToTokens for FieldDefinition {
                 quote! {
                     #padding_field
                     #doc_comment
+                    #deprecated_attr
                     #visibility #ident: #field_type,
                 }
                 .to_tokens(tokens);
@@ -1188,7 +1368,6 @@ flagset::flags! {
         custom_inner_attributes,
         impl_trait_in_assoc_type,
         negative_impls,
-        register_tool,
         // <internal link> end
     }
 }
@@ -1202,7 +1381,6 @@ impl ToTokens for Feature {
             Feature::custom_inner_attributes => quote! { custom_inner_attributes },
             Feature::impl_trait_in_assoc_type => quote! { impl_trait_in_assoc_type },
             Feature::negative_impls => quote! { negative_impls },
-            Feature::register_tool => quote! { register_tool },
         }
         .to_tokens(tokens);
     }
@@ -1298,6 +1476,8 @@ impl ToTokens for AssertableTrait {
 pub enum Thunk {
     /// Generates a thunk for upcasting from a derived type to a base type.
     Upcast { cast_fn_name: Ident, derived_name: TokenStream, base_name: TokenStream },
+    /// Generates a thunk for formatting in C++.
+    Fmt { fmt_fn_name: Ident, param_type: TokenStream },
     /// Generates a thunk for a function.
     Function {
         mangled_name: Option<Rc<str>>,
@@ -1309,12 +1489,30 @@ pub enum Thunk {
     },
 }
 
+impl Thunk {
+    pub fn name(&self) -> &proc_macro2::Ident {
+        match self {
+            Thunk::Upcast { cast_fn_name, .. } => cast_fn_name,
+            Thunk::Fmt { fmt_fn_name, .. } => fmt_fn_name,
+            Thunk::Function { thunk_ident, .. } => thunk_ident,
+        }
+    }
+}
+
 impl ToTokens for Thunk {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
             Thunk::Upcast { cast_fn_name, derived_name, base_name } => {
                 quote! {
                     pub fn #cast_fn_name(from: *const #derived_name) -> *const #base_name;
+                }
+                .to_tokens(tokens);
+            }
+            Thunk::Fmt { fmt_fn_name, param_type } => {
+                quote! {
+                    pub(crate) unsafe fn #fmt_fn_name(
+                        value: &#param_type,
+                        formatter: &mut ::lossy_formatter::LossyFormatter) -> bool;
                 }
                 .to_tokens(tokens);
             }
@@ -1358,9 +1556,13 @@ pub enum ThunkImpl {
         cast_fn_name: Ident,
         derived_cc_name: TokenStream,
     },
+    /// A function that formats in C++.
+    Fmt {
+        fmt_fn_name: Ident,
+        param_type: TokenStream,
+    },
     /// A function that implements a Rust function thunk.
     Function {
-        conversion_externs: TokenStream,
         return_type_name: TokenStream,
         thunk_ident: Ident,
         param_types: Vec<TokenStream>,
@@ -1378,7 +1580,7 @@ pub enum ThunkImpl {
         alignment: usize,
         fields_and_expected_offsets: Vec<(TokenStream, usize)>,
     },
-    FuntionTypeAssertation {
+    FunctionTypeAssertion {
         implementation_function: TokenStream,
         cc_function_type: TokenStream,
     },
@@ -1395,8 +1597,16 @@ impl ToTokens for ThunkImpl {
                 }
                 .to_tokens(tokens);
             }
+            ThunkImpl::Fmt { fmt_fn_name, param_type } => {
+                quote! {
+                    extern "C" bool #fmt_fn_name(
+                        const #param_type& value, ::lossy_formatter::LossyFormatter& formatter) {
+                        return ::crubit::Fmt(value, formatter);
+                    }
+                }
+                .to_tokens(tokens);
+            }
             ThunkImpl::Function {
-                conversion_externs,
                 return_type_name,
                 thunk_ident,
                 param_types,
@@ -1405,8 +1615,6 @@ impl ToTokens for ThunkImpl {
                 return_stmt,
             } => {
                 quote! {
-                    #conversion_externs
-
                     extern "C" #return_type_name #thunk_ident( #( #param_types #param_idents ),* ) {
                         #conversion_stmts
                         #return_stmt;
@@ -1440,7 +1648,7 @@ impl ToTokens for ThunkImpl {
                     }.to_tokens(tokens);
                 }
             }
-            ThunkImpl::FuntionTypeAssertation { implementation_function, cc_function_type } => {
+            ThunkImpl::FunctionTypeAssertion { implementation_function, cc_function_type } => {
                 quote! {
                     static_assert( ( #cc_function_type ) & #implementation_function);
                 }
@@ -1493,20 +1701,15 @@ impl ToTokens for SizeofImpl {
 
 /// Abstract representation of a *_rs_api_impl file.
 pub struct CppDetails {
-    includes: CppIncludes,
+    pub includes: CppIncludes,
     // The "pragma clang diagnostic push/pop" is automatically inserted around the thunks.
-    thunks: Vec<ThunkImpl>,
-}
-
-impl CppDetails {
-    pub fn new(includes: CppIncludes, thunks: Vec<ThunkImpl>) -> Self {
-        CppDetails { includes, thunks }
-    }
+    pub dyn_callable_cpp_decls: TokenStream,
+    pub thunks: Vec<ThunkImpl>,
 }
 
 impl ToTokens for CppDetails {
     fn to_tokens(&self, tokens: &mut TokenStream) {
-        let CppDetails { includes, thunks } = self;
+        let CppDetails { includes, dyn_callable_cpp_decls, thunks } = self;
         quote! {
             #includes
             __NEWLINE__
@@ -1515,6 +1718,7 @@ impl ToTokens for CppDetails {
             // complain about thunks that call mutex locking functions in an unpaired way.
             __HASH_TOKEN__ pragma clang diagnostic ignored "-Wthread-safety-analysis" __NEWLINE__ __NEWLINE__
 
+            #dyn_callable_cpp_decls
             #( #thunks __NEWLINE__ __NEWLINE__ )*
 
             __HASH_TOKEN__ pragma clang diagnostic pop __NEWLINE__

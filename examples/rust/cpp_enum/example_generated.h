@@ -4,12 +4,16 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // example_crate_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_EXAMPLES_RUST_CPP_ENUM_EXAMPLE_CRATE_GOLDEN
 #define THIRD_PARTY_CRUBIT_EXAMPLES_RUST_CPP_ENUM_EXAMPLE_CRATE_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 
 #include <cstdint>
@@ -17,11 +21,8 @@
 namespace example_crate {
 
 // CRUBIT_ANNOTATE: cpp_enum=enum class
-//
-// Generated from:
-// examples/rust/cpp_enum/example.rs;l=13
 enum class CRUBIT_INTERNAL_RUST_TYPE(
-    ":: example_crate_golden :: Color") Color : std::int32_t {
+    ":: example_crate_golden :: Color") Color : ::std::int32_t {
   Red = INT32_C(0),
   Blue = INT32_C(1),
   Green = INT32_C(5),
@@ -30,4 +31,6 @@ enum class CRUBIT_INTERNAL_RUST_TYPE(
 };
 
 }  // namespace example_crate
+
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_EXAMPLES_RUST_CPP_ENUM_EXAMPLE_CRATE_GOLDEN

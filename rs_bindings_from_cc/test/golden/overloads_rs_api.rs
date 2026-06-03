@@ -6,19 +6,20 @@
 // //rs_bindings_from_cc/test/golden:overloads_cc
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
-// Error while generating bindings for function 'Overload':
-// Cannot generate bindings for overloaded function
+// error: function `Overload` could not be bound
+//   Cannot generate bindings for overloaded function
 
-// Error while generating bindings for function 'Overload':
-// Cannot generate bindings for overloaded function
+// error: function `Overload` could not be bound
+//   Cannot generate bindings for overloaded function
 
 /// Both Overload2() overloads should be generated, because one should be
 /// renamed.
@@ -28,29 +29,29 @@ pub fn Overload2() {
 }
 
 #[inline(always)]
-pub fn RenamedOverload2(__param_0: ::core::ffi::c_int) {
+pub fn RenamedOverload2(__param_0: ::ffi_11::c_int) {
     unsafe { crate::detail::__rust_thunk___Z9Overlaod2i(__param_0) }
 }
 
-// Error while generating bindings for function 'UncallableOverload':
-// Cannot generate bindings for overloaded function
+// error: function `UncallableOverload` could not be bound
+//   Cannot generate bindings for overloaded function
 
-// Error while generating bindings for function 'UncallableOverload':
-// Cannot generate bindings for overloaded function
+// error: function `UncallableOverload` could not be bound
+//   Cannot generate bindings for overloaded function
 
-// Error while generating bindings for class 'Sizeof':
-// Class templates are not supported yet
+// error: class `Sizeof` could not be bound
+//   Class templates are not yet supported
 
-// Error while generating bindings for function 'UncallableOverload':
-// Function templates are not supported yet
+// error: function `UncallableOverload` could not be bound
+//   Function templates are not yet supported
 
 #[inline(always)]
 pub fn AlsoTemplateOverload() {
     unsafe { crate::detail::__rust_thunk___Z20AlsoTemplateOverloadv() }
 }
 
-// Error while generating bindings for function 'AlsoTemplateOverload':
-// Function templates are not supported yet
+// error: function `AlsoTemplateOverload` could not be bound
+//   Function templates are not yet supported
 
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
@@ -65,9 +66,13 @@ unsafe impl ::cxx::ExternType for Foo {
     type Kind = ::cxx::kind::Trivial;
 }
 impl Foo {
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
     #[inline(always)]
-    pub unsafe fn Bar(__this: *mut Self, __param_0: ::core::ffi::c_int) {
-        crate::detail::__rust_thunk___ZN3Foo3BarEi(__this, __param_0)
+    pub unsafe fn Bar(__this: *mut Self, __param_0: ::ffi_11::c_int) {
+        unsafe { self::foo::Bar(__this, __param_0) }
     }
 }
 
@@ -82,27 +87,30 @@ impl Default for Foo {
     }
 }
 
-// Error while generating bindings for function 'Foo::BarBridgedInt':
-// Can't generate bindings for Foo::BarBridgedInt, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:overloads_cc needs [//features:wrapper] for Foo::BarBridgedInt (the type of __param_0 (parameter #1): error: Can't generate bindings for Sizeof<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:overloads_cc needs [//features:wrapper] for Sizeof<int> (crate::__CcTemplateInst6SizeofIiE is a template instantiation)
-// //rs_bindings_from_cc/test/golden:overloads_cc needs [//features:wrapper] for Sizeof<int> (crate::__CcTemplateInst6SizeofIiE is a template instantiation))
+// error: function `Foo::Bar` could not be bound
+//   Unsupported parameter type `Sizeof<int> __param_0`:
+//     template instantiation is not yet supported
 
-// Error while generating bindings for function 'Foo::BarBridgedFloat':
-// Can't generate bindings for Foo::BarBridgedFloat, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:overloads_cc needs [//features:wrapper] for Foo::BarBridgedFloat (the type of __param_0 (parameter #1): error: Can't generate bindings for Sizeof<float>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:overloads_cc needs [//features:wrapper] for Sizeof<float> (crate::__CcTemplateInst6SizeofIfE is a template instantiation)
-// //rs_bindings_from_cc/test/golden:overloads_cc needs [//features:wrapper] for Sizeof<float> (crate::__CcTemplateInst6SizeofIfE is a template instantiation))
+// error: function `Foo::Bar` could not be bound
+//   Unsupported parameter type `Sizeof<float> __param_0`:
+//     template instantiation is not yet supported
 
-// Error while generating bindings for struct 'Sizeof<float>':
-// Can't generate bindings for Sizeof<float>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:overloads_cc needs [//features:wrapper] for Sizeof<float> (crate::__CcTemplateInst6SizeofIfE is a template instantiation)
-// //rs_bindings_from_cc/test/golden:overloads_cc needs [//features:wrapper] for Sizeof<float> (crate::__CcTemplateInst6SizeofIfE is a template instantiation)
+pub mod foo {
+    /// # Safety
+    ///
+    /// The caller must ensure that the following unsafe arguments are not misused by the function:
+    /// * `__this`: raw pointer
+    #[inline(always)]
+    pub(crate) unsafe fn Bar(__this: *mut crate::Foo, __param_0: ::ffi_11::c_int) {
+        unsafe { crate::detail::__rust_thunk___ZN3Foo3BarEi(__this, __param_0) }
+    }
+}
 
-// Error while generating bindings for struct 'Sizeof<int>':
-// Can't generate bindings for Sizeof<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:overloads_cc needs [//features:wrapper] for Sizeof<int> (crate::__CcTemplateInst6SizeofIiE is a template instantiation)
-// //rs_bindings_from_cc/test/golden:overloads_cc needs [//features:wrapper] for Sizeof<int> (crate::__CcTemplateInst6SizeofIiE is a template instantiation)
+// error: struct `Sizeof<float>` could not be bound
+//   template instantiation is not yet supported
+
+// error: struct `Sizeof<int>` could not be bound
+//   template instantiation is not yet supported
 
 mod detail {
     #[allow(unused_imports)]
@@ -111,13 +119,13 @@ mod detail {
         #[link_name = "_Z9Overload2v"]
         pub(crate) unsafe fn __rust_thunk___Z9Overload2v();
         #[link_name = "_Z9Overlaod2i"]
-        pub(crate) unsafe fn __rust_thunk___Z9Overlaod2i(__param_0: ::core::ffi::c_int);
+        pub(crate) unsafe fn __rust_thunk___Z9Overlaod2i(__param_0: ::ffi_11::c_int);
         pub(crate) unsafe fn __rust_thunk___Z20AlsoTemplateOverloadv();
         pub(crate) unsafe fn __rust_thunk___ZN3FooC1Ev(__this: *mut ::core::ffi::c_void);
         #[link_name = "_ZN3Foo3BarEi"]
         pub(crate) unsafe fn __rust_thunk___ZN3Foo3BarEi(
             __this: *mut crate::Foo,
-            __param_0: ::core::ffi::c_int,
+            __param_0: ::ffi_11::c_int,
         );
     }
 }

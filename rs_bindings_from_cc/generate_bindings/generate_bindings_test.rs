@@ -4,11 +4,12 @@
 
 use arc_anyhow::{anyhow, Result};
 use database::code_snippet::BindingsTokens;
-use database::rs_snippet::{Mutability, RsTypeKind};
-use database::BindingsGenerator;
+use database::rs_snippet::{interpolate_spelled_rust_type, Mutability, RsTypeKind};
 use googletest::{expect_eq, gtest};
-use ir_testing::{retrieve_func, with_lifetime_macros};
-use multiplatform_ir_testing::{ir_from_cc, ir_from_cc_dependency};
+use ir::IR;
+use ir_matchers::assert_ir_matches;
+use ir_testing::retrieve_func;
+use multiplatform_ir_testing::{ir_from_assumed_lifetimes_cc, ir_from_cc, ir_from_cc_dependency};
 use quote::quote;
 use static_assertions::{assert_impl_all, assert_not_impl_any};
 use test_generators::{generate_bindings_tokens_for_test, TestDbFactory};
@@ -44,7 +45,7 @@ fn test_func_ptr_where_params_are_primitive_types() -> Result<()> {
         rs_api,
         quote! {
             #[inline(always)]
-            pub fn get_ptr_to_func() -> Option<extern "C" fn (f32, f64) -> ::core::ffi::c_int> {
+            pub fn get_ptr_to_func() -> Option<extern "C" fn (f32, f64) -> ::ffi_11::c_int> {
                 unsafe { crate::detail::__rust_thunk___Z15get_ptr_to_funcv() }
             }
         }
@@ -58,7 +59,7 @@ fn test_func_ptr_where_params_are_primitive_types() -> Result<()> {
                 unsafe extern "C" {
                     #[link_name = "_Z15get_ptr_to_funcv"]
                     pub(crate) unsafe fn __rust_thunk___Z15get_ptr_to_funcv()
-                    -> Option<extern "C" fn(f32, f64) -> ::core::ffi::c_int>;
+                    -> Option<extern "C" fn(f32, f64) -> ::ffi_11::c_int>;
                 }
             }
         }
@@ -84,27 +85,11 @@ fn test_func_ref() -> Result<()> {
         rs_api,
         quote! {
             #[inline(always)]
-            pub fn get_ref_to_func() -> extern "C" fn (f32, f64) -> ::core::ffi::c_int {
+            pub fn get_ref_to_func() -> extern "C" fn (f32, f64) -> ::ffi_11::c_int {
                 unsafe { crate::detail::__rust_thunk___Z15get_ref_to_funcv() }
             }
         }
     );
-    Ok(())
-}
-
-#[gtest]
-fn test_func_ptr_with_non_static_lifetime() -> Result<()> {
-    let ir = ir_from_cc(&with_lifetime_macros(
-        r#"
-        int (* $a get_ptr_to_func())(float, double); "#,
-    ))?;
-    let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
-    assert_cc_matches!(rs_api, {
-        let txt = "Generated from: ir_from_cc_virtual_header.h;l=33\n\
-                       Error while generating bindings for function 'get_ptr_to_func':\n\
-                       Unable to get lifetime annotations: Type may not be annotated with lifetimes";
-        quote! { __COMMENT__ #txt }
-    });
     Ok(())
 }
 
@@ -116,7 +101,7 @@ fn test_func_ptr_where_params_are_raw_ptrs() -> Result<()> {
         rs_api,
         quote! {
             #[inline(always)]
-            pub fn get_ptr_to_func() -> Option<unsafe extern "C" fn (*const ::core::ffi::c_int) -> *const ::core::ffi::c_int> {
+            pub fn get_ptr_to_func() -> Option<unsafe extern "C" fn (*const ::ffi_11::c_int) -> *const ::ffi_11::c_int> {
                 unsafe { crate::detail::__rust_thunk___Z15get_ptr_to_funcv() }
             }
         }
@@ -130,7 +115,7 @@ fn test_func_ptr_where_params_are_raw_ptrs() -> Result<()> {
                 unsafe extern "C" {
                     #[link_name = "_Z15get_ptr_to_funcv"]
                     pub(crate) unsafe fn __rust_thunk___Z15get_ptr_to_funcv()
-                    -> Option<unsafe extern "C" fn(*const ::core::ffi::c_int) -> *const ::core::ffi::c_int>;
+                    -> Option<unsafe extern "C" fn(*const ::ffi_11::c_int) -> *const ::ffi_11::c_int>;
                 }
             }
         }
@@ -195,7 +180,7 @@ mod custom_abi_tests {
             rs_api,
             quote! {
                 #[inline(always)]
-                pub fn get_ptr_to_func() -> Option<extern "vectorcall" fn (f32, f64) -> ::core::ffi::c_int> {
+                pub fn get_ptr_to_func() -> Option<extern "vectorcall" fn (f32, f64) -> ::ffi_11::c_int> {
                     unsafe { crate::detail::__rust_thunk___Z15get_ptr_to_funcv() }
                 }
             }
@@ -211,7 +196,7 @@ mod custom_abi_tests {
                     unsafe extern "C" {
                         #[link_name = "_Z15get_ptr_to_funcv"]
                         pub(crate) unsafe fn __rust_thunk___Z15get_ptr_to_funcv()
-                        -> Option<extern "vectorcall" fn(f32, f64) -> ::core::ffi::c_int>;
+                        -> Option<extern "vectorcall" fn(f32, f64) -> ::ffi_11::c_int>;
                     }
                 }
             }
@@ -401,12 +386,12 @@ fn test_impl_drop_user_defined_destructor() -> Result<()> {
             impl ::ctor::PinnedDrop for UserDefinedDestructor {
                 #[inline(always)]
                 unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-                    crate::detail::__rust_thunk___ZN21UserDefinedDestructorD1Ev(self)
+                    unsafe { crate::detail::__rust_thunk___ZN21UserDefinedDestructorD1Ev(self) }
                 }
             }
         }
     );
-    assert_rs_matches!(rs_api, quote! {pub x: ::core::ffi::c_int,});
+    assert_rs_matches!(rs_api, quote! {pub x: ::ffi_11::c_int,});
     assert_rs_matches!(
         rs_api,
         quote! {pub nts: ::core::mem::ManuallyDrop<crate::NontrivialStruct>,}
@@ -439,12 +424,12 @@ fn test_impl_drop_nontrivial_member_destructor() -> Result<()> {
             impl ::ctor::PinnedDrop for NontrivialMembers {
                 #[inline(always)]
                 unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-                    crate::detail::__rust_thunk___ZN17NontrivialMembersD1Ev(self)
+                    unsafe { crate::detail::__rust_thunk___ZN17NontrivialMembersD1Ev(self) }
                 }
             }
         }
     );
-    assert_rs_matches!(rs_api, quote! {pub x: ::core::ffi::c_int,});
+    assert_rs_matches!(rs_api, quote! {pub x: ::ffi_11::c_int,});
     assert_rs_matches!(rs_api, quote! {pub ts: crate::TrivialStruct,});
     assert_rs_matches!(
         rs_api,
@@ -475,10 +460,10 @@ fn test_type_alias() -> Result<()> {
         rs_api,
         quote! {
             #[doc = " MyTypedefDecl doc comment\n \n Generated from: ir_from_cc_virtual_header.h;l=5"]
-            pub type MyTypedefDecl = ::core::ffi::c_int;
+            pub type MyTypedefDecl = ::ffi_11::c_int;
         }
     );
-    assert_rs_matches!(rs_api, quote! { pub type MyTypeAliasDecl = ::core::ffi::c_int; });
+    assert_rs_matches!(rs_api, quote! { pub type MyTypeAliasDecl = ::ffi_11::c_int; });
     assert_rs_matches!(rs_api, quote! { pub type MyTypeAliasDecl_Alias = crate::MyTypeAliasDecl; });
     assert_rs_matches!(rs_api, quote! { pub type S_Alias = crate::S; });
     assert_rs_matches!(rs_api, quote! { pub type S_Alias_Alias = crate::S_Alias; });
@@ -522,44 +507,29 @@ fn test_rs_type_kind_implements_copy() -> Result<()> {
     let tests = vec![
         // Validity of the next few tests is verified via
         // `assert_[not_]impl_all!` static assertions above.
-        Test { cc: "int", lifetimes: true, rs: ":: core :: ffi :: c_int", is_copy: true },
-        Test {
-            cc: "const int&",
-            lifetimes: true,
-            rs: "& 'a :: core :: ffi :: c_int",
-            is_copy: true,
-        },
-        Test {
-            cc: "int&",
-            lifetimes: true,
-            rs: "& 'a mut :: core :: ffi :: c_int",
-            is_copy: false,
-        },
-        Test {
-            cc: "const int*",
-            lifetimes: true,
-            rs: "* const :: core :: ffi :: c_int",
-            is_copy: true,
-        },
-        Test { cc: "int*", lifetimes: true, rs: "* mut :: core :: ffi :: c_int", is_copy: true },
+        Test { cc: "int", lifetimes: true, rs: ":: ffi_11 :: c_int", is_copy: true },
+        Test { cc: "const int&", lifetimes: true, rs: "& 'a :: ffi_11 :: c_int", is_copy: true },
+        Test { cc: "int&", lifetimes: true, rs: "& 'a mut :: ffi_11 :: c_int", is_copy: false },
+        Test { cc: "const int*", lifetimes: true, rs: "* const :: ffi_11 :: c_int", is_copy: true },
+        Test { cc: "int*", lifetimes: true, rs: "* mut :: ffi_11 :: c_int", is_copy: true },
         Test {
             cc: "const int*",
             lifetimes: false,
-            rs: "* const :: core :: ffi :: c_int",
+            rs: "* const :: ffi_11 :: c_int",
             is_copy: true,
         },
-        Test { cc: "int*", lifetimes: false, rs: "* mut :: core :: ffi :: c_int", is_copy: true },
-        Test { cc: "void*", lifetimes: false, rs: "* mut :: core :: ffi :: c_void", is_copy: true },
+        Test { cc: "int*", lifetimes: false, rs: "* mut :: ffi_11 :: c_int", is_copy: true },
+        Test { cc: "void*", lifetimes: false, rs: "* mut :: ffi_11 :: c_void", is_copy: true },
         Test {
             cc: "const void*",
             lifetimes: false,
-            rs: "* const :: core :: ffi :: c_void",
+            rs: "* const :: ffi_11 :: c_void",
             is_copy: true,
         },
         Test {
             cc: "void* const*",
             lifetimes: false,
-            rs: "* const * mut :: core :: ffi :: c_void",
+            rs: "* const * mut :: ffi_11 :: c_void",
             is_copy: true,
         },
         // Tests below have been thought-through and verified "manually".
@@ -590,7 +560,7 @@ fn test_rs_type_kind_implements_copy() -> Result<()> {
         let db = db_factory.make_db();
         let ir = db.ir();
 
-        let f = retrieve_func(&ir, "func");
+        let f = retrieve_func(ir, "func");
         let t = db.rs_type_kind(f.params[0].type_.clone())?;
 
         let fmt = t.to_token_stream(&db).to_string();
@@ -610,8 +580,8 @@ fn test_rs_type_kind_is_shared_ref_to_with_lifetimes() -> Result<()> {
     let db = db_factory.make_db();
     let ir = db.ir();
     let record = ir.records().next().unwrap();
-    let foo_func = retrieve_func(&ir, "foo");
-    let bar_func = retrieve_func(&ir, "bar");
+    let foo_func = retrieve_func(ir, "foo");
+    let bar_func = retrieve_func(ir, "bar");
 
     // const-ref + lifetimes in C++  ===>  shared-ref in Rust
     assert_eq!(foo_func.params.len(), 1);
@@ -640,7 +610,7 @@ fn test_rs_type_kind_is_shared_ref_to_without_lifetimes() -> Result<()> {
     let db = db_factory.make_db();
     let ir = db.ir();
     let record = ir.records().next().unwrap();
-    let foo_func = retrieve_func(&ir, "foo");
+    let foo_func = retrieve_func(ir, "foo");
 
     // const-ref + *no* lifetimes in C++  ===>  const-pointer in Rust
     assert_eq!(foo_func.params.len(), 1);
@@ -663,7 +633,7 @@ fn test_rs_type_kind_lifetimes() -> Result<()> {
     let db_factory = TestDbFactory::from_cc(cc_input)?;
     let db = db_factory.make_db();
     let ir = db.ir();
-    let func = retrieve_func(&ir, "foo");
+    let func = retrieve_func(ir, "foo");
     let ret = db.rs_type_kind(func.return_type.clone())?;
     let a = db.rs_type_kind(func.params[0].type_.clone())?;
     let b = db.rs_type_kind(func.params[1].type_.clone())?;
@@ -690,7 +660,7 @@ fn test_rs_type_kind_lifetimes_raw_ptr() -> Result<()> {
     let db_factory = TestDbFactory::from_cc(cc_input)?;
     let db = db_factory.make_db();
     let ir = db.ir();
-    let f = retrieve_func(&ir, "foo");
+    let f = retrieve_func(ir, "foo");
     let a = db.rs_type_kind(f.params[0].type_.clone())?;
     assert_eq!(0, a.lifetimes().count()); // No lifetimes on `int*`.
     Ok(())
@@ -707,7 +677,7 @@ fn test_rs_type_kind_rejects_func_ptr_that_returns_struct_by_value() -> Result<(
     let db_factory = TestDbFactory::from_cc(cc_input)?;
     let db = db_factory.make_db();
     let ir = db.ir();
-    let f = retrieve_func(&ir, "get_ptr_to_func");
+    let f = retrieve_func(ir, "get_ptr_to_func");
 
     // Expecting an error, because passing a struct by value requires a thunk and
     // function pointers don't have a thunk.
@@ -732,7 +702,7 @@ fn test_rs_type_kind_rejects_func_ptr_that_takes_struct_by_value() -> Result<()>
     let db_factory = TestDbFactory::from_cc(cc_input)?;
     let db = db_factory.make_db();
     let ir = db.ir();
-    let f = retrieve_func(&ir, "get_ptr_to_func");
+    let f = retrieve_func(ir, "get_ptr_to_func");
 
     // Expecting an error, because passing a struct by value requires a thunk and
     // function pointers don't have a thunk.
@@ -750,7 +720,25 @@ fn test_rs_type_kind_rejects_func_ptr_that_takes_struct_by_value() -> Result<()>
 fn test_rust_keywords_are_escaped_in_rs_api_file() -> Result<()> {
     let ir = ir_from_cc("struct type { int dyn; };")?;
     let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
-    assert_rs_matches!(rs_api, quote! { struct r#type { ... r#dyn: ::core::ffi::c_int ... } });
+    assert_rs_matches!(rs_api, quote! { struct r#type { ... r#dyn: ::ffi_11::c_int ... } });
+    Ok(())
+}
+
+#[gtest]
+fn test_leading_colons_for_cpp_type() -> Result<()> {
+    let mut ir = ir_from_cc("struct S {};")?;
+    let target = ir.current_target().clone();
+    let features = ir.target_crubit_features(&target);
+    *ir.target_crubit_features_mut(&target) =
+        features | crubit_feature::CrubitFeature::LeadingColonsForCppType;
+    let rs_api = generate_bindings_tokens_for_test(ir)?.rs_api;
+    assert_rs_matches!(
+        rs_api,
+        quote! {
+            #[doc = "CRUBIT_ANNOTATE: cpp_type=:: S"]
+            pub struct S
+        }
+    );
     Ok(())
 }
 
@@ -785,13 +773,13 @@ fn test_namespace_module_items() -> Result<()> {
         quote! {
             pub mod test_namespace_bindings {
                 ...
-                pub fn func() -> ::core::ffi::c_int { ... }
+                pub fn func() -> ::ffi_11::c_int { ... }
                 ...
                 pub struct S { ... }
                 ...
                 pub mod inner {
                     ...
-                    pub fn inner_func() -> ::core::ffi::c_int { ... }
+                    pub fn inner_func() -> ::ffi_11::c_int { ... }
                     ...
                     pub struct InnerS { ... }
                     ...
@@ -825,7 +813,7 @@ fn test_detail_outside_of_namespace_module() -> Result<()> {
                 use super::*;
                 unsafe extern "C" {
                     #[link_name = "_ZN23test_namespace_bindings1fEv"]
-                    pub(crate) unsafe fn __rust_thunk___ZN23test_namespace_bindings1fEv() -> ::core::ffi::c_int;
+                    pub(crate) unsafe fn __rust_thunk___ZN23test_namespace_bindings1fEv() -> ::ffi_11::c_int;
                 }
             }
             ...
@@ -998,6 +986,11 @@ fn test_inline_namespace_not_marked_inline() -> Result<()> {
     Ok(())
 }
 
+fn enable_supported(ir: &mut IR) {
+    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
+        crubit_feature::CrubitFeature::Supported | crubit_feature::CrubitFeature::Types;
+}
+
 /// Enumerators with unknown attributes on otherwise-ok enums are omitted.
 ///
 /// This is hard to test any other way than token comparison!
@@ -1006,12 +999,11 @@ fn test_supported_unknown_attr_enumerator() -> Result<()> {
     let mut ir = ir_from_cc(
         r#"
         enum Enum {
-            kHidden [[deprecated]],
+            kHidden [[maybe_unused]] = 1,
         };
         "#,
     )?;
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
     assert_rs_matches!(rs_api, quote! {pub struct Enum});
     assert_rs_not_matches!(rs_api, quote! {kHidden});
@@ -1028,7 +1020,7 @@ fn test_supported_unknown_attr_namespace() -> Result<()> {
     {
         let mut ir = ir_from_cc(&format!(
             r#"
-            namespace [[deprecated]] unknown_attr_namespace {{
+            namespace [[gnu::visibility("default")]] unknown_attr_namespace {{
                 {nested_notpresent}
             }}
             extern "C" {{
@@ -1037,8 +1029,7 @@ fn test_supported_unknown_attr_namespace() -> Result<()> {
             }}
             "#
         ))?;
-        *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-            crubit_feature::CrubitFeature::Supported.into();
+        enable_supported(&mut ir);
         let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
         // The namespace, and everything in it or using it, will be missing from the
         // output.
@@ -1058,7 +1049,7 @@ fn test_supported_unknown_attr_namespace_merge() -> Result<()> {
         namespace unknown_attr_namespace {
             enum Present {};
         }
-        namespace [[deprecated]] unknown_attr_namespace {
+        namespace [[gnu::visibility("default")]] unknown_attr_namespace {
             enum NotPresent {};
         }
         namespace unknown_attr_namespace {
@@ -1066,8 +1057,7 @@ fn test_supported_unknown_attr_namespace_merge() -> Result<()> {
         }
         "#,
     )?;
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
     // The namespace, and everything in it or using it, will be missing from the
     // output.
@@ -1084,7 +1074,7 @@ fn test_supported_unknown_attr_namespace_merge() -> Result<()> {
 fn test_supported_unknown_attr_namespace_typedef() -> Result<()> {
     let mut ir = ir_from_cc(
         r#"
-        namespace [[deprecated]] unknown_attr_namespace {
+        namespace [[gnu::visibility("default")]] unknown_attr_namespace {
             using NotPresent = int;
         }
         extern "C" {
@@ -1093,39 +1083,29 @@ fn test_supported_unknown_attr_namespace_typedef() -> Result<()> {
         }
         "#,
     )?;
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, .. } = generate_bindings_tokens_for_test(ir)?;
     // The namespace, and everything in it or using it, will be missing from the
     // output.
     assert_rs_not_matches!(rs_api, quote! {NotPresent});
-    assert_rs_matches!(rs_api, quote! {pub fn Func(x: ::core::ffi::c_int)});
-    assert_rs_matches!(rs_api, quote! {pub fn Func2() -> ::core::ffi::c_int});
+    assert_rs_matches!(rs_api, quote! {pub fn Func(x: ::ffi_11::c_int)});
+    assert_rs_matches!(rs_api, quote! {pub fn Func2() -> ::ffi_11::c_int});
     Ok(())
 }
 
 /// The default crubit feature set currently doesn't include supported.
 #[gtest]
 fn test_default_crubit_features_disabled_supported() -> Result<()> {
-    for (item, kind) in [
-        ("extern \"C\" void NotPresent() {}", "function"),
-        ("struct NotPresent {};", "struct"),
-        ("extern \"C\" int NotPresent() {}", "function"),
+    for item in [
+        "extern \"C\" void NotPresent() {}",
+        "struct NotPresent {};",
+        "extern \"C\" int NotPresent() {}",
     ] {
         let mut ir = ir_from_cc(item)?;
         ir.target_crubit_features_mut(&ir.current_target().clone()).clear();
         let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
         assert_rs_not_matches!(rs_api, quote! {NotPresent});
         assert_cc_not_matches!(rs_api_impl, quote! {NotPresent});
-        let contents = rs_tokens_to_formatted_string_for_tests(rs_api)?;
-        // using a string comparison and leaving off the end, because the exact reason
-        // why differs per item.
-        let expected = &format!("\
-            // Generated from: ir_from_cc_virtual_header.h;l=3\n\
-            // Error while generating bindings for {kind} 'NotPresent':\n\
-            // Can't generate bindings for NotPresent, because of missing required features (<internal link>):\n\
-            // //test:testing_target needs [//features:supported] for NotPresent");
-        assert!(contents.contains(expected), "Missing expected string: {contents}\n")
     }
     Ok(())
 }
@@ -1141,11 +1121,6 @@ fn test_default_crubit_features_disabled_wrapper() -> Result<()> {
     let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
     assert_rs_not_matches!(rs_api, quote! {NotPresent});
     assert_cc_not_matches!(rs_api_impl, quote! {NotPresent});
-    let expected = "\
-        Error while generating bindings for struct 'NotPresent':\n\
-        Can't generate bindings for NotPresent, because of missing required features (<internal link>):\n\
-        //test:testing_target needs [//features:wrapper] for NotPresent (incomplete type)";
-    assert_rs_matches!(rs_api, quote! { __COMMENT__ #expected});
     Ok(())
 }
 
@@ -1156,8 +1131,7 @@ fn test_default_crubit_features_disabled_dependency_supported_function_parameter
         /*dependency=*/ "struct NotPresent {};",
     )?;
     ir.target_crubit_features_mut(&ir::BazelLabel("//test:dependency".into())).clear();
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
     assert_rs_not_matches!(rs_api, quote! {Func});
     assert_cc_not_matches!(rs_api_impl, quote! {Func});
@@ -1171,8 +1145,7 @@ fn test_default_crubit_features_disabled_dependency_wrapper_function_parameter()
         "template <typename T> struct NotPresentTemplate {T x;}; using NotPresent = NotPresentTemplate<int>;",
     )?;
     ir.target_crubit_features_mut(&ir::BazelLabel("//test:dependency".into())).clear();
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
     assert_rs_not_matches!(rs_api, quote! {Func});
     assert_cc_not_matches!(rs_api_impl, quote! {Func});
@@ -1183,8 +1156,7 @@ fn test_default_crubit_features_disabled_dependency_wrapper_function_parameter()
 fn test_default_crubit_features_disabled_dependency_supported_function_return_type() -> Result<()> {
     let mut ir = ir_from_cc_dependency("NotPresent Func();", "struct NotPresent {};")?;
     ir.target_crubit_features_mut(&ir::BazelLabel("//test:dependency".into())).clear();
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
     assert_rs_not_matches!(rs_api, quote! {Func});
     assert_cc_not_matches!(rs_api_impl, quote! {Func});
@@ -1197,8 +1169,7 @@ fn test_default_crubit_features_disabled_dependency_wrapper_function_return_type
         "NotPresent Func();",
         "template <typename T> struct NotPresentTemplate {T x;}; using NotPresent = NotPresentTemplate<int>;")?;
     ir.target_crubit_features_mut(&ir::BazelLabel("//test:dependency".into())).clear();
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
     assert_rs_not_matches!(rs_api, quote! {Func});
     assert_cc_not_matches!(rs_api_impl, quote! {Func});
@@ -1210,8 +1181,7 @@ fn test_default_crubit_features_disabled_dependency_struct() -> Result<()> {
     for dependency in ["struct NotPresent {signed char x;};", "using NotPresent = signed char;"] {
         let mut ir = ir_from_cc_dependency("struct Present {NotPresent field;};", dependency)?;
         ir.target_crubit_features_mut(&ir::BazelLabel("//test:dependency".into())).clear();
-        *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-            crubit_feature::CrubitFeature::Supported.into();
+        enable_supported(&mut ir);
         let BindingsTokens { rs_api, rs_api_impl: _ } = generate_bindings_tokens_for_test(ir)?;
         assert_rs_matches!(
             rs_api,
@@ -1243,8 +1213,7 @@ fn test_default_crubit_features_disabled_template_explicit_specialization() -> R
 
         inline X<int> NotPresent() { return X<int>(); }"#,
     )?;
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
     assert_rs_not_matches!(rs_api, quote! {NotPresent});
     assert_cc_not_matches!(rs_api_impl, quote! {NotPresent});
@@ -1258,8 +1227,7 @@ fn test_default_crubit_features_disabled_variadic_function() -> Result<()> {
         int sprintf(char* str, const char* format, ...);
         "#,
     )?;
-    *ir.target_crubit_features_mut(&ir.current_target().clone()) =
-        crubit_feature::CrubitFeature::Supported.into();
+    enable_supported(&mut ir);
     let BindingsTokens { rs_api, rs_api_impl } = generate_bindings_tokens_for_test(ir)?;
     assert_rs_not_matches!(rs_api, quote! {sprintf});
     assert_cc_not_matches!(rs_api_impl, quote! {sprintf});
@@ -1269,7 +1237,7 @@ fn test_default_crubit_features_disabled_variadic_function() -> Result<()> {
 #[gtest]
 fn test_existing_rust_type_assert() -> Result<()> {
     let rs_api = generate_bindings_tokens_for_test(ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             // Broken class: uses i32 but has size 1.
             // (These asserts would fail if this were compiled.)
             class [[clang::annotate("crubit_internal_rust_type", "i32")]] Class final {};"#,
@@ -1295,7 +1263,7 @@ fn test_existing_rust_type_assert() -> Result<()> {
 #[gtest]
 fn test_existing_rust_type_c_abi_incompatible() -> Result<()> {
     let rs_api = generate_bindings_tokens_for_test(ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             // Broken class: uses i32 but has size 1.
             // (These asserts would fail if this were compiled.)
             class [[clang::annotate("crubit_internal_rust_type", "i8")]] MyI8 {unsigned char field;};
@@ -1322,7 +1290,7 @@ fn test_existing_rust_type_c_abi_incompatible() -> Result<()> {
 #[gtest]
 fn test_existing_rust_type_c_abi_compatible() -> Result<()> {
     let rs_api = generate_bindings_tokens_for_test(ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             class
                 [[clang::annotate("crubit_internal_rust_type", "i8")]]
                 [[clang::annotate("crubit_internal_same_abi")]]
@@ -1351,7 +1319,7 @@ fn test_existing_rust_type_c_abi_compatible() -> Result<()> {
 #[gtest]
 fn test_existing_rust_type_assert_incomplete() -> Result<()> {
     let rs_api = generate_bindings_tokens_for_test(ir_from_cc(
-        r#" #pragma clang lifetime_elision
+        r#"
             // Broken class: uses i32 but has size 1.
             // (These asserts would fail if this were compiled.)
             class [[clang::annotate("crubit_internal_rust_type", "i32")]] Incomplete;
@@ -1371,4 +1339,135 @@ fn test_existing_rust_type_assert_incomplete() -> Result<()> {
         const _: () = { ... ::core::mem::align_of::<i32>() ... }}
     );
     Ok(())
+}
+
+#[gtest]
+fn test_existing_rust_type_reordered_template_args() -> Result<()> {
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
+            namespace crubit::rust_type {
+            template <typename...>
+            struct Args {};
+            }
+
+            template <typename T, typename U>
+            struct [[clang::annotate("crubit_internal_rust_type", "RustTwoArgs", crubit::rust_type::Args<T, U>())]] TwoArgs {};
+
+            template <typename T, typename U>
+            using Reordered = TwoArgs<U, T>;
+            
+            void AcceptReordered(Reordered<int, float> x);
+        "#,
+    )?;
+
+    assert_ir_matches!(
+        ir,
+        quote! {
+           ExistingRustType {
+               rs_name: "RustTwoArgs", ...
+               template_args: [
+                   Type(CcType {
+                       variant: Primitive(Float),
+                       ...
+                   }),
+                   Type(CcType {
+                       variant: Primitive(Int),
+                       ...
+                   }),
+               ],
+               ...
+           }
+        }
+    );
+    Ok(())
+}
+
+#[gtest]
+fn test_existing_rust_type_default_template_args() -> Result<()> {
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
+            namespace crubit::rust_type {
+            template <typename...>
+            struct Args {};
+            }
+
+            template <typename T, typename U = int>
+            struct [[clang::annotate("crubit_internal_rust_type", "RustTypeWithDefault", crubit::rust_type::Args<T, U>())]] WithDefault {};
+
+            void AcceptWithDefault(WithDefault<float> x);
+        "#,
+    )?;
+
+    assert_ir_matches!(
+        ir,
+        quote! {
+           ExistingRustType {
+               rs_name: "RustTypeWithDefault", ...
+               template_args: [
+                   Type(CcType {
+                       variant: Primitive(Float),
+                       ...
+                   }),
+                   Type(CcType {
+                       variant: Primitive(Int),
+                       ...
+                   }),
+               ],
+               ...
+           }
+        }
+    );
+    Ok(())
+}
+
+#[gtest]
+fn test_existing_rust_type_specialized_template_args() -> Result<()> {
+    let ir = ir_from_assumed_lifetimes_cc(
+        r#"
+            namespace crubit::rust_type {
+            template <typename...>
+            struct Args {};
+            }
+            template <typename T>
+            struct [[clang::annotate("crubit_internal_rust_type", "RustContainer", crubit::rust_type::Args<T>())]] Container {};
+
+            template <>
+            struct [[clang::annotate("crubit_internal_rust_type", "RustVoidContainer", crubit::rust_type::Args<>())]] Container<void> {};
+
+            void AcceptSpecialized(Container<float> a, Container<void> b);
+        "#,
+    )?;
+
+    assert_ir_matches!(
+        ir,
+        quote! {
+           ExistingRustType(ExistingRustType {
+               rs_name: "RustContainer", ...
+               template_args: [
+                   Type(CcType {
+                       variant: Primitive(Float),
+                       ...
+                   })
+               ],
+               ...
+           }), ...
+           ExistingRustType(ExistingRustType {
+               rs_name: "RustVoidContainer", ...
+               template_args: [],
+               ...
+           })
+        }
+    );
+    Ok(())
+}
+
+#[gtest]
+fn test_interpolate_spelled_rust_type() {
+    let substs = [Ok(quote! { ::ffi_11::c_int }), Ok(quote! { true })];
+    let input = quote! { Result<{}, {}> };
+    let expected = quote! { Result<::ffi_11::c_int, true> };
+    assert_rs_matches!(
+        interpolate_spelled_rust_type(input, &mut substs.into_iter()).unwrap(),
+        expected
+    );
 }

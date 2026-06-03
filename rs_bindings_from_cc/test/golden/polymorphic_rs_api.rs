@@ -6,25 +6,20 @@
 // //rs_bindings_from_cc/test/golden:polymorphic_cc
 
 #![rustfmt::skip]
-#![feature(
-    allocator_api,
-    cfg_sanitize,
-    custom_inner_attributes,
-    impl_trait_in_assoc_type,
-    negative_impls
-)]
+#![feature(custom_inner_attributes, impl_trait_in_assoc_type, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 #[::ctor::recursively_pinned(PinnedDrop)]
 #[repr(C, align(8))]
 ///CRUBIT_ANNOTATE: cpp_type=PolymorphicBase
 pub struct PolymorphicBase {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 8],
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 8],
 }
 impl !Send for PolymorphicBase {}
 impl !Sync for PolymorphicBase {}
@@ -34,34 +29,44 @@ unsafe impl ::cxx::ExternType for PolymorphicBase {
 }
 
 impl ::ctor::CtorNew<()> for PolymorphicBase {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN15PolymorphicBaseC1Ev(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                 );
             })
         }
     }
 }
 
-// Error while generating bindings for constructor 'PolymorphicBase::PolymorphicBase':
-// Can't generate bindings for PolymorphicBase::PolymorphicBase, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicBase::PolymorphicBase (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `PolymorphicBase::PolymorphicBase` could not be bound
+//   Unsupported parameter type `const PolymorphicBase& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'PolymorphicBase::operator=':
-// Can't generate bindings for PolymorphicBase::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicBase::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicBase::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `PolymorphicBase::operator=` could not be bound
+//   Unsupported parameter type `const PolymorphicBase& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `PolymorphicBase&`:
+//     references are not yet supported
 
 impl ::ctor::PinnedDrop for PolymorphicBase {
     #[inline(always)]
     unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        crate::detail::__rust_thunk___ZN15PolymorphicBaseD1Ev(self)
+        unsafe { crate::detail::__rust_thunk___ZN15PolymorphicBaseD1Ev(self) }
+    }
+}
+
+unsafe impl ::operator::Delete for crate::PolymorphicBase {
+    #[inline(always)]
+    unsafe fn delete(p: *mut Self) {
+        unsafe {
+            crate::detail::__crubit_operator_delete__15PolymorphicBase___2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2fgolden_3apolymorphic_5fcc(p);
+        }
     }
 }
 
@@ -69,7 +74,7 @@ impl ::ctor::PinnedDrop for PolymorphicBase {
 #[repr(C, align(8))]
 ///CRUBIT_ANNOTATE: cpp_type=PolymorphicBase2
 pub struct PolymorphicBase2 {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 8],
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 8],
 }
 impl !Send for PolymorphicBase2 {}
 impl !Sync for PolymorphicBase2 {}
@@ -80,39 +85,56 @@ unsafe impl ::cxx::ExternType for PolymorphicBase2 {
 impl PolymorphicBase2 {
     #[inline(always)]
     pub fn Foo<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        unsafe { crate::detail::__rust_thunk___ZN16PolymorphicBase23FooEv(self) }
+        unsafe { self::polymorphic_base2::Foo(self) }
     }
 }
 
 impl ::ctor::CtorNew<()> for PolymorphicBase2 {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN16PolymorphicBase2C1Ev(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                 );
             })
         }
     }
 }
 
-// Error while generating bindings for constructor 'PolymorphicBase2::PolymorphicBase2':
-// Can't generate bindings for PolymorphicBase2::PolymorphicBase2, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicBase2::PolymorphicBase2 (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `PolymorphicBase2::PolymorphicBase2` could not be bound
+//   Unsupported parameter type `const PolymorphicBase2& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'PolymorphicBase2::operator=':
-// Can't generate bindings for PolymorphicBase2::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicBase2::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicBase2::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `PolymorphicBase2::operator=` could not be bound
+//   Unsupported parameter type `const PolymorphicBase2& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `PolymorphicBase2&`:
+//     references are not yet supported
 
 impl ::ctor::PinnedDrop for PolymorphicBase2 {
     #[inline(always)]
     unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        crate::detail::__rust_thunk___ZN16PolymorphicBase2D1Ev(self)
+        unsafe { crate::detail::__rust_thunk___ZN16PolymorphicBase2D1Ev(self) }
+    }
+}
+
+unsafe impl ::operator::Delete for crate::PolymorphicBase2 {
+    #[inline(always)]
+    unsafe fn delete(p: *mut Self) {
+        unsafe {
+            crate::detail::__crubit_operator_delete__16PolymorphicBase2___2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2fgolden_3apolymorphic_5fcc(p);
+        }
+    }
+}
+
+pub mod polymorphic_base2 {
+    #[inline(always)]
+    pub(crate) fn Foo<'a>(__this: ::core::pin::Pin<&'a mut crate::PolymorphicBase2>) {
+        unsafe { crate::detail::__rust_thunk___ZN16PolymorphicBase23FooEv(__this) }
     }
 }
 
@@ -120,7 +142,7 @@ impl ::ctor::PinnedDrop for PolymorphicBase2 {
 #[repr(C, align(8))]
 ///CRUBIT_ANNOTATE: cpp_type=PolymorphicDerived
 pub struct PolymorphicDerived {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 16],
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 16],
 }
 impl !Send for PolymorphicDerived {}
 impl !Sync for PolymorphicDerived {}
@@ -130,45 +152,56 @@ unsafe impl ::cxx::ExternType for PolymorphicDerived {
 }
 
 impl ::ctor::CtorNew<()> for PolymorphicDerived {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN18PolymorphicDerivedC1Ev(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                 );
             })
         }
     }
 }
 
-// Error while generating bindings for constructor 'PolymorphicDerived::PolymorphicDerived':
-// Can't generate bindings for PolymorphicDerived::PolymorphicDerived, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicDerived::PolymorphicDerived (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `PolymorphicDerived::PolymorphicDerived` could not be bound
+//   Unsupported parameter type `const PolymorphicDerived& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'PolymorphicDerived::PolymorphicDerived':
-// Can't generate bindings for PolymorphicDerived::PolymorphicDerived, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicDerived::PolymorphicDerived (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `PolymorphicDerived::PolymorphicDerived` could not be bound
+//   Unsupported parameter type `PolymorphicDerived&& __param_0`:
+//     references are not yet supported
 
 impl ::ctor::PinnedDrop for PolymorphicDerived {
     #[inline(always)]
     unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        crate::detail::__rust_thunk___ZN18PolymorphicDerivedD1Ev(self)
+        unsafe { crate::detail::__rust_thunk___ZN18PolymorphicDerivedD1Ev(self) }
     }
 }
 
-// Error while generating bindings for function 'PolymorphicDerived::operator=':
-// Can't generate bindings for PolymorphicDerived::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicDerived::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicDerived::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `PolymorphicDerived::operator=` could not be bound
+//   Unsupported parameter type `const PolymorphicDerived& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `PolymorphicDerived&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'PolymorphicDerived::operator=':
-// Can't generate bindings for PolymorphicDerived::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicDerived::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:polymorphic_cc needs [//features:experimental] for PolymorphicDerived::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `PolymorphicDerived::operator=` could not be bound
+//   Unsupported parameter type `PolymorphicDerived&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `PolymorphicDerived&`:
+//     references are not yet supported
+
+unsafe impl ::operator::Delete for crate::PolymorphicDerived {
+    #[inline(always)]
+    unsafe fn delete(p: *mut Self) {
+        unsafe {
+            crate::detail::__crubit_operator_delete__18PolymorphicDerived___2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2fgolden_3apolymorphic_5fcc(p);
+        }
+    }
+}
 
 mod detail {
     #[allow(unused_imports)]
@@ -180,6 +213,9 @@ mod detail {
         pub(crate) unsafe fn __rust_thunk___ZN15PolymorphicBaseD1Ev<'a>(
             __this: ::core::pin::Pin<&'a mut crate::PolymorphicBase>,
         );
+        pub(crate) unsafe fn __crubit_operator_delete__15PolymorphicBase___2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2fgolden_3apolymorphic_5fcc(
+            ptr: *mut crate::PolymorphicBase,
+        );
         pub(crate) unsafe fn __rust_thunk___ZN16PolymorphicBase2C1Ev(
             __this: *mut ::core::ffi::c_void,
         );
@@ -189,11 +225,17 @@ mod detail {
         pub(crate) unsafe fn __rust_thunk___ZN16PolymorphicBase2D1Ev<'a>(
             __this: ::core::pin::Pin<&'a mut crate::PolymorphicBase2>,
         );
+        pub(crate) unsafe fn __crubit_operator_delete__16PolymorphicBase2___2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2fgolden_3apolymorphic_5fcc(
+            ptr: *mut crate::PolymorphicBase2,
+        );
         pub(crate) unsafe fn __rust_thunk___ZN18PolymorphicDerivedC1Ev(
             __this: *mut ::core::ffi::c_void,
         );
         pub(crate) unsafe fn __rust_thunk___ZN18PolymorphicDerivedD1Ev<'a>(
             __this: ::core::pin::Pin<&'a mut crate::PolymorphicDerived>,
+        );
+        pub(crate) unsafe fn __crubit_operator_delete__18PolymorphicDerived___2f_2fthird_5fparty_2fcrubit_2frs_5fbindings_5ffrom_5fcc_2ftest_2fgolden_3apolymorphic_5fcc(
+            ptr: *mut crate::PolymorphicDerived,
         );
     }
 }

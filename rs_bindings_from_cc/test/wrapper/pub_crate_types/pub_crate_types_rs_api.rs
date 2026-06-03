@@ -4,25 +4,22 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported, wrapper
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=10
-// Error while generating bindings for class 'Template':
-// Class templates are not supported yet
+// error: class `Template` could not be bound
+//   Class templates are not yet supported
 
-/// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=21
 pub(crate) type TemplateIntAlias = crate::__CcTemplateInst8TemplateIiE;
 
-/// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=23
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=CompoundDataType
@@ -40,7 +37,6 @@ forward_declare::unsafe_define!(
     crate::CompoundDataType
 );
 
-/// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=23
 impl Default for CompoundDataType {
     #[inline(always)]
     fn default() -> Self {
@@ -52,26 +48,24 @@ impl Default for CompoundDataType {
     }
 }
 
-/// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=27
 #[inline(always)]
 pub(crate) fn GetTemplateInt() -> crate::__CcTemplateInst8TemplateIiE {
     unsafe {
-        let mut __return =
+        let mut __crubit_return =
             ::core::mem::MaybeUninit::<crate::__CcTemplateInst8TemplateIiE>::uninit();
         crate::detail::__rust_thunk___Z14GetTemplateIntv(
-            &raw mut __return as *mut ::core::ffi::c_void,
+            &raw mut __crubit_return as *mut ::core::ffi::c_void,
         );
-        __return.assume_init()
+        __crubit_return.assume_init()
     }
 }
 
-extern "C" {
+unsafe extern "C" {
     pub(crate) static mut TemplateConstant: crate::__CcTemplateInst8TemplateIiE;
 }
 
-/// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=31
 #[inline(always)]
-pub fn ConsumeCompoundDataType(mut container: crate::CompoundDataType) -> ::core::ffi::c_int {
+pub fn ConsumeCompoundDataType(mut container: crate::CompoundDataType) -> ::ffi_11::c_int {
     unsafe {
         crate::detail::__rust_thunk___Z23ConsumeCompoundDataType16CompoundDataType(&mut container)
     }
@@ -82,25 +76,26 @@ forward_declare::forward_declare!(pub ForwardDeclared = forward_declare::symbol!
 /// Forward declared types are not pub(crate) so that they can work across
 /// module boundaries like this.
 ///
-/// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=42
+/// # Safety
+///
+/// The caller must ensure that the following unsafe arguments are not misused by the function:
+/// * `__param_0`: raw pointer
 #[inline(always)]
 pub unsafe fn OtherPubCrateTypes(__param_0: *mut ::other_pub_crate_types::ForwardDeclared2) {
-    crate::detail::__rust_thunk___Z18OtherPubCrateTypesP16ForwardDeclared2(__param_0)
+    unsafe { crate::detail::__rust_thunk___Z18OtherPubCrateTypesP16ForwardDeclared2(__param_0) }
 }
 
 /// Templates, otoh, are pub(crate), but work because templates are already
 /// instantiated once per crate.
-///
-/// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=46
 #[inline(always)]
 pub(crate) fn GetOtherPubCrateTemplate2Int() -> crate::__CcTemplateInst9Template2IiE {
     unsafe {
-        let mut __return =
+        let mut __crubit_return =
             ::core::mem::MaybeUninit::<crate::__CcTemplateInst9Template2IiE>::uninit();
         crate::detail::__rust_thunk___Z28GetOtherPubCrateTemplate2Intv(
-            &raw mut __return as *mut ::core::ffi::c_void,
+            &raw mut __crubit_return as *mut ::core::ffi::c_void,
         );
-        __return.assume_init()
+        __crubit_return.assume_init()
     }
 }
 
@@ -111,12 +106,11 @@ pub(crate) fn GetOtherPubCrateTemplate2Int() -> crate::__CcTemplateInst9Template
 // inline void MixedPubCrateTypes(std::pair<Template<int>*,
 // Template2<int>*>) {}
 
-/// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/other_pub_crate_types.h;l=11
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=Template2 < int >
 pub(crate) struct __CcTemplateInst9Template2IiE {
-    pub value: ::core::ffi::c_int,
+    pub value: ::ffi_11::c_int,
 }
 impl !Send for __CcTemplateInst9Template2IiE {}
 impl !Sync for __CcTemplateInst9Template2IiE {}
@@ -125,37 +119,26 @@ forward_declare::unsafe_define!(
     crate::__CcTemplateInst9Template2IiE
 );
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/other_pub_crate_types.h;l=11
-// Error while generating bindings for constructor 'Template2<int>::Template2<int>':
-// Can't generate bindings for Template2<int>::Template2<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types needs [//features:experimental] for Template2<int>::Template2<int> (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: constructor `Template2<int>::Template2<int>` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/other_pub_crate_types.h;l=11
-// Error while generating bindings for constructor 'Template2<int>::Template2<int>':
-// Can't generate bindings for Template2<int>::Template2<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types needs [//features:experimental] for Template2<int>::Template2<int> (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: constructor `Template2<int>::Template2<int>` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/other_pub_crate_types.h;l=11
-// Error while generating bindings for constructor 'Template2<int>::Template2<int>':
-// Can't generate bindings for Template2<int>::Template2<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types needs [//features:experimental] for Template2<int>::Template2<int> (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: constructor `Template2<int>::Template2<int>` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/other_pub_crate_types.h;l=11
-// Error while generating bindings for function 'Template2<int>::operator=':
-// Can't generate bindings for Template2<int>::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types needs [//features:experimental] for Template2<int>::operator= (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: function `Template2<int>::operator=` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/other_pub_crate_types.h;l=11
-// Error while generating bindings for function 'Template2<int>::operator=':
-// Can't generate bindings for Template2<int>::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types needs [//features:experimental] for Template2<int>::operator= (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: function `Template2<int>::operator=` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-/// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=11
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=Template < int >
 pub(crate) struct __CcTemplateInst8TemplateIiE {
-    pub value: ::core::ffi::c_int,
+    pub value: ::ffi_11::c_int,
 }
 impl !Send for __CcTemplateInst8TemplateIiE {}
 impl !Sync for __CcTemplateInst8TemplateIiE {}
@@ -164,41 +147,28 @@ forward_declare::unsafe_define!(
     crate::__CcTemplateInst8TemplateIiE
 );
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=11
-// Error while generating bindings for constructor 'Template<int>::Template<int>':
-// Can't generate bindings for Template<int>::Template<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types needs [//features:experimental] for Template<int>::Template<int> (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: constructor `Template<int>::Template<int>` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=11
-// Error while generating bindings for constructor 'Template<int>::Template<int>':
-// Can't generate bindings for Template<int>::Template<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types needs [//features:experimental] for Template<int>::Template<int> (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: constructor `Template<int>::Template<int>` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=11
-// Error while generating bindings for constructor 'Template<int>::Template<int>':
-// Can't generate bindings for Template<int>::Template<int>, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types needs [//features:experimental] for Template<int>::Template<int> (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: constructor `Template<int>::Template<int>` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=11
-// Error while generating bindings for function 'Template<int>::operator=':
-// Can't generate bindings for Template<int>::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types needs [//features:experimental] for Template<int>::operator= (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: function `Template<int>::operator=` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=11
-// Error while generating bindings for function 'Template<int>::operator=':
-// Can't generate bindings for Template<int>::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types needs [//features:experimental] for Template<int>::operator= (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: function `Template<int>::operator=` could not be bound
+//   b/248542210: template instantiation of member function cannot reliably get bindings
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=14
-// Error while generating bindings for function 'Template<int>::IndirectCannotBeInstantiated':
-// Can't generate bindings for Template<int>::IndirectCannotBeInstantiated, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/wrapper/pub_crate_types:pub_crate_types needs [//features:experimental] for Template<int>::IndirectCannotBeInstantiated (b/248542210: template instantiation of member function cannot reliably get bindings)
+// error: function `Template<int>::IndirectCannotBeInstantiated` could not be bound
+//   Failed to instantiate the function/method template: Diagnostics emitted:
+//   rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=16:5: note: in instantiation of member function 'Template<int>::CannotBeInstantiated' requested here
+//   rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=18:47: error: static assertion failed
 
-// Generated from: rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=18
-// Error while generating bindings for function 'Template<int>::CannotBeInstantiated':
-// Failed to instantiate the function/method template: Diagnostics emitted:
-// rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=16:5: note: in instantiation of member function 'Template<int>::CannotBeInstantiated' requested here
-// rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types.h;l=18:47: error: static assertion failed
+// error: function `Template<int>::CannotBeInstantiated` could not be bound
+//   Instantiating this template relies on an invalid decl: Template<int>::CannotBeInstantiated
 
 #[path = "rs_bindings_from_cc/test/wrapper/pub_crate_types/pub_crate_types_extra.rs"]
 mod __crubit_mod_0;
@@ -215,7 +185,7 @@ mod detail {
         pub(crate) unsafe fn __rust_thunk___Z14GetTemplateIntv(__return: *mut ::core::ffi::c_void);
         pub(crate) unsafe fn __rust_thunk___Z23ConsumeCompoundDataType16CompoundDataType(
             container: &mut crate::CompoundDataType,
-        ) -> ::core::ffi::c_int;
+        ) -> ::ffi_11::c_int;
         pub(crate) unsafe fn __rust_thunk___Z18OtherPubCrateTypesP16ForwardDeclared2(
             __param_0: *mut ::other_pub_crate_types::ForwardDeclared2,
         );

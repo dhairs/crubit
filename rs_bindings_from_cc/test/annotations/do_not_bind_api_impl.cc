@@ -4,7 +4,6 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //rs_bindings_from_cc/test/annotations:do_not_bind
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #include "support/internal/cxx20_backports.h"
 #include "support/internal/offsetof.h"
@@ -41,8 +40,8 @@ __rust_thunk___ZN6crubit4test11DoNotBindFnENS0_23ArgumentToBoundOverloadE(
   crubit::test::DoNotBindFn(std::move(*__param_0));
 }
 
-static_assert((void (*)(
-    struct crubit::test::ArgumentToBoundOverload))&crubit::test::DoNotBindFn);
+static_assert((void (*)(struct crubit::test::ArgumentToBoundOverload)) &
+              ::crubit::test::DoNotBindFn);
 
 static_assert(sizeof(struct crubit::test::StructWithDoNotBindConstructor) == 1);
 static_assert(alignof(struct crubit::test::StructWithDoNotBindConstructor) ==
@@ -71,7 +70,7 @@ __rust_thunk___ZN6crubit4test25StructWithDoNotBindMethod15DoNotBindMethodENS0_23
 }
 
 static_assert((void (::crubit::test::StructWithDoNotBindMethod::*)(
-    struct crubit::test::ArgumentToBoundOverload))&crubit::test::
-                  StructWithDoNotBindMethod::DoNotBindMethod);
+                  struct crubit::test::ArgumentToBoundOverload)) &
+              ::crubit::test::StructWithDoNotBindMethod::DoNotBindMethod);
 
 #pragma clang diagnostic pop

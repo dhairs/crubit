@@ -5,39 +5,49 @@
 use arc_anyhow::Result;
 use code_gen_utils::expect_format_cc_type_name;
 use database::rs_snippet::{RsTypeKind, RustPtrKind};
+use database::BindingsGenerator;
 use error_report::{anyhow, bail};
-use ir::{CcCallingConv, Item, PointerTypeKind, Record, IR};
+use ir::{CcCallingConv, Item, PointerTypeKind, Record};
 use proc_macro2::TokenStream;
 use quote::quote;
 use std::rc::Rc;
 
-pub fn format_cpp_type(ty: &RsTypeKind, ir: &IR) -> Result<TokenStream> {
+pub fn format_cpp_type(ty: &RsTypeKind, db: &BindingsGenerator<'_>) -> Result<TokenStream> {
     // Formatting *both* pointers *and* references as pointers, because:
     // - Pointers and references have the same representation in the ABI.
     // - Clang's `-Wreturn-type-c-linkage` warns when using references in C++
     //   function thunks declared as `extern "C"` (see b/238681766).
-    format_cpp_type_inner(ty, ir, /* references_ok= */ false)
+    format_cpp_type_inner(ty, db, /* references_ok= */ false)
 }
 
-pub fn format_cpp_type_with_references(ty: &RsTypeKind, ir: &IR) -> Result<TokenStream> {
-    format_cpp_type_inner(ty, ir, /* references_ok= */ true)
+pub fn format_cpp_type_with_references(
+    ty: &RsTypeKind,
+    db: &BindingsGenerator<'_>,
+) -> Result<TokenStream> {
+    format_cpp_type_inner(ty, db, /* references_ok= */ true)
 }
 
-pub fn cpp_type_name_for_record(record: &Record, ir: &IR) -> Result<TokenStream> {
-    let tagless = cpp_tagless_type_name_for_record(record, ir)?;
+pub fn cpp_type_name_for_record(
+    record: &Record,
+    db: &BindingsGenerator<'_>,
+) -> Result<TokenStream> {
+    let tagless = cpp_tagless_type_name_for_record(record, db)?;
     let tag_kind = record.cc_tag_kind();
     Ok(quote! { #tag_kind #tagless })
 }
 
-pub fn cpp_tagless_type_name_for_record(record: &Record, ir: &IR) -> Result<TokenStream> {
+pub fn cpp_tagless_type_name_for_record(
+    record: &Record,
+    db: &BindingsGenerator<'_>,
+) -> Result<TokenStream> {
     let ident = expect_format_cc_type_name(record.cc_name.identifier.as_ref());
-    let namespace_qualifier = ir.namespace_qualifier(record).format_for_cc()?;
+    let namespace_qualifier = db.namespace_qualifier(record).format_for_cc()?;
     Ok(quote! { #namespace_qualifier #ident })
 }
 
 pub fn format_cpp_type_inner(
     rs_type_kind: &RsTypeKind,
-    ir: &IR,
+    db: &BindingsGenerator<'_>,
     references_ok: bool,
 ) -> Result<TokenStream> {
     match rs_type_kind {
@@ -45,7 +55,7 @@ pub fn format_cpp_type_inner(
             anyhow!("malformed type name, this is a crubit implementation bug: {:?}", symbol)
         }),
         RsTypeKind::Pointer { pointee, kind, mutability } => {
-            let nested_type = format_cpp_type_inner(pointee, ir, references_ok)?;
+            let nested_type = format_cpp_type_inner(pointee, db, references_ok)?;
             let const_fragment = mutability.is_const().then(|| quote! { const });
             match kind {
                 RustPtrKind::CcPtr(kind) => {
@@ -63,7 +73,7 @@ pub fn format_cpp_type_inner(
         }
         RsTypeKind::Reference { referent, mutability, .. } => {
             let const_fragment = mutability.is_const().then(|| quote! { const });
-            let nested_type = format_cpp_type_inner(referent, ir, references_ok)?;
+            let nested_type = format_cpp_type_inner(referent, db, references_ok)?;
             let pointer_kind = if !references_ok {
                 quote! { * }
             } else {
@@ -73,7 +83,7 @@ pub fn format_cpp_type_inner(
         }
         RsTypeKind::RvalueReference { referent, mutability, .. } => {
             let const_fragment = mutability.is_const().then(|| quote! { const });
-            let nested_type = format_cpp_type_inner(referent, ir, references_ok)?;
+            let nested_type = format_cpp_type_inner(referent, db, references_ok)?;
             let pointer_kind = if !references_ok {
                 quote! { * }
             } else {
@@ -85,10 +95,10 @@ pub fn format_cpp_type_inner(
             // Function pointer types don't ignore references, but luckily,
             // `-Wreturn-type-c-linkage` does. So we can just re-enable references now
             // so that the function type is exactly correct.
-            let ret_type = format_cpp_type_inner(return_type, ir, /* references_ok= */ true)?;
+            let ret_type = format_cpp_type_inner(return_type, db, /* references_ok= */ true)?;
             let param_types = param_types
                 .iter()
-                .map(|t| format_cpp_type_inner(t, ir, /* references_ok= */ true))
+                .map(|t| format_cpp_type_inner(t, db, /* references_ok= */ true))
                 .collect::<Result<Vec<_>>>()?;
             let attr = match cc_calling_conv {
                 CcCallingConv::C => quote! {},
@@ -111,73 +121,50 @@ pub fn format_cpp_type_inner(
                 > #ptr
             })
         }
-        RsTypeKind::IncompleteRecord { incomplete_record, .. } => {
-            cpp_type_name_for_item(&Item::IncompleteRecord(Rc::clone(incomplete_record)), ir)
+        RsTypeKind::IncompleteRecord { incomplete_record, .. } => tagless_cpp_type_name_for_item(
+            &Item::IncompleteRecord(Rc::clone(incomplete_record)),
+            db,
+        ),
+        RsTypeKind::Record { record, .. } => cpp_type_name_for_record(record, db),
+        RsTypeKind::Enum { enum_, .. } => {
+            tagless_cpp_type_name_for_item(&Item::Enum(Rc::clone(enum_)), db)
         }
-        RsTypeKind::Record { record, .. } => cpp_type_name_for_record(record, ir),
-        RsTypeKind::Enum { enum_, .. } => cpp_type_name_for_item(&Item::Enum(Rc::clone(enum_)), ir),
         RsTypeKind::TypeAlias { type_alias, .. } => {
-            cpp_type_name_for_item(&Item::TypeAlias(Rc::clone(type_alias)), ir)
+            tagless_cpp_type_name_for_item(&Item::TypeAlias(Rc::clone(type_alias)), db)
         }
         RsTypeKind::Primitive(primitive) => Ok(quote! { #primitive }),
-        RsTypeKind::BridgeType { original_type, .. } => cpp_type_name_for_record(original_type, ir),
-        RsTypeKind::ExistingRustType(existing_rust_type) => {
-            cpp_type_name_for_item(&Item::ExistingRustType(Rc::clone(existing_rust_type)), ir)
-        }
-        RsTypeKind::C9Co { original_type, .. } => cpp_type_name_for_record(original_type, ir),
+        RsTypeKind::BridgeType { original_type, .. } => cpp_type_name_for_record(original_type, db),
+        RsTypeKind::ExistingRustType { existing_rust_type, .. } => tagless_cpp_type_name_for_item(
+            &Item::ExistingRustType(Rc::clone(existing_rust_type)),
+            db,
+        ),
     }
 }
 
-/// Returns the fully-qualified name for an item, not including the type tag.
-pub fn tagless_cpp_type_name_for_item(item: &ir::Item, ir: &IR) -> Result<TokenStream> {
-    if let ir::Item::Record(record) = item {
-        cpp_tagless_type_name_for_record(record, ir)
-    } else {
-        cpp_type_name_for_item(item, ir)
-    }
-}
-
-/// Returns the fully qualified name for an item.
+/// Returns the fully qualified name for an item (not including type tags).
 ///
 /// For example, for `namespace x { struct Y { using X = int; }; }`, the name
 /// for `X` is `x::Y::X`.
-fn cpp_type_name_for_item(item: &ir::Item, ir: &IR) -> Result<TokenStream> {
-    /// Returns the namespace / class qualifiers necessary to access the item.
-    ///
-    /// For example, for `namespace x { struct Y { using X = int; }; }`, the prefix
-    /// for `X` is `x::Y::`.
-    fn cpp_qualified_path_prefix(item: &ir::Item, ir: &ir::IR) -> Result<TokenStream> {
-        let Some(parent) = item.enclosing_item_id() else {
-            return Ok(quote! {});
-        };
-        let parent: &ir::Item = ir.find_decl(parent)?;
-        match parent {
-            ir::Item::Namespace(_) => Ok(ir.namespace_qualifier(item).format_for_cc()?),
-            ir::Item::Record(r) => {
-                let name = cpp_tagless_type_name_for_record(r, ir)?;
-                Ok(quote! {#name ::})
-            }
-            _ => bail!("Unexpected enclosing item: {item:?}"),
-        }
-    }
-
+pub fn tagless_cpp_type_name_for_item(
+    item: &ir::Item,
+    db: &BindingsGenerator<'_>,
+) -> Result<TokenStream> {
     match item {
         Item::IncompleteRecord(incomplete_record) => {
             let ident = expect_format_cc_type_name(incomplete_record.cc_name.identifier.as_ref());
-            let namespace_qualifier = ir.namespace_qualifier(incomplete_record).format_for_cc()?;
-            let tag_kind = incomplete_record.record_type;
-            Ok(quote! { #tag_kind #namespace_qualifier #ident })
+            let namespace_qualifier = db.namespace_qualifier(incomplete_record).format_for_cc()?;
+            Ok(quote! { #namespace_qualifier #ident })
         }
-        Item::Record(record) => cpp_type_name_for_record(record, ir),
+        Item::Record(record) => cpp_tagless_type_name_for_record(record, db),
         Item::Enum(enum_) => {
             let ident = expect_format_cc_type_name(&enum_.rs_name.identifier);
-            let qualifier = cpp_qualified_path_prefix(item, ir)?;
-            Ok(quote! { #qualifier #ident })
+            let namespace_qualifier = db.namespace_qualifier(item).format_for_cc()?;
+            Ok(quote! { #namespace_qualifier #ident })
         }
         Item::TypeAlias(type_alias) => {
             let ident = expect_format_cc_type_name(&type_alias.cc_name.identifier);
-            let qualifier = cpp_qualified_path_prefix(item, ir)?;
-            Ok(quote! { #qualifier #ident })
+            let namespace_qualifier = db.namespace_qualifier(item).format_for_cc()?;
+            Ok(quote! { #namespace_qualifier #ident })
         }
         Item::ExistingRustType(existing_rust_type) => existing_rust_type
             .cc_name

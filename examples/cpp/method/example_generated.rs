@@ -4,24 +4,23 @@
 
 // Automatically @generated Rust bindings for the following C++ target:
 // //examples/cpp/method:example_lib
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 #![rustfmt::skip]
-#![feature(allocator_api, cfg_sanitize, custom_inner_attributes, negative_impls)]
+#![feature(custom_inner_attributes, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 pub mod foo {
-    /// Generated from: examples/cpp/method/example.h;l=12
     #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
     #[repr(C)]
     ///CRUBIT_ANNOTATE: cpp_type=foo :: Bar
     pub struct Bar {
-        pub x: ::core::ffi::c_int,
+        pub x: ::ffi_11::c_int,
     }
     impl !Send for Bar {}
     impl !Sync for Bar {}
@@ -30,14 +29,16 @@ pub mod foo {
         type Kind = ::cxx::kind::Trivial;
     }
     impl Bar {
-        /// Generated from: examples/cpp/method/example.h;l=14
+        /// # Safety
+        ///
+        /// The caller must ensure that the following unsafe arguments are not misused by the function:
+        /// * `__this`: raw pointer
         #[inline(always)]
         pub unsafe fn MyMethod(__this: *mut Self) {
-            crate::detail::__rust_thunk___ZN3foo3Bar8MyMethodEv(__this)
+            unsafe { self::bar::MyMethod(__this) }
         }
     }
 
-    /// Generated from: examples/cpp/method/example.h;l=12
     impl Default for Bar {
         #[inline(always)]
         fn default() -> Self {
@@ -46,6 +47,17 @@ pub mod foo {
                 crate::detail::__rust_thunk___ZN3foo3BarC1Ev(&raw mut tmp as *mut _);
                 tmp.assume_init()
             }
+        }
+    }
+
+    pub mod bar {
+        /// # Safety
+        ///
+        /// The caller must ensure that the following unsafe arguments are not misused by the function:
+        /// * `__this`: raw pointer
+        #[inline(always)]
+        pub(crate) unsafe fn MyMethod(__this: *mut crate::foo::Bar) {
+            unsafe { crate::detail::__rust_thunk___ZN3foo3Bar8MyMethodEv(__this) }
         }
     }
 }

@@ -82,3 +82,69 @@ crubit_cc_test(
         "//testing/base/public:gunit_main",
     ],
 )
+
+rust_library(
+    name = "option",
+    testonly = 1,
+    srcs = ["option.rs"],
+    aspect_hints = ["//features:always_specialize_generics_in_cpp_api_from_rust"],
+    proc_macro_deps = [
+        "//support:crubit_annotate",
+    ],
+    rustc_flags = ["-Zallow-features=rustc_attrs"],
+)
+
+golden_test(
+    name = "option_golden_test",
+    basename = "option",
+    golden_h = "option_cc_api.h",
+    golden_rs = "option_cc_api_impl.rs",
+    rust_library = "option",
+)
+
+cc_bindings_from_rust(
+    name = "option_cc_api",
+    testonly = 1,
+    crate = ":option",
+)
+
+crubit_cc_test(
+    name = "option_test",
+    srcs = ["option_test.cc"],
+    deps = [
+        ":option_cc_api",
+        "//testing/base/public:gunit_main",
+    ],
+)
+
+rust_library(
+    name = "result",
+    testonly = 1,
+    srcs = ["result.rs"],
+    proc_macro_deps = [
+        "//support:crubit_annotate",
+    ],
+)
+
+golden_test(
+    name = "result_golden_test",
+    basename = "result",
+    golden_h = "result_cc_api.h",
+    golden_rs = "result_cc_api_impl.rs",
+    rust_library = "result",
+)
+
+cc_bindings_from_rust(
+    name = "result_cc_api",
+    testonly = 1,
+    crate = ":result",
+)
+
+crubit_cc_test(
+    name = "result_test",
+    srcs = ["result_test.cc"],
+    deps = [
+        ":result_cc_api",
+        "//testing/base/public:gunit_main",
+    ],
+)

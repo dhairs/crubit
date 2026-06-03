@@ -6,18 +6,13 @@
 // //rs_bindings_from_cc/test/golden:user_of_base_class_cc
 
 #![rustfmt::skip]
-#![feature(
-    allocator_api,
-    cfg_sanitize,
-    custom_inner_attributes,
-    impl_trait_in_assoc_type,
-    negative_impls
-)]
+#![feature(custom_inner_attributes, impl_trait_in_assoc_type, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 /// The same as Derived from inheritance.h, but in a different build target.
@@ -29,8 +24,8 @@
 #[repr(C, align(8))]
 ///CRUBIT_ANNOTATE: cpp_type=Derived2
 pub struct Derived2 {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 20],
-    pub derived_1: ::core::ffi::c_char,
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 20],
+    pub derived_1: ::ffi_11::c_char,
 }
 impl !Send for Derived2 {}
 impl !Sync for Derived2 {}
@@ -40,42 +35,46 @@ unsafe impl ::cxx::ExternType for Derived2 {
 }
 
 impl ::ctor::CtorNew<()> for Derived2 {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
-                crate::detail::__rust_thunk___ZN8Derived2C1Ev(dest as *mut ::core::ffi::c_void);
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
+                crate::detail::__rust_thunk___ZN8Derived2C1Ev(
+                    __crubit_dest as *mut ::core::ffi::c_void,
+                );
             })
         }
     }
 }
 
-// Error while generating bindings for constructor 'Derived2::Derived2':
-// Can't generate bindings for Derived2::Derived2, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for Derived2::Derived2 (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `Derived2::Derived2` could not be bound
+//   Unsupported parameter type `const Derived2& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'Derived2::Derived2':
-// Can't generate bindings for Derived2::Derived2, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for Derived2::Derived2 (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `Derived2::Derived2` could not be bound
+//   Unsupported parameter type `Derived2&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Derived2::operator=':
-// Can't generate bindings for Derived2::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for Derived2::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for Derived2::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `Derived2::operator=` could not be bound
+//   Unsupported parameter type `const Derived2& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `Derived2&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Derived2::operator=':
-// Can't generate bindings for Derived2::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for Derived2::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for Derived2::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `Derived2::operator=` could not be bound
+//   Unsupported parameter type `Derived2&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `Derived2&`:
+//     references are not yet supported
 
 #[::ctor::recursively_pinned]
 #[repr(C, align(8))]
 ///CRUBIT_ANNOTATE: cpp_type=VirtualDerived2
 pub struct VirtualDerived2 {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 32],
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 32],
 }
 impl !Send for VirtualDerived2 {}
 impl !Sync for VirtualDerived2 {}
@@ -85,38 +84,40 @@ unsafe impl ::cxx::ExternType for VirtualDerived2 {
 }
 
 impl ::ctor::CtorNew<()> for VirtualDerived2 {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN15VirtualDerived2C1Ev(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                 );
             })
         }
     }
 }
 
-// Error while generating bindings for constructor 'VirtualDerived2::VirtualDerived2':
-// Can't generate bindings for VirtualDerived2::VirtualDerived2, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for VirtualDerived2::VirtualDerived2 (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `VirtualDerived2::VirtualDerived2` could not be bound
+//   Unsupported parameter type `const VirtualDerived2& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'VirtualDerived2::VirtualDerived2':
-// Can't generate bindings for VirtualDerived2::VirtualDerived2, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for VirtualDerived2::VirtualDerived2 (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `VirtualDerived2::VirtualDerived2` could not be bound
+//   Unsupported parameter type `VirtualDerived2&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'VirtualDerived2::operator=':
-// Can't generate bindings for VirtualDerived2::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for VirtualDerived2::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for VirtualDerived2::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `VirtualDerived2::operator=` could not be bound
+//   Unsupported parameter type `const VirtualDerived2& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `VirtualDerived2&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'VirtualDerived2::operator=':
-// Can't generate bindings for VirtualDerived2::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for VirtualDerived2::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:user_of_base_class_cc needs [//features:experimental] for VirtualDerived2::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `VirtualDerived2::operator=` could not be bound
+//   Unsupported parameter type `VirtualDerived2&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `VirtualDerived2&`:
+//     references are not yet supported
 
 mod detail {
     #[allow(unused_imports)]

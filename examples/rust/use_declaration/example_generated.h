@@ -4,23 +4,26 @@
 
 // Automatically @generated C++ bindings for the following Rust crate:
 // example_crate_golden
-// Features: non_unpin_ctor, std_unique_ptr, std_vector, supported
 
 // clang-format off
 #ifndef THIRD_PARTY_CRUBIT_EXAMPLES_RUST_USE_DECLARATION_EXAMPLE_CRATE_GOLDEN
 #define THIRD_PARTY_CRUBIT_EXAMPLES_RUST_USE_DECLARATION_EXAMPLE_CRATE_GOLDEN
 
+#pragma clang diagnostic push
+#pragma clang diagnostic ignored "-Wreturn-type-c-linkage"
+#pragma clang diagnostic ignored "-Wunused-private-field"
+#pragma clang diagnostic ignored "-Wdeprecated-declarations"
+#pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 #include "support/internal/slot.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <type_traits>
 
 namespace example_crate {
 
-// Generated from:
-// examples/rust/use_declaration/example.rs;l=8
 struct CRUBIT_INTERNAL_RUST_TYPE(":: example_crate_golden :: Type") alignas(4)
     [[clang::trivial_abi]] Type final {
  public:
@@ -36,26 +39,27 @@ struct CRUBIT_INTERNAL_RUST_TYPE(":: example_crate_golden :: Type") alignas(4)
   Type(const Type&) = delete;
   Type& operator=(const Type&) = delete;
   Type(::crubit::UnsafeRelocateTag, Type&& value) {
-    memcpy(this, &value, sizeof(value));
+    ::std::memcpy(this, &value, sizeof(value));
   }
   union {
-    // Generated from:
-    // examples/rust/use_declaration/example.rs;l=9
-    std::int32_t x;
+    ::std::int32_t x;
   };
 
  private:
   static void __crubit_field_offset_assertions();
 };
 
-// Generated from:
-// examples/rust/use_declaration/example.rs;l=6
 void function();
 
-namespace module {
+}  // namespace example_crate
+
+namespace example_crate::module {
+
 using Type CRUBIT_INTERNAL_RUST_TYPE(":: example_crate_golden :: Type") =
     ::example_crate::Type;
 }
+
+namespace example_crate {
 
 static_assert(
     sizeof(Type) == 4,
@@ -66,17 +70,22 @@ static_assert(
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_default(::example_crate::Type* __ret_ptr);
 }
-inline Type::Type() { __crubit_internal::__crubit_thunk_default(this); }
-static_assert(std::is_trivially_destructible_v<Type>);
-static_assert(std::is_trivially_move_constructible_v<Type>);
-static_assert(std::is_trivially_move_assignable_v<Type>);
+inline ::example_crate::Type::Type() {
+  __crubit_internal::__crubit_thunk_default(this);
+}
+static_assert(::std::is_trivially_destructible_v<Type>);
+static_assert(::std::is_trivially_move_constructible_v<::example_crate::Type>);
+static_assert(::std::is_trivially_move_assignable_v<::example_crate::Type>);
 inline void Type::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(Type, x));
 }
+}  // namespace example_crate
 
-namespace module {
+namespace example_crate::module {
 using ::example_crate::function;
 }
+
+namespace example_crate {
 
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_function();
@@ -84,4 +93,6 @@ extern "C" void __crubit_thunk_function();
 inline void function() { return __crubit_internal::__crubit_thunk_function(); }
 
 }  // namespace example_crate
+
+#pragma clang diagnostic pop
 #endif  // THIRD_PARTY_CRUBIT_EXAMPLES_RUST_USE_DECLARATION_EXAMPLE_CRATE_GOLDEN

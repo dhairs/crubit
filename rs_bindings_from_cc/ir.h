@@ -29,14 +29,17 @@
 #include "absl/log/check.h"
 #include "absl/status/status.h"
 #include "absl/status/statusor.h"
+#include "absl/strings/str_cat.h"
 #include "absl/strings/str_format.h"
 #include "absl/strings/string_view.h"
 #include "absl/strings/substitute.h"
 #include "common/strong_int.h"
 #include "rs_bindings_from_cc/bazel_types.h"
+#include "rs_bindings_from_cc/ir.pb.h"
 #include "clang/AST/DeclBase.h"
 #include "clang/AST/RawCommentList.h"
 #include "llvm/ADT/APSInt.h"
+#include "llvm/ADT/SmallString.h"
 #include "llvm/Support/FormatVariadic.h"
 #include "llvm/Support/JSON.h"
 #include "llvm/Support/raw_ostream.h"
@@ -55,6 +58,7 @@ class HeaderName {
   absl::string_view IncludePath() const { return name_; }
 
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::HeaderName ToFlatProto() const;
 
   template <typename H>
   friend H AbslHashValue(H h, const HeaderName& header_name) {
@@ -99,6 +103,7 @@ CRUBIT_DEFINE_STRONG_INT_TYPE(LifetimeId, int);
 // A lifetime.
 struct LifetimeName {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::LifetimeName ToFlatProto() const;
 
   // Lifetime name. Unlike syn::Lifetime, this does not include the apostrophe.
   //
@@ -114,10 +119,72 @@ inline std::ostream& operator<<(std::ostream& o, const LifetimeName& l) {
   return o << std::string(llvm::formatv("{0:2}", l.ToJson()));
 }
 
+// An error that stores its format string as well as the formatted message.
+class FormattedError final {
+ public:
+  auto operator<=>(const FormattedError&) const = default;
+
+  template <typename H>
+  friend H AbslHashValue(H h, const FormattedError& e) {
+    return H::combine(std::move(h), e.fmt_, e.message_);
+  }
+
+  // Returns a FormattedError for a static string. The string is used as both
+  // the format string and the formatted message. Intended to be used only with
+  // string literals.
+  template <size_t N>
+  static FormattedError Static(const char (&array)[N]) {
+    return FormattedError(array, array);
+  }
+
+  // Returns a FormattedError built with `absl::StrCat()`. The first argument is
+  // taken as the format string. All arguments are concatenated to form the
+  // formatted message, with an extra `": "` inserted after the first argument.
+  template <size_t N, typename... Ts>
+  static FormattedError PrefixedStrCat(const char (&prefix)[N],
+                                       Ts&&... moreArgs) {
+    return FormattedError(
+        prefix, absl::StrCat(prefix, ": ", std::forward<Ts>(moreArgs)...));
+  }
+
+  // Returns a FormattedError built with `absl::Substitute()`.
+  template <size_t N, typename... Ts>
+  static FormattedError Substitute(const char (&format)[N], Ts&&... args) {
+    return FormattedError(format,
+                          absl::Substitute(format, std::forward<Ts>(args)...));
+  }
+
+  // Extracts a format string from a status payload, if present.
+  static FormattedError FromStatus(absl::Status status);
+
+  absl::string_view fmt() const { return fmt_; }
+  absl::string_view message() const { return message_; }
+
+  llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::FormattedError ToFlatProto() const;
+
+  // Type URL for use as an `absl::Status` payload.
+  static constexpr absl::string_view kFmtPayloadTypeUrl =
+      "type.googleapis.com/crubit.FormattedError.fmt";
+
+ private:
+  FormattedError(std::string fmt, std::string message)
+      : fmt_(fmt), message_(message) {}
+
+  // The format string that produced the error message, if available. This is
+  // used as an aggregation key for error reports.
+  std::string fmt_;
+  // Explanation of why we couldn't generate bindings.
+  std::string message_;
+};
+
 // Whether a function is annotated with `CRUBIT_UNSAFE` or
 // `CRUBIT_DISABLE_UNSAFE`. `[[clang::unsafe_buffer_usage]]` is also considered
 // unsafe.
 enum class SafetyAnnotation : char { kDisableUnsafe, kUnsafe, kUnannotated };
+
+rs_bindings_from_cc::ir_proto::flat::SafetyAnnotation ToFlatProto(
+    SafetyAnnotation safety_annotation);
 
 enum class PointerTypeKind {
   kRValueRef,
@@ -126,6 +193,9 @@ enum class PointerTypeKind {
   kNonNull,
   kOwned
 };
+
+rs_bindings_from_cc::ir_proto::flat::PointerTypeKind ToFlatProto(
+    PointerTypeKind pointer_type_kind);
 
 // Calling conventions for functions that are supported by Crubit.
 //
@@ -139,8 +209,12 @@ enum class CallingConv {
   kWin64,          // __attribute__((ms_abi))
 };
 
+rs_bindings_from_cc::ir_proto::flat::CallingConv ToFlatProto(
+    CallingConv calling_conv);
+
 struct CcType {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::CcType ToFlatProto() const;
 
   struct FuncPointer {
     // When true, this is a C++ function reference that maps to a Rust function
@@ -197,13 +271,17 @@ struct CcType {
     return primitive != nullptr && primitive->spelling == "void";
   }
 
-  using Variant = std::variant<Primitive, PointerType, FuncPointer, ItemId>;
+  using Variant =
+      std::variant<Primitive, PointerType, FuncPointer, ItemId, FormattedError>;
 
   explicit CcType(Variant variant) : variant(std::move(variant)) {}
 
   Variant variant;
   bool is_const = false;
   std::string unknown_attr = "";
+  // An ordered list of lifetime variable names applied to this type. It is
+  // valid for the same name to appear multiple times.
+  std::vector<std::string> explicit_lifetimes;
 };
 
 inline std::ostream& operator<<(std::ostream& o, const CcType& type) {
@@ -233,6 +311,7 @@ class Identifier {
 
   absl::string_view Ident() const { return identifier_; }
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::Identifier ToFlatProto() const;
 
   template <typename H>
   friend H AbslHashValue(H h, const Identifier& i) {
@@ -256,8 +335,24 @@ inline std::ostream& operator<<(std::ostream& o, const Identifier& id) {
 // out-of-band.
 class IntegerConstant {
  public:
+  static absl::StatusOr<IntegerConstant> FromAPValue(
+      const llvm::APSInt& value) {
+    if (value.getSignificantBits() > 64) {
+      llvm::SmallString<128> value_str;
+      value.toString(value_str);
+      return absl::InvalidArgumentError(absl::StrCat(
+          "value is too large to fit in 64 bits: ", value_str.c_str()));
+    }
+    return IntegerConstant(value);
+  }
+
+  IntegerConstant(const IntegerConstant& other) = default;
+  IntegerConstant& operator=(const IntegerConstant& other) = default;
+  llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::IntegerConstant ToFlatProto() const;
+
+ private:
   explicit IntegerConstant(const llvm::APSInt& value) {
-    CHECK_LE(value.getSignificantBits(), 64);
     is_negative_ = value < 0;
     // TODO: double-check that the following is correct to adapt for
     // https://github.com/llvm/llvm-project/commit/0a89825a289d149195be390003424adad026067f
@@ -266,12 +361,7 @@ class IntegerConstant {
     wrapped_value_ = static_cast<uint64_t>(
         value.isSigned() ? value.getSExtValue() : value.getZExtValue());
   }
-  IntegerConstant(const IntegerConstant& other) = default;
-  IntegerConstant& operator=(const IntegerConstant& other) = default;
 
-  llvm::json::Value ToJson() const;
-
- private:
   // value < 0
   bool is_negative_;
 
@@ -288,6 +378,7 @@ class Operator {
   absl::string_view Name() const { return name_; }
 
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::Operator ToFlatProto() const;
 
  private:
   std::string name_;
@@ -307,9 +398,12 @@ inline std::ostream& operator<<(std::ostream& stream, const Operator& op) {
 //    `FuncParam{.type=Type{"i32", "int32_t"}, .identifier=Identifier("foo"))`.
 struct FuncParam {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::FuncParam ToFlatProto() const;
 
   CcType type;
   Identifier identifier;
+  std::vector<int> clang_lifetime_capture_by;
+  bool clang_lifetimebound = false;
   std::optional<std::string> unknown_attr;
 };
 
@@ -322,6 +416,9 @@ enum SpecialName {
   kConstructor,
 };
 
+rs_bindings_from_cc::ir_proto::flat::SpecialName ToFlatProto(
+    SpecialName special_name);
+
 std::ostream& operator<<(std::ostream& o, const SpecialName& special_name);
 
 // A generalized notion of identifier, or an "Unqualified Identifier" in C++
@@ -332,6 +429,8 @@ std::ostream& operator<<(std::ostream& o, const SpecialName& special_name);
 // functions.
 using UnqualifiedIdentifier = std::variant<Identifier, Operator, SpecialName>;
 llvm::json::Value toJSON(const UnqualifiedIdentifier& unqualified_identifier);
+rs_bindings_from_cc::ir_proto::flat::UnqualifiedIdentifier ToFlatProto(
+    const UnqualifiedIdentifier& unqualified_identifier);
 
 struct TranslatedUnqualifiedIdentifier {
   UnqualifiedIdentifier cc_identifier;
@@ -346,41 +445,32 @@ struct TranslatedIdentifier {
   Identifier& rs_identifier();
 };
 
-struct MemberFuncMetadata {
+// TODO(lukasza): Consider extracting a separate ConstructorMetadata struct to
+// account for the fact that `is_const` and `is_virtual` never applies to
+// constructors.
+struct InstanceMethodMetadata {
   enum ReferenceQualification : char {
     kLValue,       // void Foo() &;
     kRValue,       // void Foo() &&;
     kUnqualified,  // void Foo();
   };
-
-  // TODO(lukasza): Consider extracting a separate ConstructorMetadata struct to
-  // account for the fact that `is_const` and `is_virtual` never applies to
-  // constructors.
-  struct InstanceMethodMetadata {
-    llvm::json::Value ToJson() const;
-
-    ReferenceQualification reference = kUnqualified;
-    bool is_const = false;
-    bool is_virtual = false;
-  };
-
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::InstanceMethodMetadata ToFlatProto()
+      const;
 
-  // The type that this is a member function for.
-  ItemId record_id;
-
-  // Qualifiers for the instance method.
-  //
-  // If null, this is a static method.
-  std::optional<InstanceMethodMetadata> instance_method_metadata;
+  ReferenceQualification reference = kUnqualified;
+  bool is_const = false;
+  bool is_virtual = false;
 };
 
 // A function involved in the bindings.
 struct Func {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::Func ToFlatProto() const;
 
   UnqualifiedIdentifier cc_name;
   UnqualifiedIdentifier rs_name;
+  std::string unique_name;
   BazelLabel owning_target;
   std::optional<std::string> doc_comment;
   std::string mangled_name;
@@ -388,8 +478,8 @@ struct Func {
   std::vector<FuncParam> params;
   std::vector<LifetimeName> lifetime_params;
   bool is_inline;
-  // If null, this is not a member function.
-  std::optional<MemberFuncMetadata> member_func_metadata;
+  // If null, this is not an instance method.
+  std::optional<InstanceMethodMetadata> instance_method_metadata;
   bool is_extern_c = false;
   bool is_noreturn = false;
   bool is_variadic = false;
@@ -414,6 +504,8 @@ struct Func {
   // consuming end.
   std::optional<ItemId> adl_enclosing_record;
   bool must_bind = false;
+  // Lifetime variable names bound by this function.
+  std::vector<std::string> lifetime_inputs;
 };
 
 inline std::ostream& operator<<(std::ostream& o, const Func& f) {
@@ -427,11 +519,15 @@ enum AccessSpecifier {
   kPrivate,
 };
 
+rs_bindings_from_cc::ir_proto::flat::AccessSpecifier ToFlatProto(
+    AccessSpecifier access);
+
 std::ostream& operator<<(std::ostream& o, const AccessSpecifier& access);
 
 // A field (non-static member variable) of a record.
 struct Field {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::Field ToFlatProto() const;
 
   // Name of the field.  This may be missing for "unnamed members" - see:
   // - https://en.cppreference.com/w/c/language/struct
@@ -440,7 +536,7 @@ struct Field {
   std::optional<Identifier> cpp_identifier;
 
   std::optional<std::string> doc_comment;
-  absl::StatusOr<CcType> type;
+  CcType type;
   AccessSpecifier access;
   uint64_t offset;  // Field offset in bits.
   uint64_t size;    // Field size in bits.
@@ -448,6 +544,8 @@ struct Field {
   bool is_no_unique_address;  // True if the field is [[no_unique_address]].
   bool is_bitfield;           // True if the field is a bitfield.
   bool is_inheritable;        // True if the field is inheritable.
+  // Set if this is [[deprecated]]. If no message was given, will be "".
+  std::optional<std::string> deprecated;
 };
 
 inline std::ostream& operator<<(std::ostream& o, const Field& f) {
@@ -477,6 +575,9 @@ enum class SpecialMemberFunc : char {
   kUnavailable,
 };
 
+rs_bindings_from_cc::ir_proto::flat::SpecialMemberFunc ToFlatProto(
+    SpecialMemberFunc f);
+
 llvm::json::Value toJSON(const SpecialMemberFunc& f);
 
 inline std::ostream& operator<<(std::ostream& o, const SpecialMemberFunc& f) {
@@ -486,6 +587,7 @@ inline std::ostream& operator<<(std::ostream& o, const SpecialMemberFunc& f) {
 // A base class subobject of a struct or class.
 struct BaseClass {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::BaseClass ToFlatProto() const;
   ItemId base_record_id;
 
   // The offset the base class subobject is located at. This is always nonempty
@@ -507,39 +609,39 @@ enum RecordType {
   kClass,
 };
 
+rs_bindings_from_cc::ir_proto::flat::RecordType ToFlatProto(
+    RecordType record_type);
+
 std::ostream& operator<<(std::ostream& o, const RecordType& record_type);
 
 struct SizeAlign {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::SizeAlign ToFlatProto() const;
 
   int64_t size;
   int64_t alignment;
 };
 
-// TODO: Handle non-type template parameter.
-// A template argument for a template specialization.
 struct TemplateArg {
-  absl::StatusOr<CcType> type;
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::TemplateArg ToFlatProto() const;
+
+  using Variant = std::variant<CcType, bool, int64_t>;
+
+  Variant variant;
 };
 
 // Present on records that are bridge types.
 struct BridgeType {
   llvm::json::Value ToJson() const;
-
-  // From CRUBIT_BRIDGE_VOID_CONVERTERS.
-  struct BridgeVoidConverters {
-    std::string rust_name;
-    std::string rust_to_cpp_converter;
-    std::string cpp_to_rust_converter;
-  };
+  rs_bindings_from_cc::ir_proto::flat::BridgeType ToFlatProto() const;
 
   // From CRUBIT_BRIDGE.
   struct Bridge {
     std::string rust_name;
     std::string abi_rust;
     std::string abi_cpp;
-    std::vector<TemplateArg> template_args;
+    std::vector<CcType> template_args;
   };
 
   struct StdOptional {
@@ -557,9 +659,45 @@ struct BridgeType {
 
   struct StdString {};
 
-  std::variant<BridgeVoidConverters, Bridge, StdOptional, StdPair,
-               ProtoMessageBridge, StdString>
+  struct Callable {
+    enum BackingType {
+      kDynCallable,
+      kAnyInvocable,
+    } backing_type;
+    enum FnTrait {
+      kFn,
+      kFnMut,
+      kFnOnce,
+    } fn_trait;
+    std::shared_ptr<CcType> return_type;
+    std::vector<CcType> param_types;
+  };
+
+  std::variant<Bridge, StdOptional, StdPair, StdString, ProtoMessageBridge,
+               Callable>
       variant;
+};
+
+// A constant value (`constexpr` or `const` with constant initializer).
+struct Constant {
+  llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::Constant ToFlatProto() const;
+
+  IntegerConstant value;
+
+  Identifier cc_name;
+  Identifier rs_name;
+  std::string unique_name;
+  ItemId id;
+  BazelLabel owning_target;
+  std::string source_loc;
+  CcType type;
+  std::optional<std::string> unknown_attr;
+  std::optional<ItemId> enclosing_item_id;
+  bool must_bind = false;
+  // Set if this is [[deprecated]]. If no message was given, will be "".
+  std::optional<std::string> deprecated;
+  std::optional<std::string> doc_comment;
 };
 
 // A template specialization for a template record, containing information
@@ -567,20 +705,22 @@ struct BridgeType {
 // template arguments (like [`int`, `float`] for `ns::map<int, float>`).
 struct TemplateSpecialization {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::TemplateSpecialization ToFlatProto()
+      const;
 
   struct StdStringView {};
   struct StdWStringView {};
   struct StdVector {
-    TemplateArg element_type;
+    CcType element_type;
   };
   struct StdUniquePtr {
-    TemplateArg element_type;
+    CcType element_type;
   };
   struct AbslSpan {
-    TemplateArg element_type;
+    CcType element_type;
   };
   struct C9Co {
-    TemplateArg element_type;
+    CcType element_type;
   };
   struct NonSpecial {};
 
@@ -593,9 +733,13 @@ struct TemplateSpecialization {
 
 enum class TraitImplPolarity : int8_t { kNegative, kNone, kPositive };
 
+rs_bindings_from_cc::ir_proto::flat::TraitImplPolarity ToFlatProto(
+    TraitImplPolarity trait_impl_polarity);
+
 // The set of traits to derive on the Rust type.
 struct TraitDerives {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::TraitDerives ToFlatProto() const;
 
   TraitImplPolarity* absl_nullable Polarity(absl::string_view trait);
 
@@ -609,15 +753,25 @@ struct TraitDerives {
   std::vector<std::string> custom;
 };
 
+struct OwnedPtrConfig {
+  llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::OwnedPtrConfig ToFlatProto() const;
+
+  std::string owned_ptr_type;
+  std::string drop_impl;
+};
+
 // A record (struct, class, union).
 struct Record {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::Record ToFlatProto() const;
 
   // `rs_name` and `cc_name` are typically equal, but they may be different for
   // template instantiations (when `cc_name` is similar to `MyStruct<int>` and
   // `rs_name` is similar to "__CcTemplateInst8MyStructIiE").
   Identifier rs_name;
   Identifier cc_name;
+  std::string unique_name;
   // Mangled record names are used to 1) provide valid Rust identifiers for
   // C++ template specializations, and 2) help build unique names for virtual
   // upcast thunks.
@@ -632,7 +786,7 @@ struct Record {
   std::optional<std::string> unknown_attr;
   std::optional<std::string> doc_comment;
   std::optional<BridgeType> bridge_type;
-  std::optional<std::string> owned_ptr_type;
+  std::optional<OwnedPtrConfig> owned_ptr_config;
   std::string source_loc;
   std::vector<BaseClass> unambiguous_public_bases;
   std::vector<Field> fields;
@@ -653,18 +807,12 @@ struct Record {
   // More information: docs/struct_layout
   bool override_alignment = false;
 
-  // True if the C++ class is annotated with `CRUBIT_UNSAFE`, otherwise false.
+  // Whether the C++ type is explicitly annotated as safe or unsafe, or has no
+  // safety annotation.
   //
-  // Crubit considers some types unsafe, like pointers. If a function
-  // accepts a value of this type, it's assumed that basically anything it could
-  // possibly do with that value involves a risk of UB if that value is invalid
-  // (e.g. dangling). Any pointer-like type which has no lifetime / could be
-  // dangling/invalid should marked with is_unsafe_type. Some examples:
-  //
-  // * string_view
-  // * span
-  // * absl::FunctionRef
-  bool is_unsafe_type = false;
+  // Note that if the C++ type is not annotated, Crubit will still mark the type
+  // as unsafe if it is a union or contains unsafe public fields.
+  SafetyAnnotation safety_annotation = SafetyAnnotation::kUnannotated;
 
   // Special member functions.
   SpecialMemberFunc copy_constructor = SpecialMemberFunc::kUnavailable;
@@ -707,7 +855,7 @@ struct Record {
   bool is_aggregate = false;
 
   // It is an anonymous record with a typedef name.
-  bool is_anon_record_with_typedef = false;
+  bool is_canonical_alias = false;
 
   // True when this record is created from an explicit class template
   // instantiation definition (which is also what cc_template!{} macro results
@@ -718,13 +866,27 @@ struct Record {
   std::optional<ItemId> enclosing_item_id;
   bool must_bind = false;
   bool overloads_operator_delete = false;
+  bool detected_formatter = false;
+
+  // Whether this type is annotated as thread-safe (CRUBIT_THREAD_SAFE).
+  // Thread-safe types implement Send+Sync and wrap their internals in
+  // UnsafeCell, allowing non-const C++ methods to be called via &self.
+  bool is_thread_safe = false;
+
+  // Lifetime variable names bound by this record.
+  std::vector<std::string> lifetime_inputs;
+
+  // Set if this is [[deprecated]]. If no message was given, will be "".
+  std::optional<std::string> deprecated;
 };
 
 // A forward-declared record (e.g. `struct Foo;`)
 struct IncompleteRecord {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::IncompleteRecord ToFlatProto() const;
   Identifier cc_name;
   Identifier rs_name;
+  std::string unique_name;
   ItemId id;
   BazelLabel owning_target;
   std::optional<std::string> unknown_attr;
@@ -735,17 +897,23 @@ struct IncompleteRecord {
 
 struct Enumerator {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::Enumerator ToFlatProto() const;
 
   Identifier identifier;
   IntegerConstant value;
   std::optional<std::string> unknown_attr;
+  // Set if this is [[deprecated]]. If no message was given, will be "".
+  std::optional<std::string> deprecated;
+  std::optional<std::string> doc_comment;
 };
 
 struct Enum {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::Enum ToFlatProto() const;
 
   Identifier cc_name;
   Identifier rs_name;
+  std::string unique_name;
   ItemId id;
   BazelLabel owning_target;
   std::string source_loc;
@@ -754,13 +922,21 @@ struct Enum {
   std::optional<std::string> unknown_attr;
   std::optional<ItemId> enclosing_item_id;
   bool must_bind = false;
+  bool detected_formatter = false;
+  // Set if this is [[nodiscard]]. If no message was given, will be "".
+  std::optional<std::string> nodiscard;
+  // Set if this is [[deprecated]]. If no message was given, will be "".
+  std::optional<std::string> deprecated;
+  std::optional<std::string> doc_comment;
 };
 
 struct GlobalVar {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::GlobalVar ToFlatProto() const;
 
   Identifier cc_name;
   Identifier rs_name;
+  std::string unique_name;
   ItemId id;
   BazelLabel owning_target;
   std::string source_loc;
@@ -769,6 +945,9 @@ struct GlobalVar {
   std::optional<std::string> unknown_attr;
   std::optional<ItemId> enclosing_item_id;
   bool must_bind = false;
+  // Set if this is [[deprecated]]. If no message was given, will be "".
+  std::optional<std::string> deprecated;
+  std::optional<std::string> doc_comment;
 };
 
 inline std::ostream& operator<<(std::ostream& o, const Record& r) {
@@ -778,9 +957,11 @@ inline std::ostream& operator<<(std::ostream& o, const Record& r) {
 // A type alias (defined either using `typedef` or `using`).
 struct TypeAlias {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::TypeAlias ToFlatProto() const;
 
   Identifier cc_name;
   Identifier rs_name;
+  std::string unique_name;
   ItemId id;
   BazelLabel owning_target;
   std::optional<std::string> doc_comment;
@@ -789,69 +970,13 @@ struct TypeAlias {
   std::string source_loc;
   std::optional<ItemId> enclosing_item_id;
   bool must_bind = false;
+  // Set if this is [[deprecated]]. If no message was given, will be "".
+  std::optional<std::string> deprecated;
 };
 
 inline std::ostream& operator<<(std::ostream& o, const TypeAlias& t) {
   return o << std::string(llvm::formatv("{0:2}", t.ToJson()));
 }
-
-// An error that stores its format string as well as the formatted message.
-class FormattedError final {
- public:
-  auto operator<=>(const FormattedError&) const = default;
-
-  template <typename H>
-  friend H AbslHashValue(H h, const FormattedError& e) {
-    return H::combine(std::move(h), e.fmt_, e.message_);
-  }
-
-  // Returns a FormattedError for a static string. The string is used as both
-  // the format string and the formatted message. Intended to be used only with
-  // string literals.
-  template <size_t N>
-  static FormattedError Static(const char (&array)[N]) {
-    return FormattedError(array, array);
-  }
-
-  // Returns a FormattedError built with `absl::StrCat()`. The first argument is
-  // taken as the format string. All arguments are concatenated to form the
-  // formatted message, with an extra `": "` inserted after the first argument.
-  template <size_t N, typename... Ts>
-  static FormattedError PrefixedStrCat(const char (&prefix)[N],
-                                       Ts&&... moreArgs) {
-    return FormattedError(
-        prefix, absl::StrCat(prefix, ": ", std::forward<Ts>(moreArgs)...));
-  }
-
-  // Returns a FormattedError built with `absl::Substitute()`.
-  template <size_t N, typename... Ts>
-  static FormattedError Substitute(const char (&format)[N], Ts&&... args) {
-    return FormattedError(format,
-                          absl::Substitute(format, std::forward<Ts>(args)...));
-  }
-
-  // Extracts a format string from a status payload, if present.
-  static FormattedError FromStatus(absl::Status status);
-
-  absl::string_view fmt() const { return fmt_; }
-  absl::string_view message() const { return message_; }
-
-  llvm::json::Value ToJson() const;
-
-  // Type URL for use as an `absl::Status` payload.
-  static constexpr absl::string_view kFmtPayloadTypeUrl =
-      "type.googleapis.com/crubit.FormattedError.fmt";
-
- private:
-  FormattedError(std::string fmt, std::string message)
-      : fmt_(fmt), message_(message) {}
-
-  // The format string that produced the error message, if available. This is
-  // used as an aggregation key for error reports.
-  std::string fmt_;
-  // Explanation of why we couldn't generate bindings.
-  std::string message_;
-};
 
 // A placeholder for an item that we can't generate bindings for (yet)
 struct UnsupportedItem {
@@ -876,15 +1001,19 @@ struct UnsupportedItem {
     std::optional<ItemId> enclosing_item_id;
 
     llvm::json::Value ToJson() const;
+    rs_bindings_from_cc::ir_proto::flat::UnsupportedItem::Path ToFlatProto()
+        const;
   };
 
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::UnsupportedItem ToFlatProto() const;
 
   // TODO(forster): We could show the original declaration in the generated
   // message (potentially also for successfully imported items).
 
   // Qualified name of the item for which we couldn't generate bindings
   std::string name;
+  std::string unique_name;
 
   // For unsupported items, we may generate markers in the Rust bindings to
   // indicate that the item is not supported. This function returns the kind of
@@ -909,6 +1038,7 @@ inline std::ostream& operator<<(std::ostream& o, const UnsupportedItem& r) {
 
 struct Comment {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::Comment ToFlatProto() const;
 
   std::string text;
   ItemId id;
@@ -921,9 +1051,11 @@ inline std::ostream& operator<<(std::ostream& o, const Comment& r) {
 
 struct Namespace {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::Namespace ToFlatProto() const;
 
   Identifier cc_name;
   Identifier rs_name;
+  std::string unique_name;
   ItemId id;
   ItemId canonical_namespace_id;
   std::optional<std::string> unknown_attr;
@@ -932,6 +1064,9 @@ struct Namespace {
   std::optional<ItemId> enclosing_item_id;
   bool is_inline = false;
   bool must_bind = false;
+  // Set if this is [[deprecated]]. If no message was given, will be "".
+  std::optional<std::string> deprecated;
+  std::optional<std::string> doc_comment;
 };
 
 inline std::ostream& operator<<(std::ostream& o, const Namespace& n) {
@@ -943,6 +1078,7 @@ inline std::ostream& operator<<(std::ostream& o, const Namespace& n) {
 // This is used to support extra Rust source files.
 struct UseMod {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::UseMod ToFlatProto() const;
 
   std::string path;
   Identifier mod_name;
@@ -958,12 +1094,14 @@ inline std::ostream& operator<<(std::ostream& o, const UseMod& use_mod) {
 // rust type.
 struct ExistingRustType {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::ExistingRustType ToFlatProto() const;
 
   std::string rs_name;
   std::string cc_name;
+  std::string unique_name;
 
-  // The generic/template type parameters to the C++/Rust type.
-  std::vector<CcType> type_parameters;
+  // The generic/template parameters to the C++/Rust type.
+  std::vector<TemplateArg> template_args;
 
   BazelLabel owning_target;
   // Size and alignment, if known.
@@ -984,6 +1122,7 @@ inline std::ostream& operator<<(std::ostream& o,
 // declarations of a single C++ library.
 struct IR {
   llvm::json::Value ToJson() const;
+  rs_bindings_from_cc::ir_proto::flat::IRProto ToFlatProto() const;
 
   template <typename T>
   std::vector<const T*> get_items_if() const {
@@ -1016,9 +1155,9 @@ struct IR {
 
   BazelLabel current_target;
 
-  using Item = std::variant<Func, Record, IncompleteRecord, Enum, TypeAlias,
-                            GlobalVar, UnsupportedItem, Comment, Namespace,
-                            UseMod, ExistingRustType>;
+  using Item = std::variant<Func, Record, IncompleteRecord, Enum, Constant,
+                            TypeAlias, GlobalVar, UnsupportedItem, Comment,
+                            Namespace, UseMod, ExistingRustType>;
   std::vector<Item> items;
   absl::flat_hash_map<BazelLabel, std::vector<ItemId>> top_level_item_ids;
   // Empty string signals that the bindings should be generated in the crate
@@ -1038,6 +1177,8 @@ struct IR {
   absl::flat_hash_map<BazelLabel, absl::flat_hash_set<std::string>>
       crubit_features;
 };
+
+rs_bindings_from_cc::ir_proto::flat::Item ToFlatProto(const IR::Item& item);
 
 void SetMustBindItem(IR::Item& item);
 

@@ -2,48 +2,52 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
+extern crate rustc_abi;
+extern crate rustc_middle;
 extern crate rustc_span;
 
-use crate::FineGrainedFeature;
-use arc_anyhow::Result;
+use crate::{BindingsGenerator, FineGrainedFeature};
+use arc_anyhow::{anyhow, Result};
 use code_gen_utils::CcInclude;
 use crubit_abi_type::CrubitAbiType;
 use error_report::bail;
 use itertools::Itertools;
 use proc_macro2::TokenStream;
+use rustc_middle::ty::Ty;
 use rustc_span::def_id::DefId;
 use rustc_span::Symbol;
 use std::cmp::Ordering;
 use std::collections::BTreeSet;
 use std::collections::HashSet;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::ops::{Add, AddAssign};
 
 /// A CrubitAbiType that has C++ prerequisites.
 /// This type just serves as a named pair for CrubitAbiType and CcPrerequisites, and is useful
-/// for when we build up a CrubitAbiType where some of the inner types (e.g. std::string_view)
+/// for when we build up a CrubitAbiType where some of the inner types (e.g. ::std::string_view)
 /// might have C++ prerequisites (e.g. <string>) that need to be included to work.
 #[derive(Clone)]
-pub struct CrubitAbiTypeWithCcPrereqs {
+pub struct CrubitAbiTypeWithCcPrereqs<'tcx> {
     pub crubit_abi_type: CrubitAbiType,
-    pub prereqs: CcPrerequisites,
+    pub prereqs: CcPrerequisites<'tcx>,
 }
 
-impl CrubitAbiTypeWithCcPrereqs {
+impl<'tcx> CrubitAbiTypeWithCcPrereqs<'tcx> {
     /// Extracts the CrubitAbiType and adds the C++ prerequisites to the given `prereqs`.
-    pub fn crubit_abi_type(self, prereqs: &mut CcPrerequisites) -> CrubitAbiType {
+    pub fn crubit_abi_type(self, prereqs: &mut CcPrerequisites<'tcx>) -> CrubitAbiType {
         *prereqs += self.prereqs;
         self.crubit_abi_type
     }
 }
-impl From<CrubitAbiType> for CrubitAbiTypeWithCcPrereqs {
+impl<'tcx> From<CrubitAbiType> for CrubitAbiTypeWithCcPrereqs<'tcx> {
     fn from(crubit_abi_type: CrubitAbiType) -> Self {
         Self { crubit_abi_type, prereqs: Default::default() }
     }
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct CcPrerequisites {
+pub struct CcPrerequisites<'tcx> {
     /// Set of `#include`s that a `CcSnippet` depends on.  For example if
     /// `CcSnippet::tokens` expands to `std::int32_t`, then `includes`
     /// need to cover the `#include <cstdint>`.
@@ -69,15 +73,180 @@ pub struct CcPrerequisites {
 
     /// Set of Crubit feature flags required for the CcSnippet to be valid.
     pub required_features: flagset::FlagSet<FineGrainedFeature>,
+
+    // Set of template specializations our snippet requires.
+    pub template_specializations: HashSet<TemplateSpecialization<'tcx>>,
 }
 
-impl CcPrerequisites {
+#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[allow(clippy::large_enum_variant)]
+pub enum TemplateSpecialization<'tcx> {
+    RsStd(RsStdTemplateSpecialization<'tcx>),
+    TraitImpl(TraitImplTemplateSpecialization),
+}
+
+#[derive(Clone, Debug)]
+pub struct TraitImplTemplateSpecialization {
+    pub self_ty_cc_name: TokenStream,
+    pub trait_impl: DefId,
+}
+impl PartialEq for TraitImplTemplateSpecialization {
+    fn eq(&self, other: &Self) -> bool {
+        self.trait_impl == other.trait_impl
+    }
+}
+impl Eq for TraitImplTemplateSpecialization {}
+impl Hash for TraitImplTemplateSpecialization {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.trait_impl.hash(state);
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct RsStdTemplateSpecialization<'tcx> {
+    pub layout: rustc_abi::Layout<'tcx>,
+    pub self_ty_rs: Ty<'tcx>,
+    pub self_ty_cc: CcSnippet<'tcx>,
+    pub args: RsStdSpecializationArgs<'tcx>,
+}
+
+impl<'tcx> RsStdTemplateSpecialization<'tcx> {
+    pub fn is_option(&self) -> bool {
+        matches!(
+            self.args,
+            RsStdSpecializationArgs::Enum(RsStdEnumSpecialization {
+                kind: EnumSpecializationKind::Option { .. },
+                ..
+            })
+        )
+    }
+    pub fn is_result(&self) -> bool {
+        matches!(
+            self.args,
+            RsStdSpecializationArgs::Enum(RsStdEnumSpecialization {
+                kind: EnumSpecializationKind::Result { .. },
+                ..
+            })
+        )
+    }
+
+    pub fn support_header(&self, db: &BindingsGenerator<'tcx>) -> CcInclude {
+        match &self.args {
+            RsStdSpecializationArgs::Enum(RsStdEnumSpecialization { kind, .. }) => match kind {
+                EnumSpecializationKind::Option { .. } => db.support_header("rs_std/option.h"),
+                EnumSpecializationKind::Result { .. } => db.support_header("rs_std/result.h"),
+            },
+            RsStdSpecializationArgs::Tuple(_) => db.support_header("rs_std/tuple.h"),
+        }
+    }
+}
+
+impl PartialEq for RsStdTemplateSpecialization<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.self_ty_rs == other.self_ty_rs
+    }
+}
+
+impl Eq for RsStdTemplateSpecialization<'_> {}
+
+impl Hash for RsStdTemplateSpecialization<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.self_ty_rs.hash(state);
+    }
+}
+
+#[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
+pub enum RsStdSpecializationArgs<'tcx> {
+    Enum(RsStdEnumSpecialization<'tcx>),
+    Tuple(Vec<FormattedTy<'tcx>>),
+}
+
+#[derive(Clone, Debug)]
+pub struct RsStdEnumSpecialization<'tcx> {
+    pub tag_type_rs: Ty<'tcx>,
+    pub tag_type_cc: CcSnippet<'tcx>,
+    pub kind: EnumSpecializationKind<'tcx>,
+}
+
+#[derive(Clone, Debug)]
+#[allow(clippy::large_enum_variant)]
+pub enum EnumSpecializationKind<'tcx> {
+    Option { some_ty: FormattedTy<'tcx> },
+    Result { ok_ty: FormattedTy<'tcx>, err_ty: FormattedTy<'tcx> },
+}
+
+impl PartialEq for EnumSpecializationKind<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (
+                EnumSpecializationKind::Option { some_ty: self_some_ty },
+                EnumSpecializationKind::Option { some_ty: other_some_ty },
+            ) => self_some_ty == other_some_ty,
+            (
+                EnumSpecializationKind::Result { ok_ty: self_ok_ty, err_ty: self_err_ty },
+                EnumSpecializationKind::Result { ok_ty: other_ok_ty, err_ty: other_err_ty },
+            ) => self_ok_ty == other_ok_ty && self_err_ty == other_err_ty,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for EnumSpecializationKind<'_> {}
+
+impl Hash for EnumSpecializationKind<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        match self {
+            EnumSpecializationKind::Option { some_ty } => {
+                state.write_u8(0);
+                some_ty.hash(state);
+            }
+            EnumSpecializationKind::Result { ok_ty, err_ty } => {
+                state.write_u8(1);
+                ok_ty.hash(state);
+                err_ty.hash(state);
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct FormattedTy<'tcx> {
+    pub ty: Ty<'tcx>,
+    pub for_cc: CcSnippet<'tcx>,
+    pub for_rs: TokenStream,
+}
+impl<'tcx> FormattedTy<'tcx> {
+    pub fn try_from_ty(
+        ty: Ty<'tcx>,
+        location: crate::TypeLocation,
+        db: &BindingsGenerator<'tcx>,
+    ) -> Result<Self> {
+        let for_cc = db.format_ty_for_cc(ty, location)?;
+        let for_rs = db.format_ty_for_rs(ty)?;
+        Ok(Self { ty, for_cc, for_rs })
+    }
+}
+impl PartialEq for FormattedTy<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.ty == other.ty
+    }
+}
+impl Eq for FormattedTy<'_> {}
+impl Hash for FormattedTy<'_> {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.ty.hash(state);
+    }
+}
+
+impl<'tcx> CcPrerequisites<'tcx> {
     pub fn is_empty(&self) -> bool {
-        let Self { includes, defs, fwd_decls, required_features } = self;
+        let Self { includes, defs, fwd_decls, required_features, template_specializations } = self;
         includes.is_empty()
             && defs.is_empty()
             && fwd_decls.is_empty()
             && required_features.is_empty()
+            && template_specializations.is_empty()
     }
 
     /// Weakens all dependencies to only require a forward declaration. Example
@@ -89,12 +258,54 @@ impl CcPrerequisites {
     pub fn move_defs_to_fwd_decls(&mut self) {
         self.fwd_decls.extend(std::mem::take(&mut self.defs))
     }
+
+    /// Move any definitions that appear in `ty` to the forward declarations of `prereqs`.
+    pub fn forward_declare_type(&mut self, ty: Ty<'tcx>) {
+        let mut adts = HashSet::new();
+        for arg in ty.walk() {
+            let Some(adt) = arg.as_type().and_then(|ty| ty.ty_adt_def()) else {
+                continue;
+            };
+            adts.insert(adt.did());
+        }
+
+        self.fwd_decls.extend(self.defs.intersection(&adts));
+        self.defs = self.defs.difference(&adts).cloned().collect();
+    }
+
+    /// Include the definition as a prequisite. For a local definition, this is adding it to the
+    ///`defs` set. For a foreign definition, an include path for the foreign crate must be available
+    /// or this will fail.
+    pub fn depend_on_def(&mut self, db: &BindingsGenerator<'tcx>, def_id: DefId) -> Result<()> {
+        let tcx = db.tcx();
+        let canonical_name = db.symbol_canonical_name(def_id).ok_or_else(|| {
+            anyhow!("Failed to generate canonical name for `{}`", tcx.def_path_str(def_id))
+        })?;
+        // Definition with a local canonical name can be immediately added to the `defs` set.
+        if canonical_name.krate_num == db.source_crate_num() {
+            self.defs.insert(def_id);
+            return Ok(());
+        }
+        let other_crate_name = canonical_name.krate;
+        let crate_name_to_include_paths = db.crate_name_to_include_paths();
+        let includes =
+            crate_name_to_include_paths.get(other_crate_name.as_str()).ok_or_else(|| {
+                anyhow!(
+                    "Definition `{}` comes from the `{other_crate_name}` crate, \
+                     but no `--crate-header` was specified for this crate",
+                    tcx.def_path_str(def_id)
+                )
+            })?;
+        self.includes.extend(includes.iter().cloned());
+        Ok(())
+    }
 }
 
-impl AddAssign for CcPrerequisites {
+impl<'tcx> AddAssign for CcPrerequisites<'tcx> {
     #[allow(clippy::suspicious_op_assign_impl)]
     fn add_assign(&mut self, rhs: Self) {
-        let Self { mut includes, defs, fwd_decls, required_features } = rhs;
+        let Self { mut includes, defs, fwd_decls, required_features, template_specializations } =
+            rhs;
 
         // `BTreeSet::append` is used because it _seems_ to be more efficient than
         // calling `extend`.  This is because `extend` takes an iterator
@@ -108,10 +319,11 @@ impl AddAssign for CcPrerequisites {
         self.defs.extend(defs);
         self.fwd_decls.extend(fwd_decls);
         self.required_features |= required_features;
+        self.template_specializations.extend(template_specializations);
     }
 }
 
-impl Add for CcPrerequisites {
+impl<'tcx> Add for CcPrerequisites<'tcx> {
     type Output = Self;
 
     fn add(mut self, rhs: Self) -> Self {
@@ -121,13 +333,13 @@ impl Add for CcPrerequisites {
 }
 
 #[derive(Clone, Default)]
-pub struct CcSnippet {
+pub struct CcSnippet<'tcx> {
     pub tokens: TokenStream,
-    pub prereqs: CcPrerequisites,
+    pub prereqs: CcPrerequisites<'tcx>,
 }
 // Override debug to use the Display impl for tokens, as the Debug impl for TokenStream is rarely
 // useful (it shows the structure of the tokens, not the actual text).
-impl fmt::Debug for CcSnippet {
+impl<'tcx> fmt::Debug for CcSnippet<'tcx> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> Result<(), fmt::Error> {
         f.debug_struct("CcSnippet")
             .field("tokens", &self.tokens.to_string())
@@ -136,10 +348,10 @@ impl fmt::Debug for CcSnippet {
     }
 }
 
-impl CcSnippet {
+impl<'tcx> CcSnippet<'tcx> {
     /// Consumes `self` and returns its `tokens`, while preserving
     /// its `prereqs` into `prereqs_accumulator`.
-    pub fn into_tokens(self, prereqs_accumulator: &mut CcPrerequisites) -> TokenStream {
+    pub fn into_tokens(self, prereqs_accumulator: &mut CcPrerequisites<'tcx>) -> TokenStream {
         let Self { tokens, prereqs } = self;
         *prereqs_accumulator += prereqs;
         tokens
@@ -183,12 +395,12 @@ impl CcSnippet {
         }
     }
 
-    pub fn into_main_api(self) -> ApiSnippets {
+    pub fn into_main_api(self) -> ApiSnippets<'tcx> {
         ApiSnippets { main_api: self, ..Default::default() }
     }
 }
 
-impl AddAssign for CcSnippet {
+impl<'tcx> AddAssign for CcSnippet<'tcx> {
     fn add_assign(&mut self, rhs: Self) {
         self.tokens.extend(rhs.into_tokens(&mut self.prereqs));
     }
@@ -215,7 +427,9 @@ pub struct ExternCDecl {
 
 impl Ord for ExternCDecl {
     fn cmp(&self, other: &Self) -> Ordering {
-        self.symbol.cmp(&other.symbol)
+        // Use lexicographical ordering of the function names, so that it is consistent across
+        // compilations. Symbol will change between compilations.
+        self.symbol.as_str().cmp(other.symbol.as_str())
     }
 }
 
@@ -288,16 +502,16 @@ impl AddAssign for RsSnippet {
 }
 
 #[derive(Clone, Debug, Default)]
-pub struct ApiSnippets {
+pub struct ApiSnippets<'tcx> {
     /// Main API - for example:
     /// - A C++ declaration of a function (with a doc comment),
     /// - A C++ definition of a struct (with a doc comment).
-    pub main_api: CcSnippet,
+    pub main_api: CcSnippet<'tcx>,
 
     /// C++ implementation details - for example:
     /// - A C++ declaration of an `extern "C"` thunk,
     /// - C++ `static_assert`s about struct size, aligment, and field offsets.
-    pub cc_details: CcSnippet,
+    pub cc_details: CcSnippet<'tcx>,
 
     /// Rust implementation details - for example:
     /// - A Rust implementation of an `extern "C"` thunk,
@@ -305,7 +519,7 @@ pub struct ApiSnippets {
     pub rs_details: RsSnippet,
 }
 
-impl ApiSnippets {
+impl<'tcx> ApiSnippets<'tcx> {
     /// Resolves the feature requirements. If the required features of `self`
     /// are in `crubit_features`, then this returns a version of `self` with
     /// the feature requirements removed. Otherwise, this returns an error.
@@ -319,10 +533,30 @@ impl ApiSnippets {
             rs_details: self.rs_details,
         })
     }
+
+    pub fn comment_only(comment: &str) -> Self {
+        ApiSnippets {
+            main_api: CcSnippet::new(quote::quote! {
+                __COMMENT__ #comment
+            }),
+            cc_details: CcSnippet::new(quote::quote! {}),
+            ..Default::default()
+        }
+    }
+
+    pub fn prepend_main_api(mut self, main_api: CcSnippet<'tcx>) -> Self {
+        let preamble = main_api.into_tokens(&mut self.main_api.prereqs);
+        let main = self.main_api.tokens;
+        self.main_api.tokens = quote::quote! {
+            #preamble
+            #main
+        };
+        self
+    }
 }
 
-impl FromIterator<ApiSnippets> for ApiSnippets {
-    fn from_iter<I: IntoIterator<Item = ApiSnippets>>(iter: I) -> Self {
+impl<'tcx> FromIterator<ApiSnippets<'tcx>> for ApiSnippets<'tcx> {
+    fn from_iter<I: IntoIterator<Item = ApiSnippets<'tcx>>>(iter: I) -> Self {
         let mut result = ApiSnippets::default();
         for ApiSnippets { main_api, cc_details, rs_details } in iter.into_iter() {
             result.main_api += main_api;

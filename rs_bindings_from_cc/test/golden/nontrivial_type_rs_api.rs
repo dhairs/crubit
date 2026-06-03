@@ -6,18 +6,13 @@
 // //rs_bindings_from_cc/test/golden:nontrivial_type_cc
 
 #![rustfmt::skip]
-#![feature(
-    allocator_api,
-    cfg_sanitize,
-    custom_inner_attributes,
-    impl_trait_in_assoc_type,
-    negative_impls
-)]
+#![feature(custom_inner_attributes, impl_trait_in_assoc_type, negative_impls)]
 #![allow(stable_features)]
-#![no_std]
 #![allow(improper_ctypes)]
 #![allow(nonstandard_style)]
-#![allow(dead_code, unused_mut)]
+#![deny(rust_2024_compatibility)]
+#![allow(unused)]
+#![allow(deprecated)]
 #![deny(warnings)]
 
 /// Nontrivial due to (declared, but not yet defined) user-specified constructor
@@ -29,8 +24,8 @@
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=Nontrivial
 pub struct Nontrivial {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 0],
-    pub field: ::core::ffi::c_int,
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 0],
+    pub field: ::ffi_11::c_int,
 }
 impl !Send for Nontrivial {}
 impl !Sync for Nontrivial {}
@@ -41,72 +36,74 @@ unsafe impl ::cxx::ExternType for Nontrivial {
 impl Nontrivial {
     #[inline(always)]
     pub fn Unqualified<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        unsafe { crate::detail::__rust_thunk___ZN10Nontrivial11UnqualifiedEv(self) }
+        unsafe { self::nontrivial::Unqualified(self) }
     }
     #[inline(always)]
     pub fn ConstQualified<'a>(&'a self) {
-        unsafe { crate::detail::__rust_thunk___ZNK10Nontrivial14ConstQualifiedEv(self) }
+        unsafe { self::nontrivial::ConstQualified(self) }
     }
     #[inline(always)]
     pub fn LvalueRefQualified<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        unsafe { crate::detail::__rust_thunk___ZNR10Nontrivial18LvalueRefQualifiedEv(self) }
+        unsafe { self::nontrivial::LvalueRefQualified(self) }
     }
     #[inline(always)]
     pub fn ConstLvalueRefQualified<'a>(&'a self) {
-        unsafe { crate::detail::__rust_thunk___ZNKR10Nontrivial23ConstLvalueRefQualifiedEv(self) }
+        unsafe { self::nontrivial::ConstLvalueRefQualified(self) }
     }
 }
 
 impl ::ctor::CtorNew<()> for Nontrivial {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
-                crate::detail::__rust_thunk___ZN10NontrivialC1Ev(dest as *mut ::core::ffi::c_void);
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
+                crate::detail::__rust_thunk___ZN10NontrivialC1Ev(
+                    __crubit_dest as *mut ::core::ffi::c_void,
+                );
             })
         }
     }
 }
 
-impl ::ctor::CtorNew<::core::ffi::c_int> for Nontrivial {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+impl ::ctor::CtorNew<::ffi_11::c_int> for Nontrivial {
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
-    fn ctor_new(args: ::core::ffi::c_int) -> Self::CtorType {
+    fn ctor_new(args: ::ffi_11::c_int) -> Self::CtorType {
         let mut field = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN10NontrivialC1Ei(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                     field,
                 );
             })
         }
     }
 }
-impl ::ctor::CtorNew<(::core::ffi::c_int,)> for Nontrivial {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+impl ::ctor::CtorNew<(::ffi_11::c_int,)> for Nontrivial {
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
-    fn ctor_new(args: (::core::ffi::c_int,)) -> Self::CtorType {
+    fn ctor_new(args: (::ffi_11::c_int,)) -> Self::CtorType {
         let (arg,) = args;
-        <Self as ::ctor::CtorNew<::core::ffi::c_int>>::ctor_new(arg)
+        <Self as ::ctor::CtorNew<::ffi_11::c_int>>::ctor_new(arg)
     }
 }
 
-impl ::ctor::CtorNew<(::core::ffi::c_int, ::core::ffi::c_int)> for Nontrivial {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+impl ::ctor::CtorNew<(::ffi_11::c_int, ::ffi_11::c_int)> for Nontrivial {
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
-    fn ctor_new(args: (::core::ffi::c_int, ::core::ffi::c_int)) -> Self::CtorType {
+    fn ctor_new(args: (::ffi_11::c_int, ::ffi_11::c_int)) -> Self::CtorType {
         let (mut field, mut unused) = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN10NontrivialC1Eii(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                     field,
                     unused,
                 );
@@ -115,35 +112,37 @@ impl ::ctor::CtorNew<(::core::ffi::c_int, ::core::ffi::c_int)> for Nontrivial {
     }
 }
 
-// Error while generating bindings for constructor 'Nontrivial::Nontrivial':
-// Can't generate bindings for Nontrivial::Nontrivial, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::Nontrivial (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `Nontrivial::Nontrivial` could not be bound
+//   Unsupported parameter type `const Nontrivial& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'Nontrivial::Nontrivial':
-// Can't generate bindings for Nontrivial::Nontrivial, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::Nontrivial (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `Nontrivial::Nontrivial` could not be bound
+//   Unsupported parameter type `Nontrivial&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Nontrivial::operator=':
-// Can't generate bindings for Nontrivial::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `Nontrivial::operator=` could not be bound
+//   Unsupported parameter type `const Nontrivial& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `Nontrivial&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Nontrivial::operator=':
-// Can't generate bindings for Nontrivial::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `Nontrivial::operator=` could not be bound
+//   Unsupported parameter type `Nontrivial&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `Nontrivial&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Nontrivial::operator=':
-// Can't generate bindings for Nontrivial::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::operator= (return type: references are not supported)
+// error: function `Nontrivial::operator=` could not be bound
+//   Unsupported return type `Nontrivial&`:
+//     references are not yet supported
 
 impl ::ctor::Assign<f32> for Nontrivial {
     #[inline(always)]
     fn assign<'a>(self: ::core::pin::Pin<&'a mut Self>, __param_0: f32) {
         unsafe {
-            let _ = ::ctor::emplace!(::ctor::FnCtor::new(move |dest: *mut Self| {
+            let _ = ::ctor::emplace!(::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN10NontrivialaSEf(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                     self,
                     __param_0,
                 );
@@ -155,35 +154,55 @@ impl ::ctor::Assign<f32> for Nontrivial {
 impl ::ctor::PinnedDrop for Nontrivial {
     #[inline(always)]
     unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        crate::detail::__rust_thunk___ZN10NontrivialD1Ev(self)
+        unsafe { crate::detail::__rust_thunk___ZN10NontrivialD1Ev(self) }
     }
 }
 
-// Error while generating bindings for function 'Nontrivial::RvalueRefQualified':
-// Can't generate bindings for Nontrivial::RvalueRefQualified, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::RvalueRefQualified (the type of __this (parameter #0): references are not supported)
+// error: function `Nontrivial::RvalueRefQualified` could not be bound
+//   Unsupported parameter type `Nontrivial&& __this`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Nontrivial::ConstRvalueRefQualified':
-// Can't generate bindings for Nontrivial::ConstRvalueRefQualified, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::ConstRvalueRefQualified (the type of __this (parameter #0): references are not supported)
+// error: function `Nontrivial::ConstRvalueRefQualified` could not be bound
+//   Unsupported parameter type `const Nontrivial&& __this`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Nontrivial::operator==':
-// Can't generate bindings for Nontrivial::operator==, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::operator== (the type of rhs (parameter #1): references are not supported)
+// error: function `Nontrivial::operator==` could not be bound
+//   Unsupported parameter type `const Nontrivial& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Nontrivial::operator!=':
-// operator== is present, skipping bindings for operator!=
+// error: function `Nontrivial::operator!=` could not be bound
+//   Unsupported parameter type `const Nontrivial& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Nontrivial::operator<':
-// Can't generate bindings for Nontrivial::operator<, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::operator< (the type of rhs (parameter #1): references are not supported)
+// error: function `Nontrivial::operator<` could not be bound
+//   Unsupported parameter type `const Nontrivial& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Nontrivial::operator+':
-// Can't generate bindings for Nontrivial::operator+, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for Nontrivial::operator+ (the type of rhs (parameter #1): references are not supported)
+// error: function `Nontrivial::operator+` could not be bound
+//   Unsupported parameter type `const Nontrivial& rhs`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'Nontrivial::operator+=':
-// Compound assignment operators are not supported for non-Unpin types, found ::core::pin::Pin<&'a mut crate::Nontrivial>
+// error: function `Nontrivial::operator+=` could not be bound
+//   Compound assignment operators are not supported for non-Unpin types, found ::core::pin::Pin<&'a mut crate::Nontrivial>
+
+pub mod nontrivial {
+    #[inline(always)]
+    pub(crate) fn Unqualified<'a>(__this: ::core::pin::Pin<&'a mut crate::Nontrivial>) {
+        unsafe { crate::detail::__rust_thunk___ZN10Nontrivial11UnqualifiedEv(__this) }
+    }
+    #[inline(always)]
+    pub(crate) fn ConstQualified<'a>(__this: &'a crate::Nontrivial) {
+        unsafe { crate::detail::__rust_thunk___ZNK10Nontrivial14ConstQualifiedEv(__this) }
+    }
+    #[inline(always)]
+    pub(crate) fn LvalueRefQualified<'a>(__this: ::core::pin::Pin<&'a mut crate::Nontrivial>) {
+        unsafe { crate::detail::__rust_thunk___ZNR10Nontrivial18LvalueRefQualifiedEv(__this) }
+    }
+    #[inline(always)]
+    pub(crate) fn ConstLvalueRefQualified<'a>(__this: &'a crate::Nontrivial) {
+        unsafe { crate::detail::__rust_thunk___ZNKR10Nontrivial23ConstLvalueRefQualifiedEv(__this) }
+    }
+}
 
 /// Nontrivial due to (inline) user-specified constructor and destructor.
 ///
@@ -193,8 +212,8 @@ impl ::ctor::PinnedDrop for Nontrivial {
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=NontrivialInline
 pub struct NontrivialInline {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 0],
-    pub field: ::core::ffi::c_int,
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 0],
+    pub field: ::ffi_11::c_int,
 }
 impl !Send for NontrivialInline {}
 impl !Sync for NontrivialInline {}
@@ -205,62 +224,62 @@ unsafe impl ::cxx::ExternType for NontrivialInline {
 impl NontrivialInline {
     #[inline(always)]
     pub fn MemberFunction<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        unsafe { crate::detail::__rust_thunk___ZN16NontrivialInline14MemberFunctionEv(self) }
+        unsafe { self::nontrivial_inline::MemberFunction(self) }
     }
 }
 
 impl ::ctor::CtorNew<()> for NontrivialInline {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN16NontrivialInlineC1Ev(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                 );
             })
         }
     }
 }
 
-impl ::ctor::CtorNew<::core::ffi::c_int> for NontrivialInline {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+impl ::ctor::CtorNew<::ffi_11::c_int> for NontrivialInline {
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
-    fn ctor_new(args: ::core::ffi::c_int) -> Self::CtorType {
+    fn ctor_new(args: ::ffi_11::c_int) -> Self::CtorType {
         let mut field = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN16NontrivialInlineC1Ei(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                     field,
                 );
             })
         }
     }
 }
-impl ::ctor::CtorNew<(::core::ffi::c_int,)> for NontrivialInline {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+impl ::ctor::CtorNew<(::ffi_11::c_int,)> for NontrivialInline {
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
-    fn ctor_new(args: (::core::ffi::c_int,)) -> Self::CtorType {
+    fn ctor_new(args: (::ffi_11::c_int,)) -> Self::CtorType {
         let (arg,) = args;
-        <Self as ::ctor::CtorNew<::core::ffi::c_int>>::ctor_new(arg)
+        <Self as ::ctor::CtorNew<::ffi_11::c_int>>::ctor_new(arg)
     }
 }
 
-impl ::ctor::CtorNew<(::core::ffi::c_int, ::core::ffi::c_int)> for NontrivialInline {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+impl ::ctor::CtorNew<(::ffi_11::c_int, ::ffi_11::c_int)> for NontrivialInline {
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
-    fn ctor_new(args: (::core::ffi::c_int, ::core::ffi::c_int)) -> Self::CtorType {
+    fn ctor_new(args: (::ffi_11::c_int, ::ffi_11::c_int)) -> Self::CtorType {
         let (mut field, mut unused) = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN16NontrivialInlineC1Eii(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                     field,
                     unused,
                 );
@@ -269,32 +288,41 @@ impl ::ctor::CtorNew<(::core::ffi::c_int, ::core::ffi::c_int)> for NontrivialInl
     }
 }
 
-// Error while generating bindings for constructor 'NontrivialInline::NontrivialInline':
-// Can't generate bindings for NontrivialInline::NontrivialInline, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialInline::NontrivialInline (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `NontrivialInline::NontrivialInline` could not be bound
+//   Unsupported parameter type `const NontrivialInline& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'NontrivialInline::NontrivialInline':
-// Can't generate bindings for NontrivialInline::NontrivialInline, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialInline::NontrivialInline (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `NontrivialInline::NontrivialInline` could not be bound
+//   Unsupported parameter type `NontrivialInline&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'NontrivialInline::operator=':
-// Can't generate bindings for NontrivialInline::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialInline::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialInline::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `NontrivialInline::operator=` could not be bound
+//   Unsupported parameter type `const NontrivialInline& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `NontrivialInline&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'NontrivialInline::operator=':
-// Can't generate bindings for NontrivialInline::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialInline::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialInline::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `NontrivialInline::operator=` could not be bound
+//   Unsupported parameter type `NontrivialInline&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `NontrivialInline&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'NontrivialInline::operator=':
-// Can't generate bindings for NontrivialInline::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialInline::operator= (return type: references are not supported)
+// error: function `NontrivialInline::operator=` could not be bound
+//   Unsupported return type `NontrivialInline&`:
+//     references are not yet supported
 
 impl ::ctor::PinnedDrop for NontrivialInline {
     #[inline(always)]
     unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        crate::detail::__rust_thunk___ZN16NontrivialInlineD1Ev(self)
+        unsafe { crate::detail::__rust_thunk___ZN16NontrivialInlineD1Ev(self) }
+    }
+}
+
+pub mod nontrivial_inline {
+    #[inline(always)]
+    pub(crate) fn MemberFunction<'a>(__this: ::core::pin::Pin<&'a mut crate::NontrivialInline>) {
+        unsafe { crate::detail::__rust_thunk___ZN16NontrivialInline14MemberFunctionEv(__this) }
     }
 }
 
@@ -309,7 +337,7 @@ impl ::ctor::PinnedDrop for NontrivialInline {
 pub struct NontrivialMembers {
     /// Reason for representing this field as a blob of bytes:
     /// nontrivial fields would be destroyed in the wrong order
-    pub(crate) nontrivial_member: [::core::mem::MaybeUninit<u8>; 4],
+    pub(crate) nontrivial_member: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 4],
 }
 impl !Send for NontrivialMembers {}
 impl !Sync for NontrivialMembers {}
@@ -319,52 +347,54 @@ unsafe impl ::cxx::ExternType for NontrivialMembers {
 }
 
 impl ::ctor::CtorNew<()> for NontrivialMembers {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
                 crate::detail::__rust_thunk___ZN17NontrivialMembersC1Ev(
-                    dest as *mut ::core::ffi::c_void,
+                    __crubit_dest as *mut ::core::ffi::c_void,
                 );
             })
         }
     }
 }
 
-// Error while generating bindings for constructor 'NontrivialMembers::NontrivialMembers':
-// Can't generate bindings for NontrivialMembers::NontrivialMembers, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialMembers::NontrivialMembers (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `NontrivialMembers::NontrivialMembers` could not be bound
+//   Unsupported parameter type `const NontrivialMembers& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'NontrivialMembers::NontrivialMembers':
-// Can't generate bindings for NontrivialMembers::NontrivialMembers, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialMembers::NontrivialMembers (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `NontrivialMembers::NontrivialMembers` could not be bound
+//   Unsupported parameter type `NontrivialMembers&& __param_0`:
+//     references are not yet supported
 
 impl ::ctor::PinnedDrop for NontrivialMembers {
     #[inline(always)]
     unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        crate::detail::__rust_thunk___ZN17NontrivialMembersD1Ev(self)
+        unsafe { crate::detail::__rust_thunk___ZN17NontrivialMembersD1Ev(self) }
     }
 }
 
-// Error while generating bindings for function 'NontrivialMembers::operator=':
-// Can't generate bindings for NontrivialMembers::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialMembers::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialMembers::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `NontrivialMembers::operator=` could not be bound
+//   Unsupported parameter type `const NontrivialMembers& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `NontrivialMembers&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'NontrivialMembers::operator=':
-// Can't generate bindings for NontrivialMembers::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialMembers::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialMembers::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `NontrivialMembers::operator=` could not be bound
+//   Unsupported parameter type `NontrivialMembers&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `NontrivialMembers&`:
+//     references are not yet supported
 
 /// Nontrivial, but trivially relocatable and final (and therefore Unpin).
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=NontrivialUnpin
 pub struct NontrivialUnpin {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 0],
-    pub field: ::core::ffi::c_int,
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 0],
+    pub field: ::ffi_11::c_int,
 }
 impl !Send for NontrivialUnpin {}
 impl !Sync for NontrivialUnpin {}
@@ -375,7 +405,7 @@ unsafe impl ::cxx::ExternType for NontrivialUnpin {
 impl NontrivialUnpin {
     #[inline(always)]
     pub fn MemberFunction<'a>(&'a mut self) {
-        unsafe { crate::detail::__rust_thunk___ZN15NontrivialUnpin14MemberFunctionEv(self) }
+        unsafe { self::nontrivial_unpin::MemberFunction(self) }
     }
 }
 
@@ -390,9 +420,10 @@ impl Default for NontrivialUnpin {
     }
 }
 
-impl From<::core::ffi::c_int> for NontrivialUnpin {
+impl From<::ffi_11::c_int> for NontrivialUnpin {
     #[inline(always)]
-    fn from(field: ::core::ffi::c_int) -> Self {
+    fn from(args: ::ffi_11::c_int) -> Self {
+        let mut field = args;
         let mut tmp = ::core::mem::MaybeUninit::<Self>::zeroed();
         unsafe {
             crate::detail::__rust_thunk___ZN15NontrivialUnpinC1Ei(&raw mut tmp as *mut _, field);
@@ -400,43 +431,66 @@ impl From<::core::ffi::c_int> for NontrivialUnpin {
         }
     }
 }
-impl ::ctor::CtorNew<::core::ffi::c_int> for NontrivialUnpin {
+impl ::ctor::CtorNew<::ffi_11::c_int> for NontrivialUnpin {
     type CtorType = Self;
     type Error = ::ctor::Infallible;
     #[inline(always)]
-    fn ctor_new(args: ::core::ffi::c_int) -> Self::CtorType {
-        <Self as From<::core::ffi::c_int>>::from(args)
+    fn ctor_new(args: ::ffi_11::c_int) -> Self::CtorType {
+        <Self as From<::ffi_11::c_int>>::from(args)
     }
 }
 
-// Error while generating bindings for constructor 'NontrivialUnpin::NontrivialUnpin':
-// Constructors with more than one parameter are not yet supported. See b/216648347.
+impl From<(::ffi_11::c_int, ::ffi_11::c_int)> for NontrivialUnpin {
+    #[inline(always)]
+    fn from(args: (::ffi_11::c_int, ::ffi_11::c_int)) -> Self {
+        let (mut field, mut unused) = args;
+        let mut tmp = ::core::mem::MaybeUninit::<Self>::zeroed();
+        unsafe {
+            crate::detail::__rust_thunk___ZN15NontrivialUnpinC1Eii(
+                &raw mut tmp as *mut _,
+                field,
+                unused,
+            );
+            tmp.assume_init()
+        }
+    }
+}
+impl ::ctor::CtorNew<(::ffi_11::c_int, ::ffi_11::c_int)> for NontrivialUnpin {
+    type CtorType = Self;
+    type Error = ::ctor::Infallible;
+    #[inline(always)]
+    fn ctor_new(args: (::ffi_11::c_int, ::ffi_11::c_int)) -> Self::CtorType {
+        <Self as From<(::ffi_11::c_int, ::ffi_11::c_int)>>::from(args)
+    }
+}
 
-// Error while generating bindings for constructor 'NontrivialUnpin::NontrivialUnpin':
-// Can't generate bindings for NontrivialUnpin::NontrivialUnpin, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialUnpin::NontrivialUnpin (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `NontrivialUnpin::NontrivialUnpin` could not be bound
+//   Unsupported parameter type `const NontrivialUnpin& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'NontrivialUnpin::NontrivialUnpin':
-// Can't generate bindings for NontrivialUnpin::NontrivialUnpin, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialUnpin::NontrivialUnpin (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `NontrivialUnpin::NontrivialUnpin` could not be bound
+//   Unsupported parameter type `NontrivialUnpin&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'NontrivialUnpin::NontrivialUnpin':
-// Can't generate bindings for NontrivialUnpin::NontrivialUnpin, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialUnpin::NontrivialUnpin (the type of __param_0 (parameter #1): references are not supported)
+// error: constructor `NontrivialUnpin::NontrivialUnpin` could not be bound
+//   Unsupported parameter type `Nontrivial&& __param_0`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'NontrivialUnpin::operator=':
-// Can't generate bindings for NontrivialUnpin::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialUnpin::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialUnpin::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `NontrivialUnpin::operator=` could not be bound
+//   Unsupported parameter type `const NontrivialUnpin& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `NontrivialUnpin&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'NontrivialUnpin::operator=':
-// Can't generate bindings for NontrivialUnpin::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialUnpin::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialUnpin::operator= (the type of __param_0 (parameter #1): references are not supported)
+// error: function `NontrivialUnpin::operator=` could not be bound
+//   Unsupported parameter type `NontrivialUnpin&& __param_0`:
+//     references are not yet supported
+//   Unsupported return type `NontrivialUnpin&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'NontrivialUnpin::operator=':
-// Can't generate bindings for NontrivialUnpin::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialUnpin::operator= (return type: references are not supported)
+// error: function `NontrivialUnpin::operator=` could not be bound
+//   Unsupported return type `NontrivialUnpin&`:
+//     references are not yet supported
 
 impl Drop for NontrivialUnpin {
     #[inline(always)]
@@ -445,14 +499,21 @@ impl Drop for NontrivialUnpin {
     }
 }
 
+pub mod nontrivial_unpin {
+    #[inline(always)]
+    pub(crate) fn MemberFunction<'a>(__this: &'a mut crate::NontrivialUnpin) {
+        unsafe { crate::detail::__rust_thunk___ZN15NontrivialUnpin14MemberFunctionEv(__this) }
+    }
+}
+
 #[inline(always)]
 pub fn TakesByValue(
-    nontrivial: impl ::ctor::Ctor<Output = crate::Nontrivial, Error = ::ctor::Infallible>,
-) -> impl ::ctor::Ctor<Output = crate::Nontrivial, Error = ::ctor::Infallible> {
+    nontrivial: ::ctor::Ctor![crate::Nontrivial],
+) -> ::ctor::Ctor![crate::Nontrivial] {
     unsafe {
-        ::ctor::FnCtor::new(move |dest: *mut crate::Nontrivial| {
+        ::ctor::FnCtor::new(move |__crubit_dest: *mut crate::Nontrivial| {
             crate::detail::__rust_thunk___Z12TakesByValue10Nontrivial(
-                dest as *mut ::core::ffi::c_void,
+                __crubit_dest as *mut ::core::ffi::c_void,
                 ::core::pin::Pin::into_inner_unchecked(::ctor::emplace!(nontrivial)),
             );
         })
@@ -461,12 +522,12 @@ pub fn TakesByValue(
 
 #[inline(always)]
 pub fn TakesByValueInline(
-    nontrivial: impl ::ctor::Ctor<Output = crate::NontrivialInline, Error = ::ctor::Infallible>,
-) -> impl ::ctor::Ctor<Output = crate::NontrivialInline, Error = ::ctor::Infallible> {
+    nontrivial: ::ctor::Ctor![crate::NontrivialInline],
+) -> ::ctor::Ctor![crate::NontrivialInline] {
     unsafe {
-        ::ctor::FnCtor::new(move |dest: *mut crate::NontrivialInline| {
+        ::ctor::FnCtor::new(move |__crubit_dest: *mut crate::NontrivialInline| {
             crate::detail::__rust_thunk___Z18TakesByValueInline16NontrivialInline(
-                dest as *mut ::core::ffi::c_void,
+                __crubit_dest as *mut ::core::ffi::c_void,
                 ::core::pin::Pin::into_inner_unchecked(::ctor::emplace!(nontrivial)),
             );
         })
@@ -476,54 +537,62 @@ pub fn TakesByValueInline(
 #[inline(always)]
 pub fn TakesByValueUnpin(mut nontrivial: crate::NontrivialUnpin) -> crate::NontrivialUnpin {
     unsafe {
-        let mut __return = ::core::mem::MaybeUninit::<crate::NontrivialUnpin>::uninit();
+        let mut __crubit_return = ::core::mem::MaybeUninit::<crate::NontrivialUnpin>::uninit();
         crate::detail::__rust_thunk___Z17TakesByValueUnpin15NontrivialUnpin(
-            &raw mut __return as *mut ::core::ffi::c_void,
+            &raw mut __crubit_return as *mut ::core::ffi::c_void,
             &mut nontrivial,
         );
-        __return.assume_init()
+        __crubit_return.assume_init()
     }
 }
 
-// Error while generating bindings for function 'TakesByReference':
-// Can't generate bindings for TakesByReference, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesByReference (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesByReference (the type of nontrivial (parameter #0): references are not supported)
+// error: function `TakesByReference` could not be bound
+//   Unsupported parameter type `Nontrivial& nontrivial`:
+//     references are not yet supported
+//   Unsupported return type `Nontrivial&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'TakesUnpinByReference':
-// Can't generate bindings for TakesUnpinByReference, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesUnpinByReference (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesUnpinByReference (the type of nontrivial (parameter #0): references are not supported)
+// error: function `TakesUnpinByReference` could not be bound
+//   Unsupported parameter type `NontrivialUnpin& nontrivial`:
+//     references are not yet supported
+//   Unsupported return type `NontrivialUnpin&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'TakesByConstReference':
-// Can't generate bindings for TakesByConstReference, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesByConstReference (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesByConstReference (the type of nontrivial (parameter #0): references are not supported)
+// error: function `TakesByConstReference` could not be bound
+//   Unsupported parameter type `const Nontrivial& nontrivial`:
+//     references are not yet supported
+//   Unsupported return type `const Nontrivial&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'TakesUnpinByConstReference':
-// Can't generate bindings for TakesUnpinByConstReference, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesUnpinByConstReference (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesUnpinByConstReference (the type of nontrivial (parameter #0): references are not supported)
+// error: function `TakesUnpinByConstReference` could not be bound
+//   Unsupported parameter type `const NontrivialUnpin& nontrivial`:
+//     references are not yet supported
+//   Unsupported return type `const NontrivialUnpin&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'TakesByRvalueReference':
-// Can't generate bindings for TakesByRvalueReference, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesByRvalueReference (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesByRvalueReference (the type of nontrivial (parameter #0): references are not supported)
+// error: function `TakesByRvalueReference` could not be bound
+//   Unsupported parameter type `Nontrivial&& nontrivial`:
+//     references are not yet supported
+//   Unsupported return type `Nontrivial&&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'TakesUnpinByRvalueReference':
-// Can't generate bindings for TakesUnpinByRvalueReference, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesUnpinByRvalueReference (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesUnpinByRvalueReference (the type of nontrivial (parameter #0): references are not supported)
+// error: function `TakesUnpinByRvalueReference` could not be bound
+//   Unsupported parameter type `NontrivialUnpin&& nontrivial`:
+//     references are not yet supported
+//   Unsupported return type `NontrivialUnpin&&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'TakesByConstRvalueReference':
-// Can't generate bindings for TakesByConstRvalueReference, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesByConstRvalueReference (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesByConstRvalueReference (the type of nontrivial (parameter #0): references are not supported)
+// error: function `TakesByConstRvalueReference` could not be bound
+//   Unsupported parameter type `const Nontrivial&& nontrivial`:
+//     references are not yet supported
+//   Unsupported return type `const Nontrivial&&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'TakesUnpinByConstRvalueReference':
-// Can't generate bindings for TakesUnpinByConstRvalueReference, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesUnpinByConstRvalueReference (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for TakesUnpinByConstRvalueReference (the type of nontrivial (parameter #0): references are not supported)
+// error: function `TakesUnpinByConstRvalueReference` could not be bound
+//   Unsupported parameter type `const NontrivialUnpin&& nontrivial`:
+//     references are not yet supported
+//   Unsupported return type `const NontrivialUnpin&&`:
+//     references are not yet supported
 
 /// Finally, testing for strange by-value APIs.
 #[derive(Clone, Copy, ::ctor::MoveAndAssignViaCopy)]
@@ -539,23 +608,25 @@ unsafe impl ::cxx::ExternType for NontrivialByValue {
     type Kind = ::cxx::kind::Trivial;
 }
 
-// Error while generating bindings for constructor 'NontrivialByValue::NontrivialByValue':
-// Can't generate bindings for NontrivialByValue::NontrivialByValue, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialByValue::NontrivialByValue (the type of other (parameter #1): references are not supported)
+// error: constructor `NontrivialByValue::NontrivialByValue` could not be bound
+//   Unsupported parameter type `const NontrivialByValue& other`:
+//     references are not yet supported
 
-// Error while generating bindings for constructor 'NontrivialByValue::NontrivialByValue':
-// Can't generate bindings for NontrivialByValue::NontrivialByValue, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialByValue::NontrivialByValue (the type of other (parameter #1): references are not supported)
+// error: constructor `NontrivialByValue::NontrivialByValue` could not be bound
+//   Unsupported parameter type `NontrivialByValue&& other`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'NontrivialByValue::operator=':
-// Can't generate bindings for NontrivialByValue::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialByValue::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialByValue::operator= (the type of other (parameter #1): references are not supported)
+// error: function `NontrivialByValue::operator=` could not be bound
+//   Unsupported parameter type `const NontrivialByValue& other`:
+//     references are not yet supported
+//   Unsupported return type `NontrivialByValue&`:
+//     references are not yet supported
 
-// Error while generating bindings for function 'NontrivialByValue::operator=':
-// Can't generate bindings for NontrivialByValue::operator=, because of missing required features (<internal link>):
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialByValue::operator= (return type: references are not supported)
-// //rs_bindings_from_cc/test/golden:nontrivial_type_cc needs [//features:experimental] for NontrivialByValue::operator= (the type of other (parameter #1): references are not supported)
+// error: function `NontrivialByValue::operator=` could not be bound
+//   Unsupported parameter type `NontrivialByValue&& other`:
+//     references are not yet supported
+//   Unsupported return type `NontrivialByValue&`:
+//     references are not yet supported
 
 impl<'other> ::ctor::UnpinAssign<::ctor::RvalueReference<'other, crate::Nontrivial>>
     for NontrivialByValue
@@ -563,13 +634,13 @@ impl<'other> ::ctor::UnpinAssign<::ctor::RvalueReference<'other, crate::Nontrivi
     #[inline(always)]
     fn unpin_assign<'a>(&'a mut self, other: ::ctor::RvalueReference<'other, crate::Nontrivial>) {
         unsafe {
-            let mut __return = ::core::mem::MaybeUninit::<Self>::uninit();
+            let mut __crubit_return = ::core::mem::MaybeUninit::<Self>::uninit();
             crate::detail::__rust_thunk___ZN17NontrivialByValueaSE10Nontrivial(
-                &raw mut __return as *mut ::core::ffi::c_void,
+                &raw mut __crubit_return as *mut ::core::ffi::c_void,
                 self,
                 other,
             );
-            __return.assume_init();
+            __crubit_return.assume_init();
         }
     }
 }
@@ -578,16 +649,16 @@ impl<'other> ::ctor::UnpinAssign<::ctor::RvalueReference<'other, crate::Nontrivi
     message = "binding generation for function failed\nExpected first operator== param reference to be immutable, but found mutable reference: &'a mut crate::NontrivialByValue\ncomparison operator return type must be `bool`, found: crate::NontrivialByValue"
 )]
 pub trait BindingFailedFor_ZN17NontrivialByValueeqES_ {}
-impl<'error> PartialEq for NontrivialByValue
+impl PartialEq for NontrivialByValue
 where
-    &'error (): BindingFailedFor_ZN17NontrivialByValueeqES_,
+    for<'error> &'error (): BindingFailedFor_ZN17NontrivialByValueeqES_,
 {
     #[inline(always)]
     fn eq<'a>(&'a self, other: &Self) -> bool {
         #![allow(unused_variables)]
         unreachable!(
             "This impl can never be instantiated. \
-                    If this message appears at runtime, please report a <internal link>."
+                    If this message appears at runtime, please report a crubit.rs-bug."
         )
     }
 }
@@ -596,7 +667,7 @@ where
 #[repr(C)]
 ///CRUBIT_ANNOTATE: cpp_type=Nonmovable
 pub struct Nonmovable {
-    __non_field_data: [::core::mem::MaybeUninit<u8>; 1],
+    __non_field_data: [::core::cell::Cell<::core::mem::MaybeUninit<u8>>; 1],
 }
 impl !Send for Nonmovable {}
 impl !Sync for Nonmovable {}
@@ -607,19 +678,21 @@ unsafe impl ::cxx::ExternType for Nonmovable {
 impl Nonmovable {
     #[inline(always)]
     pub fn MemberFunction<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        unsafe { crate::detail::__rust_thunk___ZN10Nonmovable14MemberFunctionEv(self) }
+        unsafe { self::nonmovable::MemberFunction(self) }
     }
 }
 
 impl ::ctor::CtorNew<()> for Nonmovable {
-    type CtorType = impl ::ctor::Ctor<Output = Self, Error = ::ctor::Infallible>;
+    type CtorType = ::ctor::Ctor![Self];
     type Error = ::ctor::Infallible;
     #[inline(always)]
     fn ctor_new(args: ()) -> Self::CtorType {
         let () = args;
         unsafe {
-            ::ctor::FnCtor::new(move |dest: *mut Self| {
-                crate::detail::__rust_thunk___ZN10NonmovableC1Ev(dest as *mut ::core::ffi::c_void);
+            ::ctor::FnCtor::new(move |__crubit_dest: *mut Self| {
+                crate::detail::__rust_thunk___ZN10NonmovableC1Ev(
+                    __crubit_dest as *mut ::core::ffi::c_void,
+                );
             })
         }
     }
@@ -628,7 +701,14 @@ impl ::ctor::CtorNew<()> for Nonmovable {
 impl ::ctor::PinnedDrop for Nonmovable {
     #[inline(always)]
     unsafe fn pinned_drop<'a>(self: ::core::pin::Pin<&'a mut Self>) {
-        crate::detail::__rust_thunk___ZN10NonmovableD1Ev(self)
+        unsafe { crate::detail::__rust_thunk___ZN10NonmovableD1Ev(self) }
+    }
+}
+
+pub mod nonmovable {
+    #[inline(always)]
+    pub(crate) fn MemberFunction<'a>(__this: ::core::pin::Pin<&'a mut crate::Nonmovable>) {
+        unsafe { crate::detail::__rust_thunk___ZN10Nonmovable14MemberFunctionEv(__this) }
     }
 }
 
@@ -637,25 +717,23 @@ impl ::ctor::PinnedDrop for Nonmovable {
 )]
 pub trait BindingFailedFor_Z22TakesNonmovableByValue10Nonmovable {}
 #[inline(always)]
-pub fn TakesNonmovableByValue<'error>(
-    nonmovable: impl ::ctor::Ctor<Output = crate::Nonmovable, Error = ::ctor::Infallible>,
-) where
-    &'error (): BindingFailedFor_Z22TakesNonmovableByValue10Nonmovable,
+pub fn TakesNonmovableByValue(nonmovable: ::ctor::Ctor![crate::Nonmovable])
+where
+    for<'error> &'error (): BindingFailedFor_Z22TakesNonmovableByValue10Nonmovable,
 {
     #![allow(unused_variables)]
     unreachable!(
         "This impl can never be instantiated. \
-                    If this message appears at runtime, please report a <internal link>."
+                    If this message appears at runtime, please report a crubit.rs-bug."
     )
 }
 
 #[inline(always)]
-pub fn ReturnsNonmovableByValue(
-) -> impl ::ctor::Ctor<Output = crate::Nonmovable, Error = ::ctor::Infallible> {
+pub fn ReturnsNonmovableByValue() -> ::ctor::Ctor![crate::Nonmovable] {
     unsafe {
-        ::ctor::FnCtor::new(move |dest: *mut crate::Nonmovable| {
+        ::ctor::FnCtor::new(move |__crubit_dest: *mut crate::Nonmovable| {
             crate::detail::__rust_thunk___Z24ReturnsNonmovableByValuev(
-                dest as *mut ::core::ffi::c_void,
+                __crubit_dest as *mut ::core::ffi::c_void,
             );
         })
     }
@@ -670,13 +748,13 @@ mod detail {
         #[link_name = "_ZN10NontrivialC1Ei"]
         pub(crate) unsafe fn __rust_thunk___ZN10NontrivialC1Ei(
             __this: *mut ::core::ffi::c_void,
-            field: ::core::ffi::c_int,
+            field: ::ffi_11::c_int,
         );
         #[link_name = "_ZN10NontrivialC1Eii"]
         pub(crate) unsafe fn __rust_thunk___ZN10NontrivialC1Eii(
             __this: *mut ::core::ffi::c_void,
-            field: ::core::ffi::c_int,
-            unused: ::core::ffi::c_int,
+            field: ::ffi_11::c_int,
+            unused: ::ffi_11::c_int,
         );
         pub(crate) unsafe fn __rust_thunk___ZN10NontrivialaSEf<'a>(
             __return: *mut ::core::ffi::c_void,
@@ -708,12 +786,12 @@ mod detail {
         );
         pub(crate) unsafe fn __rust_thunk___ZN16NontrivialInlineC1Ei(
             __this: *mut ::core::ffi::c_void,
-            field: ::core::ffi::c_int,
+            field: ::ffi_11::c_int,
         );
         pub(crate) unsafe fn __rust_thunk___ZN16NontrivialInlineC1Eii(
             __this: *mut ::core::ffi::c_void,
-            field: ::core::ffi::c_int,
-            unused: ::core::ffi::c_int,
+            field: ::ffi_11::c_int,
+            unused: ::ffi_11::c_int,
         );
         pub(crate) unsafe fn __rust_thunk___ZN16NontrivialInlineD1Ev<'a>(
             __this: ::core::pin::Pin<&'a mut crate::NontrivialInline>,
@@ -734,7 +812,13 @@ mod detail {
         #[link_name = "_ZN15NontrivialUnpinC1Ei"]
         pub(crate) unsafe fn __rust_thunk___ZN15NontrivialUnpinC1Ei(
             __this: *mut ::core::ffi::c_void,
-            field: ::core::ffi::c_int,
+            field: ::ffi_11::c_int,
+        );
+        #[link_name = "_ZN15NontrivialUnpinC1Eii"]
+        pub(crate) unsafe fn __rust_thunk___ZN15NontrivialUnpinC1Eii(
+            __this: *mut ::core::ffi::c_void,
+            field: ::ffi_11::c_int,
+            unused: ::ffi_11::c_int,
         );
         #[link_name = "_ZN15NontrivialUnpinD1Ev"]
         pub(crate) unsafe fn __rust_thunk___ZN15NontrivialUnpinD1Ev<'a>(
@@ -783,13 +867,13 @@ const _: () = {
     static_assertions::assert_impl_all!(crate::Nontrivial: Drop);
     static_assertions::assert_not_impl_any!(crate::Nontrivial: Copy);
     assert!(::core::mem::offset_of!(crate::Nontrivial, field) == 0);
-    static_assertions::assert_impl_all!(::core::ffi::c_int: Copy);
+    static_assertions::assert_impl_all!(::ffi_11::c_int: Copy);
     assert!(::core::mem::size_of::<crate::NontrivialInline>() == 4);
     assert!(::core::mem::align_of::<crate::NontrivialInline>() == 4);
     static_assertions::assert_impl_all!(crate::NontrivialInline: Drop);
     static_assertions::assert_not_impl_any!(crate::NontrivialInline: Copy);
     assert!(::core::mem::offset_of!(crate::NontrivialInline, field) == 0);
-    static_assertions::assert_impl_all!(::core::ffi::c_int: Copy);
+    static_assertions::assert_impl_all!(::ffi_11::c_int: Copy);
     assert!(::core::mem::size_of::<crate::NontrivialMembers>() == 4);
     assert!(::core::mem::align_of::<crate::NontrivialMembers>() == 4);
     static_assertions::assert_impl_all!(crate::NontrivialMembers: Drop);
@@ -800,7 +884,7 @@ const _: () = {
     static_assertions::assert_impl_all!(crate::NontrivialUnpin: Drop);
     static_assertions::assert_not_impl_any!(crate::NontrivialUnpin: Copy);
     assert!(::core::mem::offset_of!(crate::NontrivialUnpin, field) == 0);
-    static_assertions::assert_impl_all!(::core::ffi::c_int: Copy);
+    static_assertions::assert_impl_all!(::ffi_11::c_int: Copy);
     assert!(::core::mem::size_of::<crate::NontrivialByValue>() == 1);
     assert!(::core::mem::align_of::<crate::NontrivialByValue>() == 1);
     static_assertions::assert_impl_all!(crate::NontrivialByValue: Copy,Clone);

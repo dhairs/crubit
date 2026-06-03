@@ -355,6 +355,9 @@ crubit_rust_test(
 rust_library(
     name = "kythe_metadata",
     srcs = ["kythe_metadata.rs"],
+    visibility = [
+        "//:__subpackages__",
+    ],
     deps = [
         ":token_stream_printer",
         "@crate_index//:anyhow",  # v1
@@ -442,7 +445,9 @@ crubit_rust_test(
 rust_library(
     name = "error_report",
     srcs = ["error_report.rs"],
-    visibility = ["//:__subpackages__"],
+    visibility = [
+        "//:__subpackages__",
+    ],
     deps = [
         ":arc_anyhow",
         "@crate_index//:anyhow",  # v1

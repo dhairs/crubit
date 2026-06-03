@@ -6,25 +6,41 @@ extern crate rustc_hir;
 extern crate rustc_middle;
 extern crate rustc_span;
 
-use crate::adt_core_bindings::{AdtCoreBindings, NoMoveOrAssign};
-use crate::code_snippet::{ApiSnippets, CcSnippet, CrubitAbiTypeWithCcPrereqs};
+use crate::adt_core_bindings::{AdtCoreBindings, CopyCtorStyle, MoveCtorStyle, NoMoveOrAssign};
+use crate::code_snippet::{
+    ApiSnippets, CcSnippet, CrubitAbiTypeWithCcPrereqs, RsStdTemplateSpecialization,
+};
 use crate::fully_qualified_name::{FullyQualifiedName, PublicPaths, UnqualifiedName};
 use crate::include_guard::IncludeGuard;
-use crate::sugared_ty::SugaredTy;
 use crate::type_location::TypeLocation;
+use crate::StaticMethodMode;
 use arc_anyhow::Result;
 use code_gen_utils::CcInclude;
 use dyn_format::Format;
 use error_report::{ErrorReporting, ReportFatalError};
 use proc_macro2::{Ident, TokenStream};
-use rustc_middle::ty::{Ty, TyCtxt};
+use rustc_middle::ty::{self, Ty, TyCtxt};
 use rustc_span::def_id::{CrateNum, DefId};
 use rustc_span::Symbol;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::rc::Rc;
 
+/// A specialization of a C++ type.
+///
+/// For example, `std::vector<int>` and `std::vector<double>` are two different
+/// specializations of the `std::vector` type.
+pub struct CppTypeSpecialization<'tcx> {
+    /// The Rust type that the specialization is for.
+    pub ty: Ty<'tcx>,
+    /// The C++ spelling of the type.
+    pub cpp_type: Rc<str>,
+    /// The include path of the type, if required.
+    pub include_path: Option<Rc<str>>,
+}
+
 memoized::query_group! {
-  pub trait BindingsGenerator<'tcx> {
+  pub struct BindingsGenerator<'tcx> {
       #[input]
       /// Compilation context for the crate that the bindings should be generated
       /// for.
@@ -51,10 +67,6 @@ memoized::query_group! {
       #[input]
       /// The default features enabled on all crates, if not present in `crate_name_to_features`.
       fn default_features(&self) -> flagset::FlagSet<crubit_feature::CrubitFeature>;
-
-      #[input]
-      /// Feature flag enabling HIR types.
-      fn enable_hir_types(&self) -> bool;
 
       #[input]
       /// Feature flag enabling Kythe annotations
@@ -99,10 +111,18 @@ memoized::query_group! {
       fn fatal_errors(&self) -> Rc<dyn ReportFatalError>;
 
       #[input]
-      fn no_thunk_name_mangling(&self) -> bool;
+      fn is_golden_test(&self) -> bool;
 
       #[input]
       fn h_out_include_guard(&self) -> IncludeGuard;
+
+      #[input]
+      fn ignore_symbols_from_files(&self) -> Rc<HashSet<PathBuf>>;
+
+      /// Computes all specializations specified in the crate.
+      ///
+      /// Implementation: cc_bindings_from_rs/generate_bindings/lib.rs?q=function:specializations
+      fn specializations(&self) -> Rc<[CppTypeSpecialization<'tcx>]>;
 
       /// The `CrateNum` of the crate that the bindings should be generated for.
       /// This will be `LOCAL_CRATE` if no `source_crate_name` was provided.
@@ -120,6 +140,11 @@ memoized::query_group! {
       ///
       /// Implementation: cc_bindings_from_rs/generate_bindings/query_compiler.rs?q=function:repr_attrs
       fn repr_attrs(&self, did: DefId) -> Rc<[rustc_hir::attrs::ReprAttr]>;
+
+      /// Returns the list of traits that should appear in the generated bindings.
+      ///
+      /// Implementation: cc_bindings_from_rs/generate_bindings/lib.rs?q=function:supported_traits
+      fn supported_traits(&self) -> Rc<[DefId]>;
 
       /// Computes the unqualified name of the symbol identified by `def_id`.
       ///
@@ -160,6 +185,22 @@ memoized::query_group! {
       /// Implementation: cc_bindings_from_rs/generate_bindings/lib.rs?q=function:public_paths_by_def_id
       fn public_paths_by_def_id(&self, crate_num: CrateNum) -> HashMap<DefId, PublicPaths>;
 
+      /// Computes a mapping from a `DefId` to a list of public paths that reference it in the
+      /// crate graph. Paths are only considered if they are from the source crate or they have a
+      /// `--crate-header` specifying their bindings. Usually, this will mean the current crate and
+      /// direct dependencies.
+      ///
+      /// Paths from the crate that defines a definition are preferred for the canonical path. A
+      /// re-export of a definition will only be used if the defining crate has no paths.
+      ///
+      /// Implementation: cc_bindings_from_rs/generate_bindings/lib.rs?q=function:all_public_paths_by_def_id
+      fn all_public_paths_by_def_id(&self) -> HashMap<DefId, PublicPaths>;
+
+      /// Finds the `DefId` of a public item by its name in the given crate.
+      ///
+      /// Implementation: cc_bindings_from_rs/generate_bindings/lib.rs?q=function:def_id_by_symbol
+      fn def_id_by_symbol(&self, crate_num: CrateNum, name: Symbol) -> Option<DefId>;
+
       /// Formats a C++ identifier, if possible.
       ///
       /// Implementation: cc_bindings_from_rs/generate_bindings/format_type.rs?q=function:format_cc_ident
@@ -177,9 +218,9 @@ memoized::query_group! {
       /// Implementation: cc_bindings_from_rs/generate_bindings/format_type.rs?q=function:format_ty_for_cc
       fn format_ty_for_cc(
           &self,
-          ty: SugaredTy<'tcx>,
+          ty: Ty<'tcx>,
           location: TypeLocation,
-      ) -> Result<CcSnippet>;
+      ) -> Result<CcSnippet<'tcx>>;
 
       /// Formats `ty` into a `CcSnippet` that represents how the type should be
       /// spelled in a C++ declaration of a function parameter or field.
@@ -190,6 +231,33 @@ memoized::query_group! {
           ty: Ty<'tcx>
       ) -> Result<TokenStream>;
 
+      /// Returns true if the type has a default constructor.
+      ///
+      /// Implementation: cc_bindings_from_rs/generate_bindings/lib.rs?q=function:has_default_ctor
+      fn has_default_ctor(&self, self_ty: Ty<'tcx>) -> bool;
+
+      /// Returns the style of copy constructor and assignment operator for the given type, if available.
+      ///
+      /// `def_id` is used to determine the typing env of `self_ty`.
+      ///
+      /// Implementation: cc_bindings_from_rs/generate_bindings/lib.rs?q=function:has_copy_ctor_and_assignment_operator
+      fn has_copy_ctor_and_assignment_operator(
+          &self,
+          def_id: Option<DefId>,
+          self_ty: Ty<'tcx>,
+      ) -> Option<CopyCtorStyle>;
+
+      /// Returns the style of move constructor and assignment operator for the given type, if available.
+      ///
+      /// `def_id` is used to determine the typing env of `self_ty`.
+      ///
+      /// Implementation: cc_bindings_from_rs/generate_bindings/lib.rs?q=function:has_move_ctor_and_assignment_operator
+      fn has_move_ctor_and_assignment_operator(
+          &self,
+          def_id: Option<DefId>,
+          self_ty: Ty<'tcx>,
+      ) -> Option<MoveCtorStyle>;
+
       /// Generates a default constructor for an ADT if possible (i.e. if the `Default`
       /// trait is implemented for the ADT).  Returns an error otherwise (e.g. if
       /// there is no `Default` impl, then the default constructor will be
@@ -198,7 +266,7 @@ memoized::query_group! {
       fn generate_default_ctor(
           &self,
           core: Rc<AdtCoreBindings<'tcx>>,
-      ) -> Result<ApiSnippets, ApiSnippets>;
+      ) -> Result<ApiSnippets<'tcx>, ApiSnippets<'tcx>>;
 
       /// Generates the copy constructor and the copy-assignment operator for an ADT if
       /// possible (i.e. if the `Clone` trait is implemented for the ADT).  Returns an
@@ -209,7 +277,7 @@ memoized::query_group! {
       fn generate_copy_ctor_and_assignment_operator(
           &self,
           core: Rc<AdtCoreBindings<'tcx>>,
-      ) -> Result<ApiSnippets, ApiSnippets>;
+      ) -> Result<ApiSnippets<'tcx>, ApiSnippets<'tcx>>;
 
       /// Generates the move constructor and the move-assignment operator for an ADT if possible
       /// (it depends on various factors like `needs_drop`, `is_unpin` and implementations of
@@ -219,7 +287,7 @@ memoized::query_group! {
       fn generate_move_ctor_and_assignment_operator(
           &self,
           core: Rc<AdtCoreBindings<'tcx>>,
-      ) -> Result<ApiSnippets, NoMoveOrAssign>;
+      ) -> Result<ApiSnippets<'tcx>, NoMoveOrAssign<'tcx>>;
 
       /// Generates bindings for a HIR item idenfied by `def_id`.  Returns `None` if
       /// the item can be ignored. Returns an `Err` if the bindings could not be
@@ -228,7 +296,7 @@ memoized::query_group! {
       /// Will panic if `def_id` is invalid (i.e. doesn't identify a HIR item).
       ///
       /// Implementation: cc_bindings_from_rs/generate_bindings/lib.rs?q=function:generate_item
-      fn generate_item(&self, def_id: DefId) -> Result<Option<ApiSnippets>>;
+      fn generate_item(&self, def_id: DefId) -> Result<Option<ApiSnippets<'tcx>>>;
 
       /// Generates bindings for a function with the given `local_def_id`.
       ///
@@ -237,7 +305,12 @@ memoized::query_group! {
       /// - doesn't identify a function
       ///
       /// Implementation: cc_bindings_from_rs/generate_bindings/generate_function.rs?q=function:generate_function
-      fn generate_function(&self, def_id: DefId) -> Result<ApiSnippets>;
+      fn generate_function(&self, def_id: DefId, method_name_override: Option<&'static str>, static_method_mode: StaticMethodMode) -> Result<ApiSnippets<'tcx>>;
+
+      /// Determines if an ADT needs bindings generated in the current crate. This is a distinct method from `generate_adt_core` because we may want core binding information for a type that does not support bindings. For example, when generating bindings that use a type that isn't defined in the current crate.
+      ///
+      /// Implementation: cc_bindings_from_rs/generate_bindings/generate_struct_and_union.rs?q=function:adt_supports_bindings
+      fn adt_needs_bindings(&self, def_id: DefId) -> Result<Rc<AdtCoreBindings<'tcx>>>;
 
       /// Generates the bindings for the core of an algebraic data type (an ADT - a
       /// struct, an enum, or a union) represented by `def_id`.
@@ -257,7 +330,7 @@ memoized::query_group! {
       /// `format_ty`).  The 2nd case is needed for ADTs defined in any crate.
       fn generate_adt_core(&self, def_id: DefId) -> Result<Rc<AdtCoreBindings<'tcx>>>;
 
-      fn crubit_abi_type_from_ty(&self, ty: Ty<'tcx>) -> Result<CrubitAbiTypeWithCcPrereqs>;
+      fn crubit_abi_type_from_ty(&self, ty: Ty<'tcx>) -> Result<CrubitAbiTypeWithCcPrereqs<'tcx>>;
 
       /// Gathers all  `From` trait impls for the current crate and provides a mapping from the
       /// argument type to the impl. This is useful for determining `From` impls of ADTs where the
@@ -269,8 +342,49 @@ memoized::query_group! {
       /// better to evoke the trait solver directly rather than going through this mapping. For that
       /// reason, this function is currently limited to `From` specifically.
       ///
-      /// Implementation: cc_bindings_from_rs/generate_bindings/generate_struct_and_union.rs?q=function:local_from_trait_impls_by_argument
+      /// Implementation: cc_bindings_from_rs/generate_bindings/generate_struct_and_union.rs?q=function:from_trait_impls_by_argument
       fn from_trait_impls_by_argument(&self, crate_num: CrateNum) -> Rc<HashMap<Ty<'tcx>, Vec<DefId>>>;
+
+
+      /// Gathers all `Into` trail impls for the current crate and provides a mapping from
+      /// the destination type to the impl.
+      /// This is useful for discovering impls that convert from a given type.
+      ///
+      /// Implementation: cc_bindings_from_rs/generate_bindings/generate_struct_and_union.rs?q=function:into_trait_impls_by_destination
+      fn into_trait_impls_by_destination(&self, crate_num: CrateNum) -> Rc<HashMap<Ty<'tcx>, Vec<DefId>>>;
+
+      /// Given a function identified by `fn_def_id` (generic or non-generic) tries to return
+      /// the generic arguments that should be used in the generated Crubit bindings.
+      /// Fails if any of the generic parameters cannot be replaced with a concrete type.
+      fn get_generic_args(&self, fn_def_id: DefId) -> Result<ty::GenericArgsRef<'tcx>>;
+
+      // Returns the original name of a crate, if it has been renamed.
+      fn renamed_crate_original_name(&self, crate_num: CrateNum) -> Option<Rc<str>>;
+
+      /// Parses `self_ty` into a supported template specialization, if one is available
+      /// (e.g. `Option<T>`, `Result<T, E>`). This just checks the type conforms to the right shape
+      /// and contains valid types. It does not check if the template specialization should be used
+      /// (vs using composable bridging).
+      ///
+      /// Implementation: cc_bindings_from_rs/generate_bindings/generate_template_specialization.rs?q=function:parse_rs_std_template_specialization
+      fn parse_rs_std_template_specialization(
+          &self,
+          self_ty: Ty<'tcx>,
+      ) -> Option<Result<RsStdTemplateSpecialization<'tcx>>>;
   }
-  pub struct Database;
+}
+
+impl<'tcx> BindingsGenerator<'tcx> {
+    pub fn crate_features(
+        &self,
+        krate: CrateNum,
+    ) -> flagset::FlagSet<crubit_feature::CrubitFeature> {
+        let crate_features = self.crate_name_to_features();
+        let features = if krate == self.source_crate_num() {
+            crate_features.get("self")
+        } else {
+            crate_features.get(self.tcx().crate_name(krate).as_str())
+        };
+        features.copied().unwrap_or_else(|| self.default_features())
+    }
 }

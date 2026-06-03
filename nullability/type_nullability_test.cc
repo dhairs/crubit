@@ -13,9 +13,7 @@
 #include <utility>
 #include <vector>
 
-#include "absl/log/check.h"
 #include "nullability/pragma.h"
-#include "nullability/test/test_headers.h"
 #include "clang/AST/ASTConsumer.h"
 #include "clang/AST/Decl.h"
 #include "clang/AST/DeclCXX.h"
@@ -913,7 +911,10 @@ std::vector<ComparableNullabilityLoc> getComparableNullabilityLocs(
   TestAST AST{Inputs};
   auto Target = AST.context().getTranslationUnitDecl()->lookup(
       &AST.context().Idents.get("Target"));
-  CHECK(Target.isSingleResult());
+  if (!Target.isSingleResult()) {
+    ADD_FAILURE() << "unable to find Target in AST";
+    return {};
+  }
   std::vector<TypeNullabilityLoc> NullabilityLocs = getTypeNullabilityLocs(
       Target.find_first<TypeAliasDecl>()->getTypeSourceInfo()->getTypeLoc(),
       TypeNullabilityDefaults(AST.context(), Pragmas));

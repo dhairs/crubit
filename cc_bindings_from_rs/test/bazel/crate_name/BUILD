@@ -12,6 +12,8 @@ load(
 )
 load("//common:crubit_wrapper_macros_oss.bzl", "crubit_cc_test")
 
+package(default_applicable_licenses = ["//:license"])
+
 rust_library(
     name = "custom_crate_name",  # <- This is an important part of this test.
     testonly = 1,
