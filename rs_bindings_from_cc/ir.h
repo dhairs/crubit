@@ -46,6 +46,8 @@
 
 namespace crubit {
 
+struct Item;
+
 namespace internal {
 inline constexpr int kJsonIndent = 2;
 }  // namespace internal
@@ -224,6 +226,7 @@ struct CcType {
     CallingConv call_conv;
     // param_and_return_types assumes the last type is the return type.
     std::vector<CcType> param_and_return_types;
+    std::vector<std::string> lifetime_inputs;
   };
 
   struct PointerType {
@@ -416,6 +419,10 @@ enum SpecialName {
   kConstructor,
 };
 
+// The target type of the conversion operator is not stored in the struct but
+// rather is resolved using the enclosing Func's return type.
+struct ConversionOperator {};
+
 rs_bindings_from_cc::ir_proto::flat::SpecialName ToFlatProto(
     SpecialName special_name);
 
@@ -427,7 +434,8 @@ std::ostream& operator<<(std::ostream& o, const SpecialName& special_name);
 // Note that constructors are given a separate variant, so that we can treat
 // them differently. After all, they are not invoked or defined like normal
 // functions.
-using UnqualifiedIdentifier = std::variant<Identifier, Operator, SpecialName>;
+using UnqualifiedIdentifier =
+    std::variant<Identifier, Operator, SpecialName, ConversionOperator>;
 llvm::json::Value toJSON(const UnqualifiedIdentifier& unqualified_identifier);
 rs_bindings_from_cc::ir_proto::flat::UnqualifiedIdentifier ToFlatProto(
     const UnqualifiedIdentifier& unqualified_identifier);
@@ -544,6 +552,7 @@ struct Field {
   bool is_no_unique_address;  // True if the field is [[no_unique_address]].
   bool is_bitfield;           // True if the field is a bitfield.
   bool is_inheritable;        // True if the field is inheritable.
+  bool is_mutable;            // True if the field is mutable.
   // Set if this is [[deprecated]]. If no message was given, will be "".
   std::optional<std::string> deprecated;
 };
@@ -866,6 +875,7 @@ struct Record {
   std::optional<ItemId> enclosing_item_id;
   bool must_bind = false;
   bool overloads_operator_delete = false;
+  bool has_private_or_deleted_operator_delete = false;
   bool detected_formatter = false;
 
   // Whether this type is annotated as thread-safe (CRUBIT_THREAD_SAFE).
@@ -878,6 +888,9 @@ struct Record {
 
   // Set if this is [[deprecated]]. If no message was given, will be "".
   std::optional<std::string> deprecated;
+
+  // TODO(b/523265360): Remove child_item_ids.
+  std::vector<std::shared_ptr<Item>> children;
 };
 
 // A forward-declared record (e.g. `struct Foo;`)
@@ -972,6 +985,8 @@ struct TypeAlias {
   bool must_bind = false;
   // Set if this is [[deprecated]]. If no message was given, will be "".
   std::optional<std::string> deprecated;
+  // Lifetime variable names bound by this type alias.
+  std::vector<std::string> lifetime_inputs;
 };
 
 inline std::ostream& operator<<(std::ostream& o, const TypeAlias& t) {
@@ -1026,6 +1041,7 @@ struct UnsupportedItem {
   std::vector<FormattedError> errors;
   std::string source_loc;
   ItemId id;
+  std::optional<BazelLabel> defining_target;
 
   // Whether the item required binding (was annotated with `CRUBIT_MUST_BIND`).
   // If this is true, binding generation will fail with a hard error.
@@ -1067,6 +1083,9 @@ struct Namespace {
   // Set if this is [[deprecated]]. If no message was given, will be "".
   std::optional<std::string> deprecated;
   std::optional<std::string> doc_comment;
+
+  // TODO(b/523265360): Remove child_item_ids.
+  std::vector<std::shared_ptr<Item>> children;
 };
 
 inline std::ostream& operator<<(std::ostream& o, const Namespace& n) {
@@ -1118,11 +1137,27 @@ inline std::ostream& operator<<(std::ostream& o,
   return o << std::string(llvm::formatv("{0:2}", existing_rust_type.ToJson()));
 }
 
+struct Item
+    : public std::variant<Func, Record, IncompleteRecord, Enum, Constant,
+                          TypeAlias, GlobalVar, UnsupportedItem, Comment,
+                          Namespace, UseMod, ExistingRustType> {
+  using Base = std::variant<Func, Record, IncompleteRecord, Enum, Constant,
+                            TypeAlias, GlobalVar, UnsupportedItem, Comment,
+                            Namespace, UseMod, ExistingRustType>;
+  using Base::Base;
+
+  const Base& as_variant() const { return *this; }
+  Base& as_variant() { return *this; }
+};
+
 // A complete intermediate representation of bindings for publicly accessible
 // declarations of a single C++ library.
 struct IR {
   llvm::json::Value ToJson() const;
-  rs_bindings_from_cc::ir_proto::flat::IRProto ToFlatProto() const;
+  void ToFlatProto(rs_bindings_from_cc::ir_proto::flat::IRProto* proto) const;
+
+  // TODO(b/523265360): Remove this once use_nested_ir flag is retired.
+  bool UseNestedIr() const;
 
   template <typename T>
   std::vector<const T*> get_items_if() const {
@@ -1155,11 +1190,13 @@ struct IR {
 
   BazelLabel current_target;
 
-  using Item = std::variant<Func, Record, IncompleteRecord, Enum, Constant,
-                            TypeAlias, GlobalVar, UnsupportedItem, Comment,
-                            Namespace, UseMod, ExistingRustType>;
+  using Item = ::crubit::Item;
   std::vector<Item> items;
   absl::flat_hash_map<BazelLabel, std::vector<ItemId>> top_level_item_ids;
+  absl::flat_hash_map<BazelLabel, std::vector<std::shared_ptr<Item>>>
+      top_level_items;
+
+  void BuildTree();
   // Empty string signals that the bindings should be generated in the crate
   // root. This is the default state.
   //
@@ -1176,6 +1213,9 @@ struct IR {
 
   absl::flat_hash_map<BazelLabel, absl::flat_hash_set<std::string>>
       crubit_features;
+
+  std::vector<std::string> reexported_namespaces;
+  std::vector<std::string> unstable_rust_features;
 };
 
 rs_bindings_from_cc::ir_proto::flat::Item ToFlatProto(const IR::Item& item);

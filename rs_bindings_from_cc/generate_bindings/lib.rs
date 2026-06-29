@@ -195,7 +195,7 @@ fn generate_type_alias(
 fn generate_constant(db: &BindingsGenerator, constant: &Constant) -> Result<ApiSnippets> {
     db.errors().add_category(error_report::Category::Constant);
     let type_ = db.rs_type_kind(constant.type_.clone())?;
-    let value = match integer_constant_to_token_stream(constant.value, &type_) {
+    let value = match integer_constant_to_token_stream(db, constant.value, &type_) {
         Ok(value) => value,
         Err(e) => {
             return Ok(ApiSnippets {
@@ -591,12 +591,19 @@ pub fn generate_bindings_tokens(
         })
     };
 
-    let features = if features.is_empty() {
+    let all_features = features.into_iter().map(|f| quote! { #f }).chain(
+        ir.unstable_rust_features().iter().map(|f| {
+            let ident = format_ident!("{}", f);
+            quote! { #ident }
+        }),
+    );
+    let all_features: Vec<_> = all_features.collect();
+
+    let features = if all_features.is_empty() {
         quote! {}
     } else {
-        let feature_iter = features.into_iter();
         quote! {
-            #![feature( #(#feature_iter),* )]  __NEWLINE__
+            #![feature( #(#all_features),* )]  __NEWLINE__
             #![allow(stable_features)]
         }
     };
@@ -610,6 +617,12 @@ pub fn generate_bindings_tokens(
             }; __NEWLINE__
         }
     };
+
+    let reexports = ir.reexported_namespaces().iter().map(|ns| {
+        let path = ns.split("::").map(|p| make_rs_ident(p));
+        // First `*` is the quote! repeating macro, second `*` is the Rust glob import.
+        quote! { pub use crate::#( #path )::*::*; }
+    });
 
     Ok(BindingsTokens {
         rs_api: quote! {
@@ -634,6 +647,8 @@ pub fn generate_bindings_tokens(
             #![deny(warnings)] __NEWLINE__ __NEWLINE__
 
             #extern_crate_alloc
+
+            #( #reexports __NEWLINE__ )*
 
             #main_api
 
@@ -1571,7 +1586,7 @@ fn generate_dyn_callable_invoker_and_manager_defs(
         })
         .collect::<Option<TokenStream>>()?;
 
-    let unwrapper = match callable.fn_trait {
+    let unwrapper = match callable.rust_fn_trait {
         FnTrait::Fn => quote! { &*f },
         FnTrait::FnMut => quote! { &mut *f },
         FnTrait::FnOnce => {
@@ -1841,7 +1856,7 @@ fn generate_any_invocable_invoker_def(
         })
         .collect::<Option<TokenStream>>()?;
 
-    let unwrapper = match callable.fn_trait {
+    let unwrapper = match callable.cpp_fn_trait {
         FnTrait::Fn | FnTrait::FnMut => quote! { (*f) },
         FnTrait::FnOnce => {
             // include utility for std::move.
@@ -1934,7 +1949,7 @@ fn any_invocable_sig_spelling(callable: &Callable, db: &BindingsGenerator) -> Re
         .iter()
         .map(|param_ty| cpp_type_name::format_cpp_type_with_references(param_ty, db))
         .collect::<Result<Vec<TokenStream>>>()?;
-    let qual = match callable.fn_trait {
+    let qual = match callable.cpp_fn_trait {
         FnTrait::Fn => quote! { const },
         FnTrait::FnMut => quote! {},
         FnTrait::FnOnce => quote! { && },

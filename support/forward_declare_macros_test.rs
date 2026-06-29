@@ -2,7 +2,7 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-use googletest::prelude::*;
+use googletest::gtest;
 
 // pathological shadowed names: shadow important modules that the macros use.
 mod std {}
@@ -24,10 +24,18 @@ fn test_conversions() {
 
     let loc = ptr_location(&complete);
 
-    // & -> &
+    // & -> & (CppCast)
     {
         let incomplete_ref: &MyTypeIncomplete = (&complete).cpp_cast();
         let complete_ref: &MyType = incomplete_ref.cpp_cast();
+        assert_eq!(ptr_location(incomplete_ref), ptr_location(complete_ref));
+    }
+
+    // & -> & (CppCoerce)
+    {
+        use ::forward_declare::CppCoerce as _;
+        let incomplete_ref: &MyTypeIncomplete = (&complete).cpp_coerce();
+        let complete_ref: &MyType = incomplete_ref.cpp_coerce();
         assert_eq!(ptr_location(incomplete_ref), ptr_location(complete_ref));
     }
 

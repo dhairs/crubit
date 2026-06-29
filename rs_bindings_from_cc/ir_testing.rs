@@ -10,7 +10,6 @@ use itertools::Itertools;
 
 use ffi_types::{FfiU8Slice, FfiU8SliceBox};
 use ir::{self, make_ir_from_parts, Func, Identifier, Item, LifetimeId, LifetimeName, Record, IR};
-use protobuf::Parse;
 
 /// Generates `IR` from a header containing `header_source`.
 pub fn ir_from_cc(platform: multiplatform_testing::Platform, header_source: &str) -> Result<IR> {
@@ -94,6 +93,7 @@ pub fn make_ir_from_items(items: impl IntoIterator<Item = Item>) -> IR {
         /* crate_root_path= */ None,
         /* crubit_features= */
         <BTreeMap<ir::BazelLabel, flagset::FlagSet<crubit_feature::CrubitFeature>>>::new(),
+        /* reexported_namespaces= */ vec![],
     );
     update_test_ir(&mut ir, None);
     ir
@@ -148,54 +148,6 @@ pub fn ir_from_cc_dependency(
     let mut ir = ir::deserialize_ir(&json_utf8)?;
     update_test_ir(&mut ir, extra_feature);
     Ok(ir)
-}
-
-pub fn ir_proto_from_cc(
-    platform: multiplatform_testing::Platform,
-    header_source: &str,
-) -> Result<ir_rust_proto::IRProto> {
-    ir_proto_from_cc_dependency(platform, header_source, "// empty header", None, false)
-}
-
-/// Generates `IR` protobuf from a header containing `header_source`.
-///
-/// `header_source` of the header will be updated to contain the `#include` line
-/// for the header with `dependency_header_source`. The name of the dependency
-/// target is exposed as `DEPENDENCY_TARGET`.
-pub fn ir_proto_from_cc_dependency(
-    platform: multiplatform_testing::Platform,
-    header_source: &str,
-    dependency_header_source: &str,
-    extra_feature: Option<&str>,
-    kythe_annotations: bool,
-) -> Result<ir_rust_proto::IRProto> {
-    const DEPENDENCY_HEADER_NAME: &str = "test/dependency_header.h";
-
-    unsafe extern "C" {
-        fn proto_from_cc_dependency(
-            target_triple: FfiU8Slice,
-            header_source: FfiU8Slice,
-            dependency_header_source: FfiU8Slice,
-            extra_feature: FfiU8Slice,
-            kythe_annotations: bool,
-        ) -> FfiU8SliceBox;
-    }
-
-    let header_source_with_include =
-        format!("#include \"{}\"\n\n{}", DEPENDENCY_HEADER_NAME, header_source);
-    let proto_bytes = unsafe {
-        proto_from_cc_dependency(
-            FfiU8Slice::from_slice(platform.target_triple().as_ref()),
-            FfiU8Slice::from_slice(header_source_with_include.as_bytes()),
-            FfiU8Slice::from_slice(dependency_header_source.as_bytes()),
-            FfiU8Slice::from_slice(extra_feature.unwrap_or_default().as_bytes()),
-            kythe_annotations,
-        )
-        .into_boxed_slice()
-    };
-
-    let proto = ir_rust_proto::IRProto::parse(&proto_bytes)?;
-    Ok(proto)
 }
 
 /// Creates an identifier

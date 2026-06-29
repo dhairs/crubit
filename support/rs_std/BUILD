@@ -32,10 +32,7 @@ cc_library(
     deps = [
         ":str_ref",
         "//support:annotations",
-        "@abseil-cpp//absl/base:core_headers",
-        "@abseil-cpp//absl/log:absl_check",
-        "@abseil-cpp//absl/strings:string_view",
-        "@abseil-cpp//absl/types:span",
+        "//support/internal:bindings_support",
     ],
 )
 
@@ -73,6 +70,64 @@ cc_library(
 )
 
 cc_library(
+    name = "waker",
+    srcs = ["waker.cc"],
+    hdrs = ["waker.h"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    visibility = [
+        "//:__subpackages__",
+        "//google_internal/release:crubit_support_lib_visibility",
+    ],
+)
+
+rust_library(
+    name = "erased_future",
+    srcs = ["erased_future.rs"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    visibility = [
+        "//:__subpackages__",
+        "//google_internal/release:crubit_support_lib_visibility",
+    ],
+)
+
+crubit_rust_test(
+    name = "erased_future_test",
+    size = "small",
+    srcs = ["erased_future_test.rs"],
+    deps = [
+        ":erased_future",
+        "@crate_index//:googletest",
+    ],
+)
+
+rust_library(
+    name = "dyn_erased_future",
+    srcs = ["dyn_erased_future.rs"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    link_deps = [
+        ":waker",
+    ],
+    visibility = [
+        "//:__subpackages__",
+        "//google_internal/release:crubit_support_lib_visibility",
+    ],
+    deps = [
+        ":erased_future",
+    ],
+)
+
+cc_library(
+    name = "dyn_erased_future_cc",
+    hdrs = ["dyn_erased_future.h"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    visibility = [
+        "//:__subpackages__",
+        "//google_internal/release:crubit_support_lib_visibility",
+    ],
+    deps = [":waker"],
+)
+
+cc_library(
     name = "slice_ref",
     hdrs = ["slice_ref.h"],
     # Enable bidirectional bindings (via crubit_internal_rust_type).
@@ -91,11 +146,8 @@ cc_library(
     # have a version of Abseil that is relatively recent (although we can't rely on an exact version
     # and/or exact absl/base/options.h).
     deps = [
-        "//support:annotations_internal",
+        "//support:annotations",
         "//support/internal:bindings_support",
-        "@abseil-cpp//absl/base:core_headers",
-        "@abseil-cpp//absl/strings:string_view",
-        "@abseil-cpp//absl/types:span",
     ],
 )
 
@@ -134,9 +186,6 @@ cc_library(
         "//support:annotations_internal",
         "//support/internal:bindings_support",
         "//support/rs_std/internal:is_utf8",
-        "@abseil-cpp//absl/base:core_headers",
-        "@abseil-cpp//absl/base:nullability",
-        "@abseil-cpp//absl/strings:string_view",
     ],
 )
 
@@ -227,6 +276,16 @@ cc_library(
     ],
 )
 
+crubit_cc_test(
+    name = "iterator_adapter_test",
+    srcs = ["iterator_adapter_test.cc"],
+    deps = [
+        ":iterator_adapter",
+        "@fuzztest//:fuzztest_gtest_main",
+        "@googletest//:gmock",
+    ],
+)
+
 cc_library(
     name = "option",
     hdrs = ["option.h"],
@@ -239,7 +298,7 @@ cc_library(
     visibility = [
         "//visibility:public",
     ],
-    deps = [],
+    deps = ["//support/internal:bindings_support"],
 )
 
 cc_library(
@@ -249,6 +308,21 @@ cc_library(
     compatible_with = ["//buildenv/target:non_prod"],
     tags = [
         "alt_dep=//support/public:result",
+        "avoid_dep",
+    ],
+    visibility = [
+        "//visibility:public",
+    ],
+    deps = ["//support/internal:bindings_support"],
+)
+
+cc_library(
+    name = "vec",
+    hdrs = ["vec.h"],
+    aspect_hints = ["//features:experimental"],
+    compatible_with = ["//buildenv/target:non_prod"],
+    tags = [
+        "alt_dep=//support/public:vec",
         "avoid_dep",
     ],
     visibility = [
@@ -272,14 +346,8 @@ rust_library(
     name = "lossy_formatter",
     srcs = ["lossy_formatter.rs"],
     compatible_with = ["//buildenv/target:non_prod"],
-    proc_macro_deps = [
-        "//support:crubit_annotate",
-    ],
     visibility = [
-        "//:__subpackages__",
-    ],
-    deps = [
-        "//support/ffi_11",
+        "//visibility:public",
     ],
 )
 
@@ -291,10 +359,17 @@ crubit_rust_test(
     ],
 )
 
-cc_bindings_from_rust(
-    name = "lossy_formatter_cc",
+rust_library(
+    name = "lossy_formatter_for_bindings_rs",
+    srcs = ["lossy_formatter_for_bindings.rs"],
     compatible_with = ["//buildenv/target:non_prod"],
-    crate = ":lossy_formatter",
+    visibility = [
+        "//:__subpackages__",
+    ],
+    deps = [
+        ":lossy_formatter",
+        "//support/ffi_11",
+    ],
 )
 
 cc_library(
@@ -302,7 +377,10 @@ cc_library(
     hdrs = ["lossy_formatter_for_bindings.h"],
     compatible_with = ["//buildenv/target:non_prod"],
     visibility = ["//:__subpackages__"],
-    deps = [":lossy_formatter_cc"],
+    deps = [
+        # We depend on the extern "C" symbols in lossy_formatter_for_bindings_rs.
+        ":lossy_formatter_for_bindings_rs",
+    ],
 )
 
 cpp_api_from_rust_toolchain_bindings(
@@ -330,4 +408,3 @@ cpp_api_from_rust_toolchain_bindings(
         ":rs_core",
     ],
 )
-

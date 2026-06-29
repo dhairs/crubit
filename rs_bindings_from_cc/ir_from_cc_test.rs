@@ -4,7 +4,8 @@
 #![cfg(test)]
 
 use arc_anyhow::Result;
-use googletest::prelude::*;
+use googletest::matchers::{eq, field};
+use googletest::{expect_eq, expect_that, fail, gtest, OrFail};
 use ir::*;
 use ir_matchers::{assert_ir_matches, assert_ir_not_matches, assert_items_match};
 use ir_testing::{
@@ -1934,6 +1935,7 @@ fn test_fully_instantiated_template_in_public_field() -> Result<()> {
                        is_no_unique_address: false,
                        is_bitfield: false,
                        is_inheritable: true,
+                       is_mutable: false,
                        deprecated: None,
                    }], ...
                }
@@ -1982,6 +1984,7 @@ fn test_fully_instantiated_template_in_private_field() -> Result<()> {
                     is_no_unique_address: false,
                     is_bitfield: false,
                     is_inheritable: false,
+                    is_mutable: false,
                     deprecated: None,
                 }], ...
             }
@@ -2551,6 +2554,7 @@ fn test_record_with_unsupported_field_type() -> Result<()> {
                   is_no_unique_address: false,
                   is_bitfield: false,
                   is_inheritable: false,
+                  is_mutable: false,
                   deprecated: None,
                }],
                ...
@@ -3582,15 +3586,10 @@ fn test_record_items() {
               }
             },
             quote! {
-              ... UnsupportedItem {
-                  name: "TopLevelStruct::operator int",
-                  ...
-                  kind: Func,
-                  path: None,
-                  errors: [FormattedError {
-                    ... message: "Function name is not supported: Unsupported name: operator int",
-                  }],
-                  ...
+              Func {
+                ...
+                rs_name: ConversionOperator,
+                ...
               }
             },
         ]
@@ -4883,4 +4882,25 @@ fn test_anonymous_enum_in_record() {
     let constant = ir.constants().find(|c| c.cc_name == "kFoo").unwrap();
     assert_eq!(constant.enclosing_item_id, Some(record.id));
     assert_eq!(constant.value.wrapped_value, 1);
+}
+
+#[gtest]
+fn test_has_private_or_deleted_operator_delete() {
+    let ir = ir_from_cc(
+        "
+        struct S1 { private: void operator delete(void*); };
+        struct S2 { void operator delete(void*) = delete; };
+        struct S3 { void operator delete(void*); };
+        struct S4 : S1 {};
+        ",
+    )
+    .unwrap();
+    let s1 = retrieve_record(&ir, "S1");
+    assert!(s1.has_private_or_deleted_operator_delete);
+    let s2 = retrieve_record(&ir, "S2");
+    assert!(s2.has_private_or_deleted_operator_delete);
+    let s3 = retrieve_record(&ir, "S3");
+    assert!(!s3.has_private_or_deleted_operator_delete);
+    let s4 = retrieve_record(&ir, "S4");
+    assert!(s4.has_private_or_deleted_operator_delete);
 }

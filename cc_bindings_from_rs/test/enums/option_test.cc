@@ -3,16 +3,17 @@
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 #include "cc_bindings_from_rs/test/enums/option.h"
 
-#include <cstdint>
 #include <optional>
-#include <utility>
 
 #include "gtest/gtest.h"
+#include "support/rs_std/rs_std.h"
 
 namespace {
 
 TEST(OptionTest, OptionWithNicheIsConvertibleToStd) {
   option::HasOptions has_options = option::HasOptions::new_(1);
+  EXPECT_TRUE(has_options.niche.has_value());
+  EXPECT_EQ(has_options.niche->value(), 1);
   std::optional<option::LessThan20U8> opt_niche = std::move(has_options.niche);
   EXPECT_TRUE(opt_niche.has_value());
   EXPECT_EQ(opt_niche.value().value(), 1);
@@ -125,6 +126,17 @@ TEST(OptionTest, OptionMoveConstructAndAssignFromOption) {
   EXPECT_FALSE(z.has_value());
 }
 
+TEST(OptionTest, OptionArrowProvidesReferenceToValue) {
+  rs_std::Option<option::HasDefault> opt(
+      option::HasDefault::new_("pls move me"));
+  EXPECT_TRUE(opt.has_value());
+  EXPECT_EQ(std::move(opt->get_string_inside_option()), "pls move me");
+  std::optional<option::HasDefault> val = std::move(opt);
+  EXPECT_TRUE(val.has_value());
+  EXPECT_EQ(val->get_string_inside_option().to_string_view(), "pls move me");
+  EXPECT_FALSE(opt.has_value());
+}
+
 TEST(OptionTest, OptionHasDefaultValueAssign) {
   rs_std::Option<option::HasDefault> x;
   x = option::HasDefault::new_("hello");
@@ -181,6 +193,19 @@ TEST(OptionTest, PassingOptionAsReferenceArgument) {
   std::optional<uint32_t> y = std::move(option::stringify_len(x));
   EXPECT_TRUE(y.has_value());
   EXPECT_EQ(y.value(), 5);
+}
+
+TEST(OptionTest, ReturnOptionResult) {
+  std::optional<rs_std::Result<int32_t, rs::std::string::String>> result =
+      option::return_option_result();
+  EXPECT_TRUE(result.has_value());
+  EXPECT_TRUE(result.value().has_value());
+  EXPECT_EQ(result.value().value(), 1);
+}
+
+TEST(OptionTest, ReturnNestedOptionResult) {
+  auto opt_result = option::stress_testing_nested_types();
+  EXPECT_FALSE(opt_result.has_value());
 }
 
 }  // namespace

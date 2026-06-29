@@ -60,7 +60,7 @@ use query_compiler::{
     post_analysis_typing_env, repr_attrs,
 };
 use quote::{format_ident, quote};
-use rustc_abi::{AddressSpace, BackendRepr, Integer, Primitive, Scalar};
+use rustc_abi::{AddressSpace, BackendRepr, HasDataLayout, Integer, Primitive, Scalar};
 use rustc_hir::def::{DefKind, Res};
 use rustc_middle::metadata::{ModChild, Reexport};
 use rustc_middle::mir::ConstValue;
@@ -527,17 +527,15 @@ fn public_paths_by_def_id(
             // enclosing parent type.
             return;
         }
-        if let Some(stability) = tcx.lookup_stability(def_id) {
-            if stability.is_unstable() {
-                return;
-            }
-            // SIMD primitives often have name collisions with SIMD primitives in C++. The C++
-            // primitives are macros, so namespacing does not prevent collision. We expect people
-            // will not need bindings to these primitives, so we exclude them to prevent the
-            // collision.
-            if ["simd_arch", "simd_x86"].contains(&stability.feature.as_str()) {
-                return;
-            }
+        if let Some(stability) = tcx.lookup_stability(def_id)
+            && (stability.is_unstable()
+                // SIMD primitives often have name collisions with SIMD primitives in C++. The C++
+                // primitives are macros, so namespacing does not prevent collision. We expect people
+                // will not need bindings to these primitives, so we exclude them to prevent the
+                // collision.
+                || ["simd_arch", "simd_x86"].contains(&stability.feature.as_str()))
+        {
+            return;
         }
 
         // Map type aliases to their underlying type.
@@ -858,14 +856,19 @@ fn check_slice_layout<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) {
         .layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty))
         .expect("`layout_of` is expected to succeed for `{ty}` type")
         .layout;
-    assert_eq!(8, layout.align().abi.bytes());
-    assert_eq!(16, layout.size().bytes());
+
+    let data_layout = tcx.data_layout();
+    let ptr_size = data_layout.pointer_size().bytes();
+    let ptr_align = data_layout.pointer_align().abi.bytes();
+
+    assert_eq!(ptr_align, layout.align().abi.bytes());
+    assert_eq!(2 * ptr_size, layout.size().bytes());
     assert!(matches!(
         layout.backend_repr(),
         BackendRepr::ScalarPair(
             Scalar::Initialized { value: Primitive::Pointer(AddressSpace(_)), .. },
             Scalar::Initialized {
-                value: Primitive::Int(Integer::I64, /* signedness = */ false),
+                value: Primitive::Int(Integer::I32 | Integer::I64, /* signedness = */ false),
                 ..
             }
         )
@@ -1102,9 +1105,6 @@ fn generate_const<'tcx>(db: &BindingsGenerator<'tcx>, def_id: DefId) -> Result<A
 // Implementation of `BindingsGenerator::supported_traits`.
 fn supported_traits(db: &BindingsGenerator<'_>) -> Rc<[DefId]> {
     let tcx = db.tcx();
-    let iterator_trait_id = tcx.get_diagnostic_item(sym::Iterator);
-    let future_trait_id = tcx.lang_items().future_trait();
-
     let traits = tcx
         .visible_traits()
         .filter(|trait_id| {
@@ -1121,19 +1121,68 @@ fn supported_traits(db: &BindingsGenerator<'_>) -> Rc<[DefId]> {
             !has_const_generics
         })
         .filter(|trait_id| {
-            // TODO(b/483382648): Generate bindings for other `std`, `core`, and `alloc` traits.
-            // At least for _most_ other traits - we probably still want to exclude traits that
-            // get idiomatic C++ bindings elsewhere, such as `Clone`, `Default`, `Drop`, `From`,
-            // `Index`, `Into`, and `PartialEq`.
-            let not_in_stdlib = {
-                let crate_name = tcx.crate_name(trait_id.krate);
-                crate_name.as_str() != "std"
-                    && crate_name.as_str() != "core"
-                    && crate_name.as_str() != "alloc"
-            };
-            let is_iterator_trait = iterator_trait_id == Some(*trait_id);
-            let is_future_trait = future_trait_id == Some(*trait_id);
-            not_in_stdlib || is_iterator_trait || is_future_trait
+            let trait_def = tcx.trait_def(*trait_id);
+            // Filter out traits that don't have meaningful impls or exist to interact with the
+            // compiler in ways we don't want to reflect in FFI bindings (Sized, etc).
+            let has_meaningful_impl = !(trait_def.is_marker
+                || trait_def.is_fundamental
+                || trait_def.deny_explicit_impl
+                || trait_def.has_auto_impl);
+            // List of traits which we handle specially, usually in generate_struct_and_union, and
+            // so do not want to bind here. Doing so causes duplicate thunks to be generated.
+            let lang_items = tcx.lang_items();
+            let excluded_traits = [
+                lang_items.drop_trait(),
+                lang_items.clone_trait(),
+                lang_items.copy_trait(),
+                tcx.get_diagnostic_item(sym::Into),
+                tcx.get_diagnostic_item(sym::From),
+                tcx.get_diagnostic_item(sym::PartialEq),
+                tcx.get_diagnostic_item(sym::Default),
+                lang_items.partial_ord_trait(),
+                // std::ops traits:
+                lang_items.add_trait(),
+                lang_items.add_assign_trait(),
+                lang_items.sub_trait(),
+                lang_items.sub_assign_trait(),
+                lang_items.mul_trait(),
+                lang_items.mul_assign_trait(),
+                lang_items.div_trait(),
+                lang_items.div_assign_trait(),
+                lang_items.rem_trait(),
+                lang_items.rem_assign_trait(),
+                lang_items.neg_trait(),
+                lang_items.not_trait(),
+                lang_items.bitand_trait(),
+                lang_items.bitand_assign_trait(),
+                lang_items.bitor_trait(),
+                lang_items.bitor_assign_trait(),
+                lang_items.bitxor_trait(),
+                lang_items.bitxor_assign_trait(),
+                lang_items.shl_trait(),
+                lang_items.shl_assign_trait(),
+                lang_items.shr_trait(),
+                lang_items.shr_assign_trait(),
+                lang_items.index_trait(),
+                lang_items.index_mut_trait(),
+                lang_items.deref_trait(),
+                lang_items.deref_mut_trait(),
+                lang_items.deref_pure_trait(),
+                lang_items.fn_trait(),
+                lang_items.fn_mut_trait(),
+                lang_items.fn_once_trait(),
+                lang_items.async_fn_trait(),
+                lang_items.async_fn_mut_trait(),
+                lang_items.async_fn_once_trait(),
+                lang_items.coroutine_trait(),
+                lang_items.coerce_unsized_trait(),
+                lang_items.dispatch_from_dyn_trait(),
+                lang_items.receiver_trait(),
+                lang_items.legacy_receiver_trait(),
+                lang_items.try_trait(),
+            ];
+            let is_excluded_builtin = excluded_traits.iter().any(|id| id.eq(&Some(*trait_id)));
+            has_meaningful_impl && !is_excluded_builtin
         })
         .collect::<Vec<DefId>>()
         .into_boxed_slice();
@@ -1230,6 +1279,7 @@ pub(crate) fn create_type_alias_with_rs_type<'tcx>(
     let cc_bindings = db.format_ty_for_cc(alias_type, TypeLocation::Other)?;
     let mut main_api_prereqs = CcPrerequisites::default();
     let actual_type_name = cc_bindings.into_tokens(&mut main_api_prereqs);
+    main_api_prereqs.move_defs_to_fwd_decls();
 
     let alias_name = format_cc_ident(db, alias_name).context("Error formatting type alias name")?;
 
@@ -1283,6 +1333,7 @@ fn generate_default_ctor<'tcx>(
             core.def_id,
             core.rs_fully_qualified_name.clone(),
             /*is_constructor=*/ true,
+            /*within_template=*/ false,
         )?;
 
         let cc_struct_name = &core.cc_short_name;
@@ -1402,6 +1453,7 @@ fn generate_copy_ctor_and_assignment_operator<'tcx>(
                     core.def_id,
                     core.rs_fully_qualified_name.clone(),
                     /*is_constructor=*/ true,
+                    /*within_template=*/ false,
                 )?;
                 let main_api = CcSnippet::new(quote! {
                     __NEWLINE__ __COMMENT__ "Clone::clone"
@@ -1980,7 +2032,13 @@ fn generate_specializations_fixpoint<'tcx>(
             seen.insert(spec.clone());
 
             // Collect specializations required by the main_api.
-            for new_spec in snippets.main_api.prereqs.template_specializations.iter() {
+            for new_spec in snippets
+                .main_api
+                .prereqs
+                .template_specializations
+                .iter()
+                .chain(snippets.main_api.prereqs.lazy_template_specializations.iter())
+            {
                 if !seen.contains(new_spec) {
                     next_worklist.push(new_spec.clone());
                 }
@@ -1988,7 +2046,10 @@ fn generate_specializations_fixpoint<'tcx>(
 
             impls_cc_details.push(snippets.cc_details.into_tokens(cc_details_prereqs));
             // Collect any transitive specializations discovered in cc_details.
-            for new_spec in std::mem::take(&mut cc_details_prereqs.template_specializations) {
+            let transitive_specs = std::mem::take(&mut cc_details_prereqs.template_specializations)
+                .into_iter()
+                .chain(std::mem::take(&mut cc_details_prereqs.lazy_template_specializations));
+            for new_spec in transitive_specs {
                 if !seen.contains(&new_spec) {
                     next_worklist.push(new_spec);
                 }
@@ -2163,8 +2224,17 @@ fn generate_crate(db: &BindingsGenerator) -> Result<BindingsTokens> {
 
     let worklist: Vec<_> = std::mem::take(&mut cc_details_prereqs.template_specializations)
         .into_iter()
+        .chain(std::mem::take(&mut cc_details_prereqs.lazy_template_specializations))
         .chain(
-            main_apis.values().flat_map(|api| api.prereqs.template_specializations.iter()).cloned(),
+            main_apis
+                .values()
+                .flat_map(|api| {
+                    api.prereqs
+                        .template_specializations
+                        .iter()
+                        .chain(api.prereqs.lazy_template_specializations.iter())
+                })
+                .cloned(),
         )
         .chain(collect_trait_impls(db))
         .collect();
@@ -2204,6 +2274,7 @@ fn generate_crate(db: &BindingsGenerator) -> Result<BindingsTokens> {
                         .map(|(spec, main_api)| (Node::Specialization(spec.clone()), main_api)),
                 )
                 .flat_map(|(successor, main_api)| {
+                    let successor_clone = successor.clone();
                     let predecessors = main_api
                         .prereqs
                         .defs
@@ -2219,13 +2290,15 @@ fn generate_crate(db: &BindingsGenerator) -> Result<BindingsTokens> {
                                 .iter()
                                 .cloned()
                                 .map(Node::Specialization),
-                        );
+                        )
+                        .filter(move |pre| pre != &successor_clone);
                     predecessors.map(move |predecessor| toposort::Dependency {
                         predecessor,
                         successor: successor.clone(),
                     })
                 })
                 .collect::<Vec<_>>();
+
             let spec_keys: HashMap<&TemplateSpecialization<'_>, NodeSortKey> =
                 specializations.keys().map(|spec| (spec, NodeSortKey::new(tcx, spec))).collect();
 

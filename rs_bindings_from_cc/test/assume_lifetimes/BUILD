@@ -18,8 +18,8 @@ crubit_test_cc_library(
     srcs = ["free_function.cc"],
     hdrs = ["free_function.h"],
     aspect_hints = [
-        "//features:supported",
         "//features:assume_lifetimes",
+        "//features:supported",
     ],
 )
 
@@ -48,8 +48,8 @@ crubit_test_cc_library(
     srcs = ["member_function.cc"],
     hdrs = ["member_function.h"],
     aspect_hints = [
-        "//features:supported",
         "//features:assume_lifetimes",
+        "//features:supported",
     ],
 )
 
@@ -168,8 +168,8 @@ crubit_test_cc_library(
     srcs = ["string_view.cc"],
     hdrs = ["string_view.h"],
     aspect_hints = [
-        "//features:supported",
         "//features:assume_lifetimes",
+        "//features:supported",
     ],
 )
 
@@ -198,8 +198,8 @@ crubit_test_cc_library(
     srcs = ["struct_with_lifetimebound.cc"],
     hdrs = ["struct_with_lifetimebound.h"],
     aspect_hints = [
-        "//features:supported",
         "//features:assume_lifetimes",
+        "//features:supported",
     ],
 )
 
@@ -216,6 +216,50 @@ crubit_rust_test(
     srcs = ["struct_with_lifetimebound_test.rs"],
     cc_deps = [
         ":struct_with_lifetimebound",
+        "//support/cc_std",
+    ],
+    deps = [
+        "//support:cref",
+        "//support:ctor",
+        "@crate_index//:googletest",
+    ],
+)
+
+cc_library(
+    name = "type_alias_target_without_assume_lifetimes",
+    hdrs = ["type_alias_target_without_assume_lifetimes.h"],
+    aspect_hints = [
+        "//features:no_assume_lifetimes",
+        "//features:supported",
+    ],
+)
+
+crubit_test_cc_library(
+    name = "type_alias",
+    srcs = ["type_alias.cc"],
+    hdrs = ["type_alias.h"],
+    aspect_hints = [
+        "//features:assume_lifetimes",
+        "//features:supported",
+    ],
+    deps = [
+        ":type_alias_target_without_assume_lifetimes",
+    ],
+)
+
+golden_test(
+    name = "type_alias_golden_test",
+    basename = "type_alias",
+    cc_library = "type_alias",
+    golden_cc = "type_alias_api_impl.cc",
+    golden_rs = "type_alias_rs_api.rs",
+)
+
+crubit_rust_test(
+    name = "type_alias_test",
+    srcs = ["type_alias_test.rs"],
+    cc_deps = [
+        ":type_alias",
         "//support/cc_std",
     ],
     deps = [

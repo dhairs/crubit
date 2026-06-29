@@ -25,7 +25,9 @@ use database::code_snippet::{
     CcPrerequisites, CcSnippet, CrubitAbiTypeWithCcPrereqs, TemplateSpecialization,
 };
 use database::BindingsGenerator;
-use database::{FineGrainedFeature, TypeLocation};
+use database::{
+    rename_c_stdlib_functions, rename_clang_builtin_macros, FineGrainedFeature, TypeLocation,
+};
 use error_report::{anyhow, bail, ensure};
 use proc_macro2::{Ident, Literal, Span, TokenStream};
 use query_compiler::is_c_abi_compatible_by_value;
@@ -44,9 +46,19 @@ pub fn format_top_level_ns_for_crate(db: &BindingsGenerator<'_>, krate: CrateNum
     let crate_needle_name =
         if krate == db.source_crate_num() { "self" } else { crate_name.as_str() };
     if let Some(namespaces) = db.crate_name_to_namespace().get(crate_needle_name) {
-        namespaces.split("::").map(Symbol::intern).collect()
+        namespaces
+            .split("::")
+            .enumerate()
+            .map(|(i, s)| {
+                let s = rename_clang_builtin_macros(Rc::from(s));
+                let s = if i == 0 { rename_c_stdlib_functions(s) } else { s };
+                Symbol::intern(s.as_ref())
+            })
+            .collect()
     } else {
-        Rc::from([crate_name])
+        let renamed = rename_clang_builtin_macros(Rc::from(crate_name.as_str()));
+        let renamed = rename_c_stdlib_functions(renamed);
+        Rc::from([Symbol::intern(renamed.as_ref())])
     }
 }
 
@@ -254,7 +266,16 @@ pub fn format_ty_for_cc<'tcx>(
                 let mut prereqs = CcPrerequisites::default();
                 let tokens = rs_std.self_ty_cc.clone().into_tokens(&mut prereqs);
                 prereqs.includes.insert(rs_std.support_header(db));
-                prereqs.template_specializations.insert(TemplateSpecialization::RsStd(rs_std));
+                if matches!(
+                    location,
+                    TypeLocation::Field | TypeLocation::Const | TypeLocation::NestedBridgeable
+                ) {
+                    prereqs.template_specializations.insert(TemplateSpecialization::RsStd(rs_std));
+                } else {
+                    prereqs
+                        .lazy_template_specializations
+                        .insert(TemplateSpecialization::RsStd(rs_std));
+                }
                 return Ok(CcSnippet { tokens, prereqs });
             } else {
                 let mut prereqs = CcPrerequisites::default();
@@ -392,6 +413,7 @@ pub fn format_ty_for_cc<'tcx>(
                 let is_option_or_result = specialization.as_ref().is_ok_and(|rs_std_enum| {
                     (!location.is_bridgeable() && rs_std_enum.is_option())
                         || rs_std_enum.is_result()
+                        || rs_std_enum.is_vec()
                         || db
                             .crate_features(db.source_crate_num())
                             .contains(CrubitFeature::AlwaysSpecializeGenericsInCppApiFromRust)
@@ -401,7 +423,16 @@ pub fn format_ty_for_cc<'tcx>(
                 let rs_std = specialization.unwrap()?;
                 let tokens = rs_std.self_ty_cc.clone().into_tokens(&mut prereqs);
                 prereqs.includes.insert(rs_std.support_header(db));
-                prereqs.template_specializations.insert(TemplateSpecialization::RsStd(rs_std));
+                if matches!(
+                    location,
+                    TypeLocation::Field | TypeLocation::Const | TypeLocation::NestedBridgeable
+                ) {
+                    prereqs.template_specializations.insert(TemplateSpecialization::RsStd(rs_std));
+                } else {
+                    prereqs
+                        .lazy_template_specializations
+                        .insert(TemplateSpecialization::RsStd(rs_std));
+                }
                 return Ok(CcSnippet { tokens, prereqs });
             } else if let Some(bridged_type) = is_bridged_type(db, ty)? {
                 ensure!(
@@ -580,11 +611,11 @@ pub fn format_ty_for_cc<'tcx>(
                     use rustc_type_ir::inherent::FSigKind;
                     rustc_middle::ty::FnSig {
                         inputs_and_output: sig_tys.inputs_and_output,
-                        fn_sig_kind: ty::FnSigKind::new(
-                            fn_header.abi(),
-                            fn_header.safety(),
-                            fn_header.c_variadic(),
-                        ),
+                        // We do not support #[splat], so we do not set it here.
+                        fn_sig_kind: ty::FnSigKind::default()
+                            .set_abi(fn_header.abi())
+                            .set_safety(fn_header.safety())
+                            .set_c_variadic(fn_header.c_variadic()),
                     }
                 };
                 sig
@@ -613,7 +644,9 @@ pub fn format_ty_for_cc<'tcx>(
                 | TypeLocation::Const => {
                     quote! { & }
                 }
-                TypeLocation::NestedBridgeable | TypeLocation::Other => quote! { * },
+                TypeLocation::NestedBridgeable | TypeLocation::Other | TypeLocation::Field => {
+                    quote! { * }
+                }
             };
 
             let mut prereqs = CcPrerequisites::default();
@@ -682,7 +715,7 @@ fn treat_ref_as_ptr<'tcx>(
         // References in other locations are always converted to pointers, as references are often
         // not allowed in these locations (e.g. the target of another reference, the element type
         // of an array, etc.).
-        TypeLocation::NestedBridgeable | TypeLocation::Other => {
+        TypeLocation::NestedBridgeable | TypeLocation::Other | TypeLocation::Field => {
             RefConvert::ToPtr { is_lifetime_bound: false }
         }
     }
@@ -882,6 +915,13 @@ pub fn format_ty_for_rs<'tcx>(db: &BindingsGenerator<'tcx>, ty: Ty<'tcx>) -> Res
             quote! { [ #rs_element_type; #unsuffixed_length ] }
         }
         ty::TyKind::Adt(adt, substs) => {
+            if let Some(BridgedBuiltin::Vec) = BridgedBuiltin::new(db, adt) {
+                let t_param = match substs[0].kind() {
+                    ty::GenericArgKind::Type(ty) => db.format_ty_for_rs(ty)?,
+                    _ => panic!("First generic argument of Vec must be a type"),
+                };
+                return Ok(quote! { ::alloc::vec::Vec<#t_param> });
+            }
             let has_cpp_type = crubit_attr::get_attrs(db.tcx(), adt.did())?.cpp_type.is_some();
             let has_composable_bridging =
                 matches!(is_bridged_type(db, ty)?, Some(BridgedType::Composable(_)));
@@ -1143,8 +1183,27 @@ pub fn crubit_abi_type_from_ty<'tcx>(
                 }
             } else {
                 // if it doesn't, try seeing if it's a builtin.
-                if let Some(bridged_builtin) = BridgedBuiltin::new(db, *adt) {
+                if let Some(bridged_builtin @ BridgedBuiltin::Option) =
+                    BridgedBuiltin::new(db, *adt)
+                {
                     return bridged_builtin.crubit_abi_type(db, substs);
+                }
+
+                if let Some(spec) = db.parse_rs_std_template_specialization(ty) {
+                    // Specifically when embedding a template specialization within an Option, we
+                    // need it to be movable.
+                    if !db.has_move_ctor_and_assignment_operator(Some(adt.did()), ty).is_some() {
+                        bail!(
+                            "Failed to construct CrubitAbiType for {ty} because it is not movable."
+                        );
+                    }
+                    let spec = spec?;
+                    let mut prereqs = CcPrerequisites::default();
+                    let rust_type = db.format_ty_for_rs(spec.self_ty_rs)?;
+                    let cpp_type = spec.self_ty_cc.clone().into_tokens(&mut prereqs);
+                    prereqs.template_specializations.insert(TemplateSpecialization::RsStd(spec));
+                    let crubit_abi_type = CrubitAbiType::Transmute { rust_type, cpp_type };
+                    return Ok(CrubitAbiTypeWithCcPrereqs { crubit_abi_type, prereqs });
                 }
 
                 let fully_qualified_name = db
@@ -1214,14 +1273,22 @@ pub fn crubit_abi_type_from_ty<'tcx>(
 pub enum BridgedBuiltin {
     Result,
     Option,
+    Vec,
 }
 
 impl BridgedBuiltin {
-    /// Determines if an AdtDef is for a Result or Option or neither.
+    /// Determines if an AdtDef is for a Result, Option, or Vec.
     pub fn new(db: &BindingsGenerator<'_>, adt: AdtDef<'_>) -> Option<Self> {
+        let tcx = db.tcx();
+        if tcx.is_diagnostic_item(rustc_span::symbol::sym::Vec, adt.did())
+            || crate::matches_qualified_name(db, adt.did(), &["alloc", "vec", "Vec"])
+        {
+            return Some(BridgedBuiltin::Vec);
+        }
+
         let variant = adt.variants().iter().next()?;
 
-        match db.tcx().lang_items().from_def_id(variant.def_id) {
+        match tcx.lang_items().from_def_id(variant.def_id) {
             Some(LangItem::ResultOk | LangItem::ResultErr) => Some(BridgedBuiltin::Result),
             Some(LangItem::OptionSome | LangItem::OptionNone) => Some(BridgedBuiltin::Option),
             _ => None,
@@ -1237,8 +1304,8 @@ impl BridgedBuiltin {
         substs: &[GenericArg<'tcx>],
     ) -> Result<CrubitAbiTypeWithCcPrereqs<'tcx>> {
         match self {
-            BridgedBuiltin::Result => {
-                bail!("Result as a bridge type is not yet supported")
+            BridgedBuiltin::Result | BridgedBuiltin::Vec => {
+                bail!("Result/Vec as a bridge type is not yet supported")
             }
             BridgedBuiltin::Option => {
                 let inner = db.crubit_abi_type_from_ty(substs[0].expect_ty())?;
@@ -1252,14 +1319,14 @@ impl BridgedBuiltin {
 
     pub fn cpp_name(self) -> FullyQualifiedPath {
         match self {
-            BridgedBuiltin::Result => todo!(),
+            BridgedBuiltin::Result | BridgedBuiltin::Vec => todo!(),
             BridgedBuiltin::Option => FullyQualifiedPath::new("::std::optional"),
         }
     }
 
     pub fn prereqs<'tcx>(self) -> CcPrerequisites<'tcx> {
         match self {
-            BridgedBuiltin::Result => CcPrerequisites::default(),
+            BridgedBuiltin::Result | BridgedBuiltin::Vec => CcPrerequisites::default(),
             BridgedBuiltin::Option => {
                 let mut prereqs = CcPrerequisites::default();
                 prereqs.includes.insert(CcInclude::optional());
@@ -1442,8 +1509,8 @@ pub fn is_bridged_type<'tcx>(
             if !always_specialize_generics
                 && let Some(bridged_builtin) = BridgedBuiltin::new(db, adt)
             {
-                if let BridgedBuiltin::Result = bridged_builtin {
-                    // We can't ask for the CrubitAbiType of a Result, because it will return an Err,
+                if let BridgedBuiltin::Result | BridgedBuiltin::Vec = bridged_builtin {
+                    // We can't ask for the CrubitAbiType of a Result/Vec, because it will return an Err,
                     // so we check for it here and return Ok.
                     return Ok(None);
                 }

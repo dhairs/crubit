@@ -11,7 +11,11 @@
 namespace {
 
 using enums::qr_error::QrError;
+using enums::repr_128::ReprI128;
+using enums::repr_128::ReprU128;
 using enums::repr_c::MyEnum;
+using enums::repr_c::ReprCWithExtremeDiscriminants;
+using enums::repr_c::ReprCWithSingleNoPayloadVariant;
 using enums::repr_c_clone_active_variant::CloneActiveVariant;
 using enums::repr_c_clone_active_variant::is_a;
 using enums::repr_c_clone_active_variant::is_b;
@@ -19,7 +23,11 @@ using enums::repr_c_clone_active_variant::is_c;
 using enums::repr_c_clone_counter::CloneCount;
 using enums::repr_c_drop::DropMe;
 using enums::repr_int::IntReprEnumWithNoPayload;
+using enums::repr_int::IntReprWithSingleNoPayloadVariant;
+using enums::repr_int::NegReprIntEnum;
 using enums::repr_rust::RustReprEnum;
+using enums::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods;
+using enums::repr_rust::RustReprWithSingleTuplePayloadVariant;
 
 TEST(EnumsTest, TestDefault) {
   MyEnum e;
@@ -125,14 +133,90 @@ TEST(EnumsTest, TestRustReprEnumTuplePayloadCtor) {
   EXPECT_EQ(e1.get_first_item_from_tuple_payload(), 123);
 }
 
+TEST(EnumsTest, TestRustReprWithNamingConflictBetweenCtorsAndMethods) {
+  using EnumType = RustReprWithNamingConflictBetweenCtorsAndMethods;
+  auto e1 = EnumType::MakeNoPayloadVariant();
+  EXPECT_EQ(e1.get_variant_number(), 1);
+
+  auto e2 = EnumType::MakeTuplePayloadVariant(100);
+  EXPECT_EQ(e2.get_variant_number(), 2);
+  EXPECT_EQ(e2.get_value(), 200);
+
+  auto e3 = EnumType::MakeStructPayloadVariant(200);
+  EXPECT_EQ(e3.get_variant_number(), 3);
+  EXPECT_EQ(e3.get_value(), 600);
+}
+
 TEST(EnumsTest, TestIntReprEnumNoPayloadCtor) {
   EXPECT_TRUE(IntReprEnumWithNoPayload::MakeNoPayload1().is_no_payload1());
   EXPECT_TRUE(IntReprEnumWithNoPayload::MakeNoPayload2().is_no_payload2());
 }
 
+TEST(EnumsTest, TestIntReprWithSingleNoPayloadVariant) {
+  auto e = IntReprWithSingleNoPayloadVariant::MakeSingleVariant();
+  EXPECT_TRUE(e.is_single_variant());
+}
+
+TEST(EnumsTest, TestReprCWithSingleNoPayloadVariant) {
+  auto e = ReprCWithSingleNoPayloadVariant::MakeSingleVariant();
+  EXPECT_TRUE(e.is_single_variant());
+  EXPECT_EQ(e.tag, ReprCWithSingleNoPayloadVariant::Tag::SingleVariant);
+}
+
+TEST(EnumsTest, TestRustReprWithSingleTuplePayloadVariant) {
+  auto e = RustReprWithSingleTuplePayloadVariant::MakeSingleVariant(123);
+  EXPECT_EQ(e.get_single_item_from_tuple_payload(), 123);
+}
+
 TEST(EnumsTest, TestQrError) {
   auto e = QrError::MakeDataTooLong();
   EXPECT_TRUE(e.is_data_too_long());
+}
+
+TEST(EnumsTest, TestReprCWithExtremeDiscriminants) {
+  constexpr auto e_minus_one = ReprCWithExtremeDiscriminants::MakeMinusOne();
+  constexpr auto e_minus_two = ReprCWithExtremeDiscriminants::MakeMinusTwo();
+  EXPECT_TRUE(e_minus_one.is_minus_one());
+  EXPECT_FALSE(e_minus_one.is_minus_two());
+  EXPECT_EQ(e_minus_one.tag, ReprCWithExtremeDiscriminants::Tag::MinusOne);
+
+  EXPECT_TRUE(e_minus_two.is_minus_two());
+  EXPECT_FALSE(e_minus_two.is_minus_one());
+  EXPECT_EQ(e_minus_two.tag, ReprCWithExtremeDiscriminants::Tag::MinusTwo);
+
+  constexpr auto e_min = ReprCWithExtremeDiscriminants::MakeMinI32();
+  constexpr auto e_max = ReprCWithExtremeDiscriminants::MakeMaxI32();
+  EXPECT_TRUE(e_min.is_min_i32());
+  EXPECT_EQ(e_min.tag, ReprCWithExtremeDiscriminants::Tag::MinI32);
+  EXPECT_TRUE(e_max.is_max_i32());
+  EXPECT_EQ(e_max.tag, ReprCWithExtremeDiscriminants::Tag::MaxI32);
+}
+
+TEST(EnumsTest, TestNegReprIntEnum) {
+  auto e_minus_one = NegReprIntEnum::MakeMinusOne();
+  auto e_minus_two = NegReprIntEnum::MakeMinusTwo();
+  EXPECT_TRUE(e_minus_one.is_minus_one());
+  EXPECT_FALSE(e_minus_one.is_minus_two());
+
+  EXPECT_TRUE(e_minus_two.is_minus_two());
+  EXPECT_FALSE(e_minus_two.is_minus_one());
+}
+
+TEST(EnumsTest, TestReprU128) {
+  constexpr auto e_zero = ReprU128::MakeZero();
+  constexpr auto e_max = ReprU128::MakeMaxU128();
+  EXPECT_TRUE(e_max.is_max_u128());
+  EXPECT_FALSE(e_zero.is_max_u128());
+}
+
+TEST(EnumsTest, TestReprI128) {
+  constexpr auto e_zero = ReprI128::MakeZero();
+  constexpr auto e_min = ReprI128::MakeMinI128();
+  constexpr auto e_max = ReprI128::MakeMaxI128();
+  EXPECT_TRUE(e_min.is_min_i128());
+  EXPECT_TRUE(e_max.is_max_i128());
+  EXPECT_FALSE(e_zero.is_min_i128());
+  EXPECT_FALSE(e_zero.is_max_i128());
 }
 
 }  // namespace

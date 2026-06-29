@@ -1,16 +1,20 @@
 // Part of the Crubit project, under the Apache License v2.0 with LLVM
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
+
+//! A helper library for repeatedly writing `&[u8]` byte chunks to a [`std::fmt::Formatter`]
+//! lossily as UTF-8.
+//!
+//! Buffers incomplete UTF-8 byte sequences across write calls and replaces invalid sequences
+//! with the Unicode replacement character (`U+FFFD`).
+
 use crate::incomplete_utf8::IncompleteUtf8;
-use std::fmt;
-use std::fmt::{Debug, Formatter, Write};
+use std::fmt::{Debug, Formatter, Result, Write};
 use std::iter;
-use std::slice;
 
 /// Wraps a [`Formatter<'formatter>`] for the duration of `'scope` to lossily write UTF-8.
 ///
 /// Writes bytes instead of [`str`]. Buffers up to 3 bytes of an incomplete UTF-8 sequence.
-#[crubit_annotate::must_bind]
 pub struct LossyFormatter<'scope, 'formatter> {
     writer: &'scope mut Formatter<'formatter>,
     incomplete: IncompleteUtf8,
@@ -35,39 +39,26 @@ impl<'scope, 'formatter> LossyFormatter<'scope, 'formatter> {
     /// sequence, writes [`U+FFFD REPLACEMENT CHARACTER`][U+FFFD], which looks like this: �
     ///
     /// Returns the number of bytes successfully progressed: whether written to the underlying
-    /// formatter or buffered as incomplete UTF-8.
-    ///
-    /// # Safety
-    /// `data` must point to `count` bytes. `data` may be null only if `count` is 0.
+    /// formatter or buffered as incomplete UTF-8. Returning a count less than the input length
+    /// indicates that a write error occurred.
     ///
     /// [U+FFFD]: char::REPLACEMENT_CHARACTER
     /// [`write_str`]: Formatter::write_str
-    #[crubit_annotate::must_bind]
-    #[must_use]
-    pub unsafe fn write_bytes(&mut self, data: *const ffi_11::c_char, count: usize) -> usize {
-        let data = if count > 0 {
-            // SAFETY: caller guarantees that `data` points to `count` bytes.
-            unsafe { slice::from_raw_parts(data as *const u8, count) }
-        } else {
-            &[]
-        };
-        self.write_slice(data)
-    }
-
-    fn write_slice(&mut self, mut data: &[u8]) -> usize {
+    #[must_use = "returning a count shorter than the input length indicates a write error"]
+    pub fn write_slice(&mut self, mut data: &[u8]) -> usize {
         let mut progressed = 0;
         while !self.incomplete.is_empty() {
             let Some((first, rest)) = data.split_first() else {
                 break;
             };
-            if !self.write_byte(*first) {
+            if self.write_byte(*first).is_err() {
                 return progressed;
             }
             progressed += 1;
             data = rest;
         }
 
-        let mut write_chunks = || -> fmt::Result {
+        let mut write_chunks = || -> Result {
             let mut chunks = data.utf8_chunks().peekable();
             while let Some(chunk) = chunks.next() {
                 self.writer.write_str(chunk.valid())?;
@@ -105,22 +96,20 @@ impl<'scope, 'formatter> LossyFormatter<'scope, 'formatter> {
     ///
     /// [U+FFFD]: char::REPLACEMENT_CHARACTER
     /// [`write_char`]: Write::write_char
-    #[crubit_annotate::must_bind]
-    #[must_use]
-    pub fn write_byte(&mut self, data: u8) -> bool {
-        let mut write_two_chars = |a, b| -> fmt::Result {
+    pub fn write_byte(&mut self, data: u8) -> Result {
+        let mut write_two_chars = |a, b| -> Result {
             self.writer.write_char(a)?;
             self.writer.write_char(b)?;
             Ok(())
         };
         use incomplete_utf8::PushState::*;
         match self.incomplete.push(data) {
-            Incomplete => true,
-            Valid(c) => self.writer.write_char(c).is_ok(),
-            Invalid => self.writer.write_char(char::REPLACEMENT_CHARACTER).is_ok(),
-            InvalidThenValid(c) => write_two_chars(char::REPLACEMENT_CHARACTER, c).is_ok(),
+            Incomplete => Ok(()),
+            Valid(c) => self.writer.write_char(c),
+            Invalid => self.writer.write_char(char::REPLACEMENT_CHARACTER),
+            InvalidThenValid(c) => write_two_chars(char::REPLACEMENT_CHARACTER, c),
             InvalidThenInvalid => {
-                write_two_chars(char::REPLACEMENT_CHARACTER, char::REPLACEMENT_CHARACTER).is_ok()
+                write_two_chars(char::REPLACEMENT_CHARACTER, char::REPLACEMENT_CHARACTER)
             }
         }
     }
@@ -129,13 +118,13 @@ impl<'scope, 'formatter> LossyFormatter<'scope, 'formatter> {
     /// [`Self::write_byte`] `count` times.
     ///
     /// Returns the number of bytes successfully progressed: whether written to the underlying
-    /// formatter or buffered as incomplete UTF-8.
-    #[crubit_annotate::must_bind]
-    #[must_use]
+    /// formatter or buffered as incomplete UTF-8. Returning a count less than `count` indicates
+    /// that a write error occurred.
+    #[must_use = "returning a count less than the input count indicates a write error"]
     pub fn write_fill(&mut self, count: usize, data: u8) -> usize {
         if !data.is_ascii() {
             return iter::repeat_n(/*element=*/ data, /*count=*/ count)
-                .take_while(|byte| self.write_byte(*byte))
+                .take_while(|byte| self.write_byte(*byte).is_ok())
                 .count();
         }
 
@@ -152,7 +141,8 @@ impl<'scope, 'formatter> LossyFormatter<'scope, 'formatter> {
                 return 0;
             }
         }
-        let data = char::from_u32(data as u32).expect("ASCII character should be valid char");
+        // `data` is ASCII, so it is safe to cast to `char`.
+        let data = data as char;
         iter::repeat_n(/*element=*/ data, /*count=*/ count)
             .take_while(|c| self.writer.write_char(*c).is_ok())
             .count()
@@ -166,7 +156,6 @@ impl<'scope, 'formatter> LossyFormatter<'scope, 'formatter> {
     /// Returns false if a write error occurred; otherwise, returns true.
     ///
     /// [U+FFFD]: char::REPLACEMENT_CHARACTER
-    #[crubit_annotate::must_bind]
     #[must_use]
     pub fn flush(&mut self) -> bool {
         if self.incomplete.is_empty() {
@@ -178,7 +167,7 @@ impl<'scope, 'formatter> LossyFormatter<'scope, 'formatter> {
 }
 
 impl<'scope, 'formatter> Debug for LossyFormatter<'scope, 'formatter> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut Formatter) -> Result {
         f.debug_struct("LossyFormatter")
             .field("incomplete", &self.incomplete)
             .finish_non_exhaustive()
@@ -187,10 +176,9 @@ impl<'scope, 'formatter> Debug for LossyFormatter<'scope, 'formatter> {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-    use googletest;
-    use googletest::prelude::*;
-    use std::fmt::Display;
+    use super::LossyFormatter;
+    use googletest::{expect_eq, gtest, verify_eq, verify_false, verify_true, GoogleTestSupport};
+    use std::fmt::{Display, Error, Formatter, Result};
     use std::io::Write;
 
     fn display_with_lossy_formatter<F: Fn(&mut LossyFormatter) -> googletest::Result<()>>(
@@ -200,12 +188,12 @@ mod tests {
             body: F,
         }
         impl<F: Fn(&mut LossyFormatter) -> googletest::Result<()>> Display for Impl<F> {
-            fn fmt(&self, f: &mut Formatter) -> fmt::Result {
+            fn fmt(&self, f: &mut Formatter) -> Result {
                 let mut f = LossyFormatter::new(f);
                 let test_result = (self.body)(&mut f);
                 let fmt_result = match test_result {
                     Ok(()) => Ok(()),
-                    Err(_) => Err(fmt::Error),
+                    Err(_) => Err(Error),
                 };
                 test_result.and_log_failure_with_message(|| format!("{f:?}"));
                 fmt_result
@@ -302,7 +290,7 @@ mod tests {
                 240, 159, 146, // Incomplete UTF-8 without flush.
             ]
             .into_iter()
-            .map(|b| verify_true!(f.write_byte(b)))
+            .map(|b| verify_true!(f.write_byte(b).is_ok()))
             .collect())
             .to_string(),
             "hi 💖� � � � �� �� �� bye �"
@@ -314,7 +302,7 @@ mod tests {
         write!(
             &mut [] as &mut [u8],
             "{}",
-            display_with_lossy_formatter(|f| verify_false!(f.write_byte(b'a')))
+            display_with_lossy_formatter(|f| verify_true!(f.write_byte(b'a').is_err()))
         )?;
         Ok(())
     }
@@ -324,7 +312,7 @@ mod tests {
         write!(
             &mut [] as &mut [u8],
             "{}",
-            display_with_lossy_formatter(|f| verify_false!(f.write_byte(255)))
+            display_with_lossy_formatter(|f| verify_true!(f.write_byte(255).is_err()))
         )?;
         Ok(())
     }
@@ -335,8 +323,8 @@ mod tests {
             &mut [] as &mut [u8],
             "{}",
             display_with_lossy_formatter(|f| {
-                verify_true!(f.write_byte(240))?;
-                verify_false!(f.write_byte(b'a'))?;
+                verify_true!(f.write_byte(240).is_ok())?;
+                verify_true!(f.write_byte(b'a').is_err())?;
                 Ok(())
             })
         )?;
@@ -350,8 +338,8 @@ mod tests {
             &mut bytes[..],
             "{}",
             display_with_lossy_formatter(|f| {
-                verify_true!(f.write_byte(240))?;
-                verify_false!(f.write_byte(b'a'))?;
+                verify_true!(f.write_byte(240).is_ok())?;
+                verify_true!(f.write_byte(b'a').is_err())?;
                 Ok(())
             })
         )?;
@@ -365,8 +353,8 @@ mod tests {
             &mut [] as &mut [u8],
             "{}",
             display_with_lossy_formatter(|f| {
-                verify_true!(f.write_byte(240))?;
-                verify_false!(f.write_byte(255))?;
+                verify_true!(f.write_byte(240).is_ok())?;
+                verify_true!(f.write_byte(255).is_err())?;
                 Ok(())
             })
         )?;
@@ -381,8 +369,8 @@ mod tests {
             &mut bytes[..],
             "{}",
             display_with_lossy_formatter(|f| {
-                verify_true!(f.write_byte(240))?;
-                verify_false!(f.write_byte(255))?;
+                verify_true!(f.write_byte(240).is_ok())?;
+                verify_true!(f.write_byte(255).is_err())?;
                 Ok(())
             })
         )?;
@@ -442,7 +430,7 @@ mod tests {
         expect_eq!(
             display_with_lossy_formatter(|f| {
                 // Incomplete sequence.
-                verify_true!(f.write_byte(240))?;
+                verify_true!(f.write_byte(240).is_ok())?;
                 // Complete one invalid sequence, then 4 valid ASCII characters.
                 verify_eq!(f.write_fill(/*count=*/ 4, /*data=*/ b'a'), 4)?;
                 Ok(())
@@ -457,7 +445,7 @@ mod tests {
         expect_eq!(
             display_with_lossy_formatter(|f| {
                 // Incomplete sequence.
-                verify_true!(f.write_byte(240))?;
+                verify_true!(f.write_byte(240).is_ok())?;
                 // Still writes nothing.
                 verify_eq!(f.write_fill(/*count=*/ 0, /*data=*/ b'a'), 0)?;
                 Ok(())

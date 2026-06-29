@@ -59,6 +59,7 @@ message CcType {
     bool non_null = 1;
     CallingConv call_conv = 2;
     repeated CcType param_and_return_types = 3;
+    repeated string lifetime_inputs = 4;
   }
 
   oneof variant {
@@ -87,6 +88,10 @@ message Operator {
   string name = 1;
 }
 
+// A C++ conversion operator. The target type is resolved in the Rust
+// generator using the enclosing function's return type.
+message ConversionOperator {}
+
 enum SpecialName {
   SPECIAL_NAME_UNSPECIFIED = 0;
   DESTRUCTOR = 1;
@@ -98,6 +103,7 @@ message UnqualifiedIdentifier {
     Identifier ident = 1;
     Operator oper = 2;
     SpecialName special_name = 3;
+    ConversionOperator conversion_operator = 4;
   }
 }
 
@@ -178,6 +184,7 @@ message Field {
   bool is_bitfield = 10;
   bool is_inheritable = 11;
   string deprecated = 12;
+  bool is_mutable = 13;
 }
 
 enum SpecialMemberFunc {
@@ -365,6 +372,8 @@ message Record {
   repeated string lifetime_inputs = 37;
   string deprecated = 38;
   bool is_explicit_class_template_instantiation_definition = 39;
+  bool has_private_or_deleted_operator_delete = 40;
+  repeated Item children = 41;
 }
 
 message IncompleteRecord {
@@ -434,6 +443,7 @@ message TypeAlias {
   int64 enclosing_item_id = 10;
   bool must_bind = 11;
   string deprecated = 12;
+  repeated string lifetime_inputs = 13;
 }
 
 message UnsupportedItem {
@@ -464,6 +474,7 @@ message UnsupportedItem {
   string source_loc = 6;
   int64 id = 7;
   bool must_bind = 8;
+  string defining_target = 9;
 }
 
 message Comment {
@@ -486,6 +497,7 @@ message Namespace {
   bool must_bind = 11;
   string deprecated = 12;
   string doc_comment = 13;
+  repeated Item children = 14;
 }
 
 message UseMod {
@@ -533,6 +545,9 @@ message IRProto {
   message FeatureSet {
     repeated string features = 1;
   }
+  message ItemList {
+    repeated Item items = 1;
+  }
 
   repeated HeaderName public_headers = 1;
   string current_target = 2;
@@ -540,4 +555,9 @@ message IRProto {
   map<string, ItemIdList> top_level_item_ids = 4;
   string crate_root_path = 5;
   map<string, FeatureSet> crubit_features = 6;
+  repeated string unstable_rust_features = 7;
+  repeated string reexported_namespaces = 8;
+  // Lexical tree structure of the IR. We would like for this to fully
+  // replace `top_level_item_ids` eventually. (See b/523265360)
+  map<string, ItemList> top_level_items = 9;
 }

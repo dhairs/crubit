@@ -36,9 +36,6 @@ flagset::flags! {
         /// Disable AssumeLifetimes (useful for :experimental).
         NoAssumeLifetimes,
 
-        /// Enable experimental support for `rs_std::DynCallable` and `absl::AnyInvocable`.
-        Callables,
-
         /// Mark C++ types with `[[gsl::Pointer]]` as unsafe.
         UnsafeView,
 
@@ -60,6 +57,9 @@ flagset::flags! {
         /// Always specialize generics in cpp_api_from_rust, instead of doing composable bridging
         /// when possible.
         AlwaysSpecializeGenericsInCppApiFromRust,
+
+        /// Generate bindings using the nested IR.
+        UseNestedIr,
     }
 }
 
@@ -78,7 +78,6 @@ impl CrubitFeature {
             Self::AssumeLifetimes => "assume_lifetimes",
             Self::AssumeThisLifetimes => "assume_this_lifetimes",
             Self::NoAssumeLifetimes => "no_assume_lifetimes",
-            Self::Callables => "callables",
             Self::UseProtobufIR => "use_protobuf_ir",
             Self::UnsafeView => "unsafe_view",
             Self::CheckDefaultInitialized => "check_default_initialized",
@@ -88,6 +87,7 @@ impl CrubitFeature {
             Self::AlwaysSpecializeGenericsInCppApiFromRust => {
                 "always_specialize_generics_in_cpp_api_from_rust"
             }
+            Self::UseNestedIr => "use_nested_ir",
         }
     }
 
@@ -103,7 +103,6 @@ impl CrubitFeature {
             Self::AssumeLifetimes => "//features:assume_lifetimes",
             Self::AssumeThisLifetimes => "//features:assume_this_lifetimes",
             Self::NoAssumeLifetimes => "//features:no_assume_lifetimes",
-            Self::Callables => "//features:callables",
             Self::UseProtobufIR => "//features:use_protobuf_ir",
             Self::UnsafeView => "//features:unsafe_view",
             Self::CheckDefaultInitialized => {
@@ -117,6 +116,7 @@ impl CrubitFeature {
             Self::AlwaysSpecializeGenericsInCppApiFromRust => {
                 "//features:always_specialize_generics_in_cpp_api_from_rust"
             }
+            Self::UseNestedIr => "//features:use_nested_ir",
         }
     }
 }
@@ -139,7 +139,6 @@ pub fn named_features(name: &[u8]) -> Option<flagset::FlagSet<CrubitFeature>> {
         b"assume_lifetimes" => CrubitFeature::AssumeLifetimes.into(),
         b"assume_this_lifetimes" => CrubitFeature::AssumeThisLifetimes.into(),
         b"no_assume_lifetimes" => CrubitFeature::NoAssumeLifetimes.into(),
-        b"callables" => CrubitFeature::Callables.into(),
         b"use_protobuf_ir" => CrubitFeature::UseProtobufIR.into(),
         b"unsafe_view" => CrubitFeature::UnsafeView.into(),
         b"check_default_initialized" => CrubitFeature::CheckDefaultInitialized.into(),
@@ -149,6 +148,7 @@ pub fn named_features(name: &[u8]) -> Option<flagset::FlagSet<CrubitFeature>> {
         b"always_specialize_generics_in_cpp_api_from_rust" => {
             CrubitFeature::AlwaysSpecializeGenericsInCppApiFromRust.into()
         }
+        b"use_nested_ir" => CrubitFeature::UseNestedIr.into(),
         _ => return None,
         // LINT.ThenChange(//depot/rs_bindings_from_cc/importer.cc, //depot/features/BUILD)
     };
@@ -202,6 +202,17 @@ impl<'de> Deserialize<'de> for SerializedCrubitFeature {
 #[derive(Debug, Default, PartialEq, Eq, Clone)]
 pub struct SerializedCrubitFeatures(pub flagset::FlagSet<CrubitFeature>);
 
+impl SerializedCrubitFeatures {
+    /// Returns a new `SerializedCrubitFeatures` after resolving conflicts.
+    pub fn resolved(mut features: flagset::FlagSet<CrubitFeature>) -> Self {
+        if features.contains(CrubitFeature::NoAssumeLifetimes) {
+            features -= CrubitFeature::AssumeLifetimes;
+        }
+        features -= CrubitFeature::NoAssumeLifetimes;
+        Self(features)
+    }
+}
+
 impl<'de> Deserialize<'de> for SerializedCrubitFeatures {
     fn deserialize<D>(deserializer: D) -> Result<SerializedCrubitFeatures, D::Error>
     where
@@ -226,13 +237,7 @@ impl<'de> Deserialize<'de> for SerializedCrubitFeatures {
                     result |= flags;
                 }
 
-                if result.contains(CrubitFeature::NoAssumeLifetimes) {
-                    result -= CrubitFeature::AssumeLifetimes;
-                }
-
-                result -= CrubitFeature::NoAssumeLifetimes;
-
-                Ok(SerializedCrubitFeatures(result))
+                Ok(SerializedCrubitFeatures::resolved(result))
             }
         }
 
@@ -243,7 +248,7 @@ impl<'de> Deserialize<'de> for SerializedCrubitFeatures {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use googletest::prelude::*;
+    use googletest::gtest;
 
     #[gtest]
     fn test_serialized_crubit_feature() {
@@ -262,12 +267,12 @@ mod tests {
                 | CrubitFeature::Experimental
                 | CrubitFeature::AssumeLifetimes
                 | CrubitFeature::AssumeThisLifetimes
-                | CrubitFeature::Callables
                 | CrubitFeature::UnsafeView
                 | CrubitFeature::UseProtobufIR
                 | CrubitFeature::CheckDefaultInitialized
                 | CrubitFeature::LeadingColonsForCppType
                 | CrubitFeature::TemplateInstantiation
+                | CrubitFeature::UseNestedIr
         );
     }
 
@@ -298,12 +303,12 @@ mod tests {
                 | CrubitFeature::Experimental
                 | CrubitFeature::AssumeLifetimes
                 | CrubitFeature::AssumeThisLifetimes
-                | CrubitFeature::Callables
                 | CrubitFeature::UnsafeView
                 | CrubitFeature::UseProtobufIR
                 | CrubitFeature::CheckDefaultInitialized
                 | CrubitFeature::LeadingColonsForCppType
                 | CrubitFeature::TemplateInstantiation
+                | CrubitFeature::UseNestedIr
         );
     }
 
@@ -319,12 +324,12 @@ mod tests {
                 | CrubitFeature::Experimental
                 | CrubitFeature::AssumeLifetimes
                 | CrubitFeature::AssumeThisLifetimes
-                | CrubitFeature::Callables
                 | CrubitFeature::UnsafeView
                 | CrubitFeature::UseProtobufIR
                 | CrubitFeature::CheckDefaultInitialized
                 | CrubitFeature::LeadingColonsForCppType
                 | CrubitFeature::TemplateInstantiation
+                | CrubitFeature::UseNestedIr
         );
     }
 
@@ -341,12 +346,12 @@ mod tests {
                 | CrubitFeature::Types
                 | CrubitFeature::Experimental
                 | CrubitFeature::AssumeThisLifetimes
-                | CrubitFeature::Callables
                 | CrubitFeature::UnsafeView
                 | CrubitFeature::UseProtobufIR
                 | CrubitFeature::CheckDefaultInitialized
                 | CrubitFeature::LeadingColonsForCppType
                 | CrubitFeature::TemplateInstantiation
+                | CrubitFeature::UseNestedIr
         );
     }
 }

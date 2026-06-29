@@ -4,7 +4,7 @@
 
 #![feature(rustc_private)]
 
-use code_gen_utils::{CcInclude, NamespaceQualifier};
+use code_gen_utils::NamespaceQualifier;
 use generate_bindings::format_namespace_bound_cc_tokens;
 use proc_macro2::{Ident, TokenStream, TokenTree};
 use quote::quote;
@@ -12,7 +12,7 @@ use run_compiler_test_support::run_compiler_for_testing;
 use rustc_span::symbol::Symbol;
 use test_helpers::{
     bindings_db_for_tests, test_format_item, test_format_item_with_features,
-    test_generated_bindings,
+    test_generated_bindings, test_generated_bindings_with_namespace,
 };
 use token_stream_matchers::{
     assert_cc_matches, assert_cc_not_matches, assert_rs_matches, assert_rs_not_matches,
@@ -1880,5 +1880,106 @@ fn test_const_generic_array() {
         //
         // cc_bindings_from_rs/generate_bindings/format_type.rs:1341
         // Unable to get size from normalized type constant (N => N).
+    });
+}
+
+#[test]
+fn test_generate_bindings_c_stdlib_conflict_module() {
+    let test_src = r#"
+        pub mod remove {
+            pub fn public_function() {}
+        }
+    "#;
+    test_generated_bindings(test_src, |bindings| {
+        let cc_api = &bindings.unwrap().cc_api;
+        // `remove` is not top-level here (`rust_out::remove`), so it should NOT be renamed.
+        assert_cc_matches!(
+            cc_api,
+            quote! {
+                namespace rust_out::remove {
+                    void public_function();
+                    ...
+                }
+            }
+        );
+    });
+}
+
+#[test]
+fn test_generate_bindings_c_stdlib_conflict_top_level() {
+    let test_src = r#"
+        pub fn public_function() {}
+    "#;
+    test_generated_bindings_with_namespace(test_src, "remove", |bindings| {
+        let cc_api = &bindings.unwrap().cc_api;
+        // `--crate-namespace=remove` is top-level, so it SHOULD be renamed to `rs_remove`.
+        assert_cc_matches!(
+            cc_api,
+            quote! {
+                namespace rs_remove {
+                    void public_function();
+                    ...
+                }
+            }
+        );
+        assert_cc_not_matches!(cc_api, quote! { namespace remove });
+    });
+}
+
+#[test]
+fn test_generate_bindings_c_stdlib_conflict_top_level_submod() {
+    let test_src = r#"
+        pub fn public_function() {}
+    "#;
+    test_generated_bindings_with_namespace(test_src, "my_crate::remove", |bindings| {
+        let cc_api = &bindings.unwrap().cc_api;
+        // `my_crate` is top-level (not colliding), `remove` is nested, so it stays `my_crate::remove`.
+        assert_cc_matches!(
+            cc_api,
+            quote! {
+                namespace my_crate::remove {
+                    void public_function();
+                    ...
+                }
+            }
+        );
+    });
+}
+
+#[test]
+fn test_trait_impl_for_mapped_cpp_type() {
+    let test_src = r#"
+            #![allow(unused)]
+            #[doc = "CRUBIT_ANNOTATE: cpp_type=::some_ns::SomeCppStruct"]
+            #[doc = "CRUBIT_ANNOTATE: include_path=some_ns/some_cpp_struct.h"]
+            pub struct SomeCppStruct(i32);
+
+            impl std::iter::Iterator for SomeCppStruct {
+                type Item = i32;
+                fn next(&mut self) -> Option<Self::Item> {
+                    todo!()
+                }
+            }
+        "#;
+    test_generated_bindings(test_src, |bindings| {
+        let bindings = bindings.unwrap();
+
+        // Ensure the include path is present in the generated header.
+        assert_cc_matches!(
+            bindings.cc_api,
+            quote! {
+                ...
+                __HASH_TOKEN__ include "some_ns/some_cpp_struct.h"
+                ...
+                template <>
+                struct rs_std::impl<::some_ns::SomeCppStruct, ::rs::core::iter::Iterator> {
+                    ...
+                };
+                ...
+            }
+        );
+
+        // Ensure no bogus forward declaration is emitted.
+        assert!(!bindings.cc_api.to_string().contains("struct SomeCppStruct;"));
     });
 }

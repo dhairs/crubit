@@ -457,13 +457,14 @@ pub fn generated_items_to_token_stream<'db>(
 }
 
 pub fn integer_constant_to_token_stream(
+    db: &crate::BindingsGenerator,
     integer_constant: IntegerConstant,
     underlying_type: &RsTypeKind,
 ) -> Result<TokenStream> {
     let RsTypeKind::Primitive(primitive) = *underlying_type.unalias() else {
         bail!(
-            "integer_constant_to_token_stream called with non-primitive underlying type:\n\
-            {underlying_type:#?}\n"
+            "integer_constant_to_token_stream called with non-primitive underlying type:\n  {}",
+            underlying_type.display(db),
         )
     };
     let IntegerConstant { is_negative, wrapped_value } = integer_constant;
@@ -1296,19 +1297,22 @@ impl ToTokens for FieldDefinition {
 #[derive(Clone, Debug)]
 pub enum FieldType {
     Erased(BitPadding),
-    Type { needs_manually_drop: bool, ty: TokenStream },
+    Type { needs_manually_drop: bool, needs_cell: bool, ty: TokenStream },
 }
 
 impl ToTokens for FieldType {
     fn to_tokens(&self, tokens: &mut TokenStream) {
         match self {
             FieldType::Erased(padding) => padding.to_tokens(tokens),
-            FieldType::Type { needs_manually_drop, ty } => {
+            FieldType::Type { needs_manually_drop, needs_cell, ty } => {
+                let mut ty = ty.clone();
                 if *needs_manually_drop {
-                    quote! { ::core::mem::ManuallyDrop<#ty> }.to_tokens(tokens)
-                } else {
-                    ty.to_tokens(tokens)
+                    ty = quote! { ::core::mem::ManuallyDrop<#ty> };
                 }
+                if *needs_cell {
+                    ty = quote! { ::core::cell::Cell<#ty> };
+                }
+                ty.to_tokens(tokens)
             }
         }
     }

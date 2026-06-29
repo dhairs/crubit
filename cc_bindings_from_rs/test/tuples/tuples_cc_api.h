@@ -16,9 +16,7 @@
 #pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
 #include "support/bridge.h"
-#include "support/internal/check.h"
 #include "support/internal/memswap.h"
-#include "support/internal/move_assign.h"
 #include "support/internal/slot.h"
 #include "support/lifetime_annotations.h"
 #include "support/rs_std/option.h"
@@ -322,11 +320,28 @@ return_nested_tuples();
 ::std::tuple<::std::optional<::std::int32_t>> return_option_in_tuple();
 
 // CRUBIT_ANNOTATE: must_bind=
+::std::optional<::std::int32_t> return_option_in_tuple_ref(
+    rs_std::Tuple<rs_std::Option<::std::int32_t>> const& opt);
+
+// CRUBIT_ANNOTATE: must_bind=
 ::std::tuple<::std::tuple<::std::tuple<::std::int32_t>>>
 return_triply_nested_tuple();
 
 // CRUBIT_ANNOTATE: must_bind=
 void return_unit_is_not_tuple();
+
+// CRUBIT_ANNOTATE: must_bind=
+::std::uint8_t take_tuple_clone_no_default_2(
+    rs_std::Tuple<::std::uint8_t, ::tuples::CloneNoDefault> const& r);
+
+// CRUBIT_ANNOTATE: must_bind=
+::std::uint8_t take_tuple_copy_no_default_1(
+    rs_std::Tuple<::tuples::CopyNoDefault, ::std::uint8_t> const& r);
+
+// CRUBIT_ANNOTATE: must_bind=
+rs_std::StrRef take_tuple_has_default(
+    rs_std::Tuple<::tuples::HasDefault, ::std::uint8_t> const* $(__anon1)
+        crubit_nonnull r CRUBIT_LIFETIME_BOUND);
 
 }  // namespace tuples
 
@@ -389,8 +404,7 @@ struct CRUBIT_INTERNAL_RUST_TYPE(":: tuples_golden :: TupleStruct") alignas(4)
   union {
     rs_std::Tuple<::std::int32_t> tuple_field;
   };
-  // Skipped bindings for field `empty_tuple_field`: ZST fields are not
-  // supported (b/258259459)
+  // Field `empty_tuple_field` omitted: C++ does not support zero-sized types.
  private:
   static void __crubit_field_offset_assertions();
 };
@@ -510,15 +524,6 @@ struct alignas(1)
   unsigned char storage_[2];
 };
 #endif
-
-namespace tuples {
-
-// CRUBIT_ANNOTATE: must_bind=
-::std::uint8_t take_tuple_copy_no_default_1(
-    rs_std::Tuple<::tuples::CopyNoDefault, ::std::uint8_t> const& r);
-
-}  // namespace tuples
-
 #ifndef _CRUBIT_BINDINGS_FOR__x0000003a_x0000003a_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020tuples_x00000020_x0000003a_x0000003a_x00000020HasDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
 #define _CRUBIT_BINDINGS_FOR__x0000003a_x0000003a_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020tuples_x00000020_x0000003a_x0000003a_x00000020HasDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
 template <>
@@ -545,16 +550,6 @@ struct alignas(8)
   unsigned char storage_[32];
 };
 #endif
-
-namespace tuples {
-
-// CRUBIT_ANNOTATE: must_bind=
-rs_std::StrRef take_tuple_has_default(
-    rs_std::Tuple<::tuples::HasDefault, ::std::uint8_t> const* $(__anon1)
-        crubit_nonnull r CRUBIT_LIFETIME_BOUND);
-
-}  // namespace tuples
-
 #ifndef _CRUBIT_BINDINGS_FOR__x0000003a_x0000003a_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020tuples_x00000020_x0000003a_x0000003a_x00000020HasNoDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
 #define _CRUBIT_BINDINGS_FOR__x0000003a_x0000003a_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020tuples_x00000020_x0000003a_x0000003a_x00000020HasNoDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
 template <>
@@ -979,10 +974,6 @@ CloneNoDefaultTuple final {
   static void __crubit_field_offset_assertions();
 };
 
-// CRUBIT_ANNOTATE: must_bind=
-::std::uint8_t take_tuple_clone_no_default_2(
-    rs_std::Tuple<::std::uint8_t, ::tuples::CloneNoDefault> const& r);
-
 }  // namespace tuples
 
 #ifndef _CRUBIT_BINDINGS_FOR__x0000003a_x0000003a_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020tuples_x00000020_x0000003a_x0000003a_x00000020CopyNoDefault_x00000020_x0000003e
@@ -1289,7 +1280,9 @@ TupleWithSizeTypes final {
 #define _CRUBIT_BINDINGS_FOR_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Option_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020int32_ut_x00000020_x0000003e
 template <>
 struct alignas(4) CRUBIT_INTERNAL_RUST_TYPE(
-    "std :: option :: Option < i32 >") rs_std::Option<::std::int32_t> {
+    "std :: option :: Option < i32 >") rs_std::Option<::std::int32_t>
+    : public rs_std::OptionBase<rs_std::Option<::std::int32_t>,
+                                ::std::int32_t> {
  public:
   // Rust types that are `Copy` get trivial, `default` C++ copy constructor and
   // assignment operator.
@@ -1301,24 +1294,57 @@ struct alignas(4) CRUBIT_INTERNAL_RUST_TYPE(
   Option(::crubit::UnsafeRelocateTag, Option&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  constexpr Option();
-
-  constexpr explicit Option(::std::nullopt_t) noexcept;
+  using base_type =
+      rs_std::OptionBase<rs_std::Option<::std::int32_t>, ::std::int32_t>;
+  constexpr Option() = default;
+  constexpr Option(::std::nullopt_t) noexcept;
   constexpr Option& operator=(::std::nullopt_t) noexcept;
-
-  Option(::std::int32_t&& value) noexcept;
-  Option& operator=(::std::int32_t&& value) noexcept;
-
-  explicit Option(::std::optional<::std::int32_t>&& value) noexcept;
-  Option& operator=(::std::optional<::std::int32_t>&& value) noexcept;
-
+  template <typename U>
+    requires(!std::is_base_of_v<Option, std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, ::std::nullopt_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::std::int32_t, U>)
+  Option(U&& value) noexcept : base_type(::std::forward<U>(value)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Option, std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, ::std::nullopt_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::std::int32_t, U>)
+  Option& operator=(U&& value) noexcept {
+    base_type::operator=(::std::forward<U>(value));
+    return *this;
+  }
+  template <typename Opt>
+    requires(
+        std::is_same_v<std::decay_t<Opt>, ::std::optional<::std::int32_t>> &&
+        !std::is_lvalue_reference_v<Opt>)
+  Option(Opt&& value) noexcept : base_type(::std::forward<Opt>(value)) {}
+  template <typename Opt>
+    requires(
+        std::is_same_v<std::decay_t<Opt>, ::std::optional<::std::int32_t>> &&
+        !std::is_lvalue_reference_v<Opt>)
+  Option& operator=(Opt&& value) noexcept {
+    base_type::operator=(::std::forward<Opt>(value));
+    return *this;
+  }
   template <typename... Args>
-  Option(::std::in_place_t, Args&&... args) noexcept;
+  explicit Option(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   ~Option() noexcept = default;
-  operator ::std::optional<::std::int32_t>() && noexcept;
-  bool has_value() noexcept;
 
  private:
+  friend base_type;
+  using tag_type = ::std::uint32_t;
+  static constexpr tag_type kNoneVal = 0;
+  ::std::int32_t* some_ptr() noexcept {
+    return reinterpret_cast<::std::int32_t*>(storage_ + 4);
+  }
+  ::std::int32_t const* some_const_ptr() const noexcept {
+    return reinterpret_cast<::std::int32_t const*>(storage_ + 4);
+  }
+  void set_some_tag() noexcept { set_tag(1); }
+  constexpr void set_none_tag() noexcept { set_tag(kNoneVal); }
+  constexpr bool is_none() const noexcept { return tag() == kNoneVal; }
   constexpr ::std::uint32_t tag() const& noexcept;
   constexpr void set_tag(::std::uint32_t tag) noexcept;
 
@@ -1355,21 +1381,15 @@ struct alignas(4)
   unsigned char storage_[8];
 };
 #endif
-
-namespace tuples {
-
-// CRUBIT_ANNOTATE: must_bind=
-::std::optional<::std::int32_t> return_option_in_tuple_ref(
-    rs_std::Tuple<rs_std::Option<::std::int32_t>> const& opt);
-
-}  // namespace tuples
-
 #ifndef _CRUBIT_BINDINGS_FOR_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020int32_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020rs_x00000020_x0000003a_x0000003a_x00000020alloc_x00000020_x0000003a_x0000003a_x00000020string_x00000020_x0000003a_x0000003a_x00000020String_x00000020_x0000003e
 #define _CRUBIT_BINDINGS_FOR_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020int32_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020rs_x00000020_x0000003a_x0000003a_x00000020alloc_x00000020_x0000003a_x0000003a_x00000020string_x00000020_x0000003a_x0000003a_x00000020String_x00000020_x0000003e
 template <>
 struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
     "std :: result :: Result < i32 , :: alloc :: string :: String >")
-    rs_std::Result<::std::int32_t, ::rs::alloc::string::String> {
+    rs_std::Result<::std::int32_t, ::rs::alloc::string::String>
+    : public rs_std::ResultBase<
+          rs_std::Result<::std::int32_t, ::rs::alloc::string::String>,
+          ::std::int32_t, ::rs::alloc::string::String> {
  public:
   // Clone::clone
   Result(const Result&);
@@ -1381,28 +1401,67 @@ struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(::std::int32_t&& ok) noexcept;
-  Result& operator=(::std::int32_t&& ok) noexcept;
-  Result(rs_std::unexpected<::rs::alloc::string::String>&& err) noexcept;
-  Result& operator=(
-      rs_std::unexpected<::rs::alloc::string::String>&& err) noexcept;
+
+ public:
+  using base_type = rs_std::ResultBase<
+      rs_std::Result<::std::int32_t, ::rs::alloc::string::String>,
+      ::std::int32_t, ::rs::alloc::string::String>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::std::int32_t, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::std::int32_t, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::rs::alloc::string::String, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::rs::alloc::string::String, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::std::int32_t& value() &;
-  ::std::int32_t&& value() &&;
-  ::rs::alloc::string::String& err() &;
-  ::rs::alloc::string::String&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept {
+    return tag() == UINT64_C(18446744073709551615);
+  }
+  ::std::int32_t* ok_ptr() noexcept {
+    return reinterpret_cast<::std::int32_t*>(__storage + 8);
+  }
+  ::std::int32_t const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::std::int32_t const*>(__storage + 8);
+  }
+  ::rs::alloc::string::String* err_ptr() noexcept {
+    return reinterpret_cast<::rs::alloc::string::String*>(__storage);
+  }
+  ::rs::alloc::string::String const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::rs::alloc::string::String const*>(__storage);
+  }
+  void set_ok_tag() noexcept { set_tag(UINT64_C(18446744073709551615)); }
+  void set_err_tag() noexcept {}
   constexpr ::std::uint64_t tag() const& noexcept;
   constexpr void set_tag(::std::uint64_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[24];
@@ -2010,7 +2069,7 @@ inline void param_option_in_tuple(
       ::crubit::OptionAbi<::crubit::TransmuteAbi<::std::int32_t>>>(
       ::crubit::OptionAbi<::crubit::TransmuteAbi<::std::int32_t>>(
           ::crubit::TransmuteAbi<::std::int32_t>()),
-      opt_0_buffer, opt_0);
+      opt_0_buffer, ::std::move(opt_0));
   auto&& opt_cabi_0 = opt_0_buffer;
   void* opt_cabi[] = {&opt_cabi_0};
   return __crubit_internal::__crubit_thunk_param_uoption_uin_utuple(opt_cabi);
@@ -2488,6 +2547,7 @@ inline rs_std::Tuple<
                   rs_std::Result<::std::int32_t, ::rs::alloc::string::String>*>(
       storage_ + 8));
 }
+
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL__x0000003a_x0000003a_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Option_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020int32_ut_x00000020_x0000003e_x00000020_x0000003e
@@ -2627,6 +2687,7 @@ inline rs_std::Tuple<::tuples::HasDefault, ::std::uint8_t>::~Tuple() {
   std::destroy_at(reinterpret_cast<::tuples::HasDefault*>(storage_ + 0));
   std::destroy_at(reinterpret_cast<::std::uint8_t*>(storage_ + 24));
 }
+
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL__x0000003a_x0000003a_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020tuples_x00000020_x0000003a_x0000003a_x00000020HasNoDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
@@ -2636,6 +2697,7 @@ inline rs_std::Tuple<::tuples::HasNoDefault, ::std::uint8_t>::~Tuple() {
   std::destroy_at(reinterpret_cast<::tuples::HasNoDefault*>(storage_ + 0));
   std::destroy_at(reinterpret_cast<::std::uint8_t*>(storage_ + 24));
 }
+
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL__x0000003a_x0000003a_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000002c_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000002c_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000003e_x00000020_x0000003e_x00000020_x0000003e
@@ -2903,6 +2965,7 @@ inline rs_std::Tuple<::std::uint8_t, ::tuples::HasDefault>::~Tuple() {
   std::destroy_at(reinterpret_cast<::std::uint8_t*>(storage_ + 0));
   std::destroy_at(reinterpret_cast<::tuples::HasDefault*>(storage_ + 8));
 }
+
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL__x0000003a_x0000003a_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020tuples_x00000020_x0000003a_x0000003a_x00000020HasNoDefault_x00000020_x0000003e
@@ -2912,6 +2975,7 @@ inline rs_std::Tuple<::std::uint8_t, ::tuples::HasNoDefault>::~Tuple() {
   std::destroy_at(reinterpret_cast<::std::uint8_t*>(storage_ + 0));
   std::destroy_at(reinterpret_cast<::tuples::HasNoDefault*>(storage_ + 8));
 }
+
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL__x0000003a_x0000003a_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Tuple_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uintptr_ut_x00000020_x0000003e
@@ -2990,87 +3054,8 @@ static_assert(
     ::std::is_trivially_move_constructible_v<rs_std::Option<::std::int32_t>>);
 static_assert(
     ::std::is_trivially_move_assignable_v<rs_std::Option<::std::int32_t>>);
-inline constexpr rs_std::Option<::std::int32_t>::Option() { set_tag(0); }
-inline constexpr rs_std::Option<::std::int32_t>::Option(
-    ::std::nullopt_t) noexcept {
-  set_tag(0);
-}
-inline constexpr rs_std::Option<::std::int32_t>&
-rs_std::Option<::std::int32_t>::operator=(::std::nullopt_t) noexcept {
-  if (tag() != 0) {
-    ::std::destroy_at(reinterpret_cast<::std::int32_t*>(storage_ + 4));
-  }
-  set_tag(0);
-  return *this;
-}
-inline rs_std::Option<::std::int32_t>::Option(::std::int32_t&& value) noexcept {
-  set_tag(1);
-  ::std::construct_at(reinterpret_cast<::std::int32_t*>(storage_ + 4),
-                      ::std::move(value));
-}
-inline rs_std::Option<::std::int32_t>&
-rs_std::Option<::std::int32_t>::operator=(::std::int32_t&& value) noexcept {
-  if (tag() != 0) {
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::int32_t*>(storage_ + 4), ::std::move(value));
-  } else {
-    set_tag(1);
-    ::std::construct_at(reinterpret_cast<::std::int32_t*>(storage_ + 4),
-                        ::std::move(value));
-  }
-  return *this;
-}
-inline rs_std::Option<::std::int32_t>::Option(
-    ::std::optional<::std::int32_t>&& value) noexcept {
-  if (value.has_value()) {
-    set_tag(1);
-    ::std::int32_t* some = reinterpret_cast<::std::int32_t*>(storage_ + 4);
-    *some = ::std::move(value.value());
-    ::std::construct_at(&value, ::std::nullopt);
-  } else {
-    set_tag(0);
-  }
-}
-inline rs_std::Option<::std::int32_t>&
-rs_std::Option<::std::int32_t>::operator=(
-    ::std::optional<::std::int32_t>&& value) noexcept {
-  if (tag() != 0) {
-    ::std::destroy_at(reinterpret_cast<::std::int32_t*>(storage_ + 4));
-  }
-  if (value.has_value()) {
-    set_tag(1);
-    ::std::int32_t* some = reinterpret_cast<::std::int32_t*>(storage_ + 4);
-    *some = ::std::move(value.value());
-    ::std::construct_at(&value, ::std::nullopt);
-  } else {
-    set_tag(0);
-  }
-  return *this;
-}
-template <typename... Args>
-inline rs_std::Option<::std::int32_t>::Option(::std::in_place_t,
-                                              Args&&... args) noexcept {
-  set_tag(1);
-  ::std::construct_at(reinterpret_cast<::std::int32_t*>(storage_ + 4),
-                      ::std::forward<Args>(args)...);
-}
 static_assert(
     ::std::is_trivially_destructible_v<rs_std::Option<::std::int32_t>>);
-inline rs_std::Option<::std::int32_t>::operator ::std::optional<
-    ::std::int32_t>() && noexcept {
-  if (tag() == 0) {
-    return ::std::nullopt;
-  } else {
-    ::std::int32_t& value = *reinterpret_cast<::std::int32_t*>(storage_ + 4);
-    ::std::optional<::std::int32_t> return_value(::std::move(value));
-    ::std::destroy_at(&value);
-    set_tag(0);
-    return return_value;
-  }
-}
-inline bool rs_std::Option<::std::int32_t>::has_value() noexcept {
-  return tag() != 0;
-}
 inline constexpr ::std::uint32_t rs_std::Option<::std::int32_t>::tag()
     const& noexcept {
   ::std::array<unsigned char, sizeof(::std::uint32_t)> __bytes = {};
@@ -3088,6 +3073,16 @@ inline constexpr void rs_std::Option<::std::int32_t>::set_tag(
     storage_[0 + i] = __bytes[i];
   }
 }
+
+inline constexpr rs_std::Option<::std::int32_t>::Option(
+    ::std::nullopt_t) noexcept
+    : base_type(::std::nullopt) {}
+inline constexpr rs_std::Option<::std::int32_t>&
+rs_std::Option<::std::int32_t>::operator=(::std::nullopt_t) noexcept {
+  base_type::operator=(::std::nullopt);
+  return *this;
+}
+
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020int32_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020rs_x00000020_x0000003a_x0000003a_x00000020alloc_x00000020_x0000003a_x0000003a_x00000020string_x00000020_x0000003a_x0000003a_x00000020String_x00000020_x0000003e
@@ -3114,98 +3109,9 @@ rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::operator=(
   }
   return *this;
 }
-inline rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::Result(
-    ::std::int32_t&& ok) noexcept {
-  set_tag(UINT64_C(18446744073709551615));
-  ::std::construct_at(reinterpret_cast<::std::int32_t*>(__storage + 8),
-                      ::std::move(ok));
-}
-inline rs_std::Result<::std::int32_t, ::rs::alloc::string::String>&
-rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::operator=(
-    ::std::int32_t&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(
-        reinterpret_cast<::rs::alloc::string::String*>(__storage));
-    set_tag(UINT64_C(18446744073709551615));
-    ::std::construct_at(reinterpret_cast<::std::int32_t*>(__storage + 8),
-                        ::std::move(ok));
-  } else {
-    set_tag(UINT64_C(18446744073709551615));
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::int32_t*>(__storage + 8), ::std::move(ok));
-  }
-  return *this;
-}
-
-inline rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::Result(
-    rs_std::unexpected<::rs::alloc::string::String>&& err) noexcept {
-  ::std::construct_at(reinterpret_cast<::rs::alloc::string::String*>(__storage),
-                      ::std::move(err.error()));
-}
-inline rs_std::Result<::std::int32_t, ::rs::alloc::string::String>&
-rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::operator=(
-    rs_std::unexpected<::rs::alloc::string::String>&& err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage + 8);
-    ::std::construct_at(
-        reinterpret_cast<::rs::alloc::string::String*>(__storage),
-        ::std::move(err.error()));
-  } else {
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::rs::alloc::string::String*>(__storage),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::Result(
-    std::in_place_t, Args&&... args) {
-  set_tag(UINT64_C(18446744073709551615));
-  std::construct_at(__storage + 8, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::Result(
-    rs_std::unexpect_t, Args&&... args) {
-  std::construct_at(__storage, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool rs_std::Result<
-    ::std::int32_t, ::rs::alloc::string::String>::has_value() const noexcept {
-  return tag() == UINT64_C(18446744073709551615);
-}
-inline ::std::int32_t&
-rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::std::int32_t*>(__storage + 8);
-}
-inline ::std::int32_t&&
-rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::value() && {
-  check_has_ok();
-  return ::std::move(*reinterpret_cast<::std::int32_t*>(__storage + 8));
-}
-inline ::rs::alloc::string::String&
-rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::rs::alloc::string::String*>(__storage);
-}
-inline ::rs::alloc::string::String&&
-rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::err() && {
-  check_has_err();
-  return ::std::move(
-      *reinterpret_cast<::rs::alloc::string::String*>(__storage));
-}
 inline rs_std::Result<::std::int32_t,
                       ::rs::alloc::string::String>::~Result() noexcept {
-  if (has_value()) {
-    ::std::destroy_at(reinterpret_cast<::std::int32_t*>(__storage + 8));
-  } else {
-    ::std::destroy_at(
-        reinterpret_cast<::rs::alloc::string::String*>(__storage));
-  }
+  this->Reset();
 }
 inline constexpr ::std::uint64_t rs_std::Result<
     ::std::int32_t, ::rs::alloc::string::String>::tag() const& noexcept {
@@ -3225,14 +3131,6 @@ rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::set_tag(
   }
 }
 
-inline void
-rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void
-rs_std::Result<::std::int32_t, ::rs::alloc::string::String>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #pragma clang diagnostic pop

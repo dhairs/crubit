@@ -22,9 +22,9 @@ use proc_macro2::Literal;
 use proc_macro2::TokenStream;
 use query_compiler::{get_layout, post_analysis_typing_env};
 use quote::{format_ident, quote};
-#[rustversion::since(2026-05-18)]
+#[rustversion::nightly]
 use rustc_abi::LayoutData;
-use rustc_abi::VariantIdx;
+use rustc_abi::{Layout, VariantIdx};
 use rustc_middle::ty::layout::PrimitiveExt;
 #[rustversion::since(2026-04-22)]
 use rustc_middle::ty::Flags;
@@ -34,22 +34,6 @@ use rustc_middle::ty::{self, AdtDef, Ty, TyCtxt, TypingEnv};
 use rustc_span::def_id::DefId;
 use std::collections::HashSet;
 use std::rc::Rc;
-
-fn is_cpp_movable<'tcx>(db: &BindingsGenerator<'tcx>, ty: Ty<'tcx>) -> bool {
-    ty.ty_adt_def()
-        .map(|adt| db.has_move_ctor_and_assignment_operator(Some(adt.did()), ty).is_some())
-        // Primitive types bind to C++ primitives that support move construction and assignment.
-        .unwrap_or_else(|| ty.is_primitive_ty())
-}
-
-fn has_relocating_ctor<'tcx>(db: &BindingsGenerator<'tcx>, ty: Ty<'tcx>) -> bool {
-    ty.ty_adt_def()
-        .map(|adt| {
-            crate::BridgedBuiltin::new(db, adt).is_some()
-                || db.adt_needs_bindings(adt.did()).is_ok()
-        })
-        .unwrap_or(false)
-}
 
 pub(crate) fn parse_rs_std_template_specialization<'tcx>(
     db: &BindingsGenerator<'tcx>,
@@ -126,6 +110,7 @@ fn parse_adt_template_specialization<'tcx>(
                 let self_ty_cc = {
                     let mut prereqs = CcPrerequisites::default();
                     let some_ty_cc = some_ty.for_cc.clone().into_tokens(&mut prereqs);
+                    prereqs.forward_declare_type(substs.type_at(0));
                     CcSnippet { tokens: quote! { rs_std::Option<#some_ty_cc> }, prereqs }
                 };
                 Ok(RsStdTemplateSpecialization {
@@ -180,6 +165,8 @@ fn parse_adt_template_specialization<'tcx>(
                     let mut prereqs = CcPrerequisites::default();
                     let ok_ty_cc = ok_ty.for_cc.clone().into_tokens(&mut prereqs);
                     let err_ty_cc = err_ty.for_cc.clone().into_tokens(&mut prereqs);
+                    prereqs.forward_declare_type(substs.type_at(0));
+                    prereqs.forward_declare_type(substs.type_at(1));
                     CcSnippet {
                         tokens: quote! { rs_std::Result<#ok_ty_cc, #err_ty_cc> },
                         prereqs,
@@ -194,6 +181,26 @@ fn parse_adt_template_specialization<'tcx>(
                         tag_type_cc: tag_type_cc.clone(),
                         kind: EnumSpecializationKind::Result { ok_ty, err_ty },
                     }),
+                })
+            }
+            BridgedBuiltin::Vec => {
+                let inner_ty = FormattedTy::try_from_ty(
+                    substs.type_at(0),
+                    TypeLocation::Other,
+                    db,
+                )?;
+                let layout = get_layout(tcx, self_ty)?;
+                let self_ty_cc = {
+                    let mut prereqs = CcPrerequisites::default();
+                    let inner_ty_cc = inner_ty.for_cc.clone().into_tokens(&mut prereqs);
+                    prereqs.forward_declare_type(substs.type_at(0));
+                    CcSnippet { tokens: quote! { rs_std::Vec<#inner_ty_cc> }, prereqs }
+                };
+                Ok(RsStdTemplateSpecialization {
+                    layout,
+                    self_ty_rs: self_ty,
+                    self_ty_cc,
+                    args: RsStdSpecializationArgs::Vec(inner_ty),
                 })
             }
         }
@@ -225,6 +232,9 @@ fn parse_tuple_template_specialization<'tcx>(
             .iter()
             .map(|ty| ty.for_cc.clone().into_tokens(&mut prereqs))
             .collect::<Vec<_>>();
+        for ty in types.iter() {
+            prereqs.forward_declare_type(ty);
+        }
         CcSnippet { tokens: quote! { rs_std::Tuple<#(#element_tys_cc),*> }, prereqs }
     };
     Some(Ok(RsStdTemplateSpecialization {
@@ -235,9 +245,7 @@ fn parse_tuple_template_specialization<'tcx>(
     }))
 }
 
-struct OptionApiGenerator<'a, 'tcx> {
-    db: &'a BindingsGenerator<'tcx>,
-    arg_ty_rs: Ty<'tcx>,
+struct OptionApiGenerator<'tcx> {
     arg_ty: TokenStream,
     needs_drop: bool,
     // Reads our tag out of our Option<T> and defines a variable `tag` pointing at it's value.
@@ -247,79 +255,24 @@ struct OptionApiGenerator<'a, 'tcx> {
     none_val: TokenStream,
     write_some_to_tag: TokenStream,
     some_ptr_val: TokenStream,
+    some_const_ptr_val: TokenStream,
     tag_type_cc: TokenStream,
 }
 
-impl<'tcx> OptionApiGenerator<'_, 'tcx> {
+impl<'tcx> OptionApiGenerator<'tcx> {
     fn api_snippets(self) -> ApiSnippets<'tcx> {
         let Self {
-            db,
             arg_ty,
-            arg_ty_rs,
             needs_drop,
             tag_method,
             none_val,
             write_some_to_tag,
             some_ptr_val,
+            some_const_ptr_val,
             tag_type_cc,
             ..
         } = self;
-        let has_move_ctor = is_cpp_movable(db, arg_ty_rs);
-        let has_relocating_ctor = has_relocating_ctor(db, arg_ty_rs);
         let mut prereqs = CcPrerequisites::default();
-        if has_relocating_ctor {
-            prereqs.includes.insert(self.db.support_header("internal/slot.h"));
-        }
-        let set_none = quote! {
-            set_tag(#none_val);
-        };
-        let set_some_from_std_optional = {
-            let write_some = if has_move_ctor {
-                quote! { *some = ::std::move(value.value()); }
-            } else if has_relocating_ctor {
-                quote! { ::std::construct_at(some, crubit::UnsafeRelocateTag{}, ::std::move(*value)); }
-            } else {
-                quote! { *some = value.value(); }
-            };
-            quote! {
-                #write_some_to_tag
-                #arg_ty* some = #some_ptr_val;
-                #write_some
-                ::std::construct_at(&value, ::std::nullopt);
-            }
-        };
-        let take_some = if has_relocating_ctor {
-            quote! {
-                struct DeferSetTagNone {
-                    rs_std::Option<#arg_ty>* _value;
-                    DeferSetTagNone(rs_std::Option<#arg_ty>* self) : _value(self) {}
-                    ~DeferSetTagNone() {
-                        #set_none
-                    }
-
-                    private:
-                    void set_tag(#tag_type_cc tag) {
-                        _value->set_tag(tag);
-                    }
-                } defer(this);
-                return ::std::make_optional<#arg_ty>(crubit::UnsafeRelocateTag{}, ::std::move(*#some_ptr_val));
-            }
-        } else {
-            quote! {
-                #arg_ty& value = *#some_ptr_val;
-                ::std::optional<#arg_ty> return_value(::std::move(value));
-                ::std::destroy_at(&value);
-                #set_none
-                return return_value;
-            }
-        };
-
-        // Destruct a some value if present.
-        let reset = quote! {
-            if (tag() != #none_val) {
-                ::std::destroy_at(#some_ptr_val);
-            }
-        };
 
         let (drop, drop_details) = if needs_drop {
             (
@@ -328,7 +281,7 @@ impl<'tcx> OptionApiGenerator<'_, 'tcx> {
                 },
                 quote! {
                     inline constexpr rs_std::Option<#arg_ty>::~Option() noexcept {
-                        #reset
+                        this->reset();
                     }
                 },
             )
@@ -342,119 +295,89 @@ impl<'tcx> OptionApiGenerator<'_, 'tcx> {
             )
         };
 
-        // We can only move construct from an `Option<T>`'s `T` if it has a move constructor.
-        let (value_move_ctor_and_assign, value_move_ctor_and_assign_details) = if !has_move_ctor {
-            (quote! {}, quote! {})
-        } else {
-            (
-                quote! {
-                  Option(#arg_ty&& value) noexcept; __NEWLINE__
-                  Option& operator=(#arg_ty&& value) noexcept; __NEWLINE__ __NEWLINE__
-                },
-                quote! {
-                    inline rs_std::Option<#arg_ty>::Option(#arg_ty&& value) noexcept {
-                        #write_some_to_tag
-                        ::std::construct_at(#some_ptr_val, ::std::move(value));
-                    } __NEWLINE__
-                    inline rs_std::Option<#arg_ty>& rs_std::Option<#arg_ty>::operator=(#arg_ty&& value) noexcept {
-                        if (tag() != #none_val) {
-                            ::crubit::MoveAssignOrDestroyAndConstruct(#some_ptr_val, ::std::move(value));
-                        } else {
-                          #write_some_to_tag
-                          ::std::construct_at(#some_ptr_val, ::std::move(value));
-                        }
-                        return *this;
-                    } __NEWLINE__
-                },
-            )
-        };
-
         let tag_method_main_api = tag_method.main_api.into_tokens(&mut prereqs);
         let main_api = CcSnippet {
             tokens: quote! {
-                constexpr Option();  __NEWLINE__ __NEWLINE__
+                using base_type = rs_std::OptionBase<rs_std::Option<#arg_ty>, #arg_ty>;
+                constexpr Option() = default;
+                constexpr Option(::std::nullopt_t) noexcept;
+                constexpr Option& operator=(::std::nullopt_t) noexcept;
 
-                constexpr explicit Option(::std::nullopt_t) noexcept; __NEWLINE__
-                constexpr Option& operator=(::std::nullopt_t) noexcept; __NEWLINE__ __NEWLINE__
+                template <typename U>
+                  requires(!std::is_base_of_v<Option, std::decay_t<U>> &&
+                           !std::is_same_v<std::decay_t<U>, ::std::nullopt_t> &&
+                           !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+                           std::is_constructible_v<#arg_ty, U>)
+                Option(U&& value) noexcept : base_type(::std::forward<U>(value)) {}
 
-                #value_move_ctor_and_assign
+                template <typename U>
+                  requires(!std::is_base_of_v<Option, std::decay_t<U>> &&
+                           !std::is_same_v<std::decay_t<U>, ::std::nullopt_t> &&
+                           !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+                           std::is_constructible_v<#arg_ty, U>)
+                Option& operator=(U&& value) noexcept {
+                    base_type::operator=(::std::forward<U>(value));
+                    return *this;
+                }
 
-                explicit Option(::std::optional<#arg_ty>&& value) noexcept; __NEWLINE__
-                Option& operator=(::std::optional<#arg_ty>&& value) noexcept; __NEWLINE__ __NEWLINE__
+                template <typename Opt>
+                  requires(std::is_same_v<std::decay_t<Opt>, ::std::optional<#arg_ty>> &&
+                           !std::is_lvalue_reference_v<Opt>)
+                Option(Opt&& value) noexcept : base_type(::std::forward<Opt>(value)) {}
 
-                template<typename... Args>
-                Option(::std::in_place_t, Args&&... args) noexcept;
+                template <typename Opt>
+                  requires(std::is_same_v<std::decay_t<Opt>, ::std::optional<#arg_ty>> &&
+                           !std::is_lvalue_reference_v<Opt>)
+                Option& operator=(Opt&& value) noexcept {
+                    base_type::operator=(::std::forward<Opt>(value));
+                    return *this;
+                }
+
+                template <typename... Args>
+                explicit Option(::std::in_place_t ip, Args&&... args) noexcept
+                    : base_type(ip, ::std::forward<Args>(args)...) {}
 
                 #drop
 
-                operator ::std::optional<#arg_ty>() && noexcept;
-
-                bool has_value() noexcept;
             private:
+                friend base_type;
+                using tag_type = #tag_type_cc;
+                static constexpr tag_type kNoneVal = #none_val;
+
+                #arg_ty* some_ptr() noexcept {
+                    return #some_ptr_val;
+                }
+                #arg_ty const* some_const_ptr() const noexcept {
+                    return #some_const_ptr_val;
+                }
+                void set_some_tag() noexcept {
+                    #write_some_to_tag
+                }
+                constexpr void set_none_tag() noexcept {
+                    set_tag(kNoneVal);
+                }
+                constexpr bool is_none() const noexcept {
+                    return tag() == kNoneVal;
+                }
+
                 #tag_method_main_api
             },
             prereqs,
         };
+
         let mut prereqs = CcPrerequisites::default();
-        // For std::move.
         prereqs.includes.insert(CcInclude::utility());
-        prereqs.includes.insert(self.db.support_header("internal/move_assign.h"));
         let tag_method_cc_details = tag_method.cc_details.into_tokens(&mut prereqs);
         let cc_details = CcSnippet {
             tokens: quote! {
-                inline constexpr rs_std::Option<#arg_ty>::Option() {
-                    #set_none
-                } __NEWLINE__
+                #drop_details __NEWLINE__
+                #tag_method_cc_details __NEWLINE__
 
-                inline constexpr rs_std::Option<#arg_ty>::Option(::std::nullopt_t) noexcept {
-                    #set_none
-                } __NEWLINE__
+                inline constexpr rs_std::Option<#arg_ty>::Option(::std::nullopt_t) noexcept : base_type(::std::nullopt) {} __NEWLINE__
                 inline constexpr rs_std::Option<#arg_ty>& rs_std::Option<#arg_ty>::operator=(::std::nullopt_t) noexcept {
-                    #reset
-                    #set_none
+                    base_type::operator=(::std::nullopt);
                     return *this;
                 } __NEWLINE__
-
-                #value_move_ctor_and_assign_details
-
-                inline rs_std::Option<#arg_ty>::Option(::std::optional<#arg_ty>&& value) noexcept {
-                    if (value.has_value()) {
-                        #set_some_from_std_optional
-                    } else {
-                        #set_none
-                    }
-                } __NEWLINE__
-                inline rs_std::Option<#arg_ty>& rs_std::Option<#arg_ty>::operator=(::std::optional<#arg_ty>&& value) noexcept {
-                    #reset
-                    if (value.has_value()) {
-                        #set_some_from_std_optional
-                    } else {
-                        #set_none
-                    }
-                    return *this;
-                } __NEWLINE__
-
-                template<typename... Args>
-                inline rs_std::Option<#arg_ty>::Option(::std::in_place_t, Args&&... args) noexcept {
-                    #write_some_to_tag
-                    ::std::construct_at(#some_ptr_val, ::std::forward<Args>(args)...);
-                } __NEWLINE__
-
-                #drop_details
-
-                inline rs_std::Option<#arg_ty>::operator ::std::optional<#arg_ty>() && noexcept {
-                    if (tag() == #none_val) {
-                        return ::std::nullopt;
-                    } else {
-                        #take_some
-                    }
-                } __NEWLINE__
-
-                inline bool rs_std::Option<#arg_ty>::has_value() noexcept {
-                    return tag() != #none_val;
-                } __NEWLINE__
-
-                #tag_method_cc_details
             },
             prereqs,
         };
@@ -517,11 +440,8 @@ fn get_result_variant_indices<'tcx>(tcx: TyCtxt<'tcx>, adt: AdtDef<'tcx>) -> Res
     }
 }
 
-struct ResultApiGenerator<'a, 'tcx> {
-    db: &'a BindingsGenerator<'tcx>,
-    ok_ty_rs: Ty<'tcx>,
+struct ResultApiGenerator<'tcx> {
     ok_ty_cpp: TokenStream,
-    err_ty_rs: Ty<'tcx>,
     err_ty_cpp: TokenStream,
     needs_drop: bool,
     tag_method: ApiSnippets<'tcx>,
@@ -532,128 +452,12 @@ struct ResultApiGenerator<'a, 'tcx> {
     err_ptr_val: TokenStream,
 }
 
-impl<'tcx> ResultApiGenerator<'_, 'tcx> {
-    fn drop_method(&self) -> (TokenStream, TokenStream) {
-        let ok_ptr_val = &self.ok_ptr_val;
-        let err_ptr_val = &self.err_ptr_val;
-        let ok_ty_cpp = &self.ok_ty_cpp;
-        let err_ty_cpp = &self.err_ty_cpp;
-        let ok_ptr = quote! { reinterpret_cast<#ok_ty_cpp*>(#ok_ptr_val) };
-        let err_ptr = quote! { reinterpret_cast<#err_ty_cpp*>(#err_ptr_val) };
-        let full_self_ty = quote! { rs_std::Result<#ok_ty_cpp, #err_ty_cpp> };
-        if self.needs_drop {
-            (
-                quote! { ~Result() noexcept; },
-                quote! {
-                    inline #full_self_ty::~Result() noexcept {
-                        if (has_value()) {
-                            ::std::destroy_at(#ok_ptr);
-                        } else {
-                            ::std::destroy_at(#err_ptr);
-                        }
-                    }
-                },
-            )
-        } else {
-            (
-                quote! { ~Result() noexcept = default; },
-                quote! { static_assert(::std::is_trivially_destructible_v<#full_self_ty>); },
-            )
-        }
-    }
-
-    fn move_operations_ok(&self) -> ApiSnippets<'tcx> {
-        if !is_cpp_movable(self.db, self.ok_ty_rs) {
-            let ctor_msg = format!(
-                "Move constructor is not available for the Ok variant because {} does not have a move constructor",
-                self.ok_ty_rs
-            );
-            return ApiSnippets::comment_only(&ctor_msg);
-        }
-        let ok_ty_cpp = &self.ok_ty_cpp;
-        let ok_ptr_val = &self.ok_ptr_val;
-        let ok_ptr = quote! { reinterpret_cast<#ok_ty_cpp*>(#ok_ptr_val) };
-        let err_ty_cpp = &self.err_ty_cpp;
-        let err_ptr_val = &self.err_ptr_val;
-        let err_ptr = quote! { reinterpret_cast<#err_ty_cpp*>(#err_ptr_val) };
-        let full_self_ty = quote! { rs_std::Result<#ok_ty_cpp, #err_ty_cpp> };
-        let write_ok_to_tag = &self.write_ok_to_tag;
-        ApiSnippets {
-            main_api: CcSnippet::new(quote! {
-                Result(#ok_ty_cpp&& ok) noexcept;
-                Result& operator=(#ok_ty_cpp&& ok) noexcept;
-            }),
-            cc_details: CcSnippet::new(quote! {
-                inline #full_self_ty::Result(#ok_ty_cpp&& ok) noexcept {
-                    #write_ok_to_tag
-                    ::std::construct_at(#ok_ptr, ::std::move(ok));
-                } __NEWLINE__
-
-                inline #full_self_ty& #full_self_ty::operator=(#ok_ty_cpp&& ok) noexcept {
-                    if (!has_value()) {
-                        ::std::destroy_at(#err_ptr);
-                        #write_ok_to_tag
-                        ::std::construct_at(#ok_ptr, ::std::move(ok));
-                    } else {
-                        #write_ok_to_tag
-                        ::crubit::MoveAssignOrDestroyAndConstruct(#ok_ptr, ::std::move(ok));
-                    }
-                    return *this;
-                } __NEWLINE__
-            }),
-            ..Default::default()
-        }
-    }
-
-    fn move_operations_err(&self) -> ApiSnippets<'tcx> {
-        let has_move = is_cpp_movable(self.db, self.err_ty_rs);
-        let ok_ty_cpp = &self.ok_ty_cpp;
-        let err_ty_cpp = &self.err_ty_cpp;
-        let full_self_ty = quote! { rs_std::Result<#ok_ty_cpp, #err_ty_cpp> };
-        let err_ptr_val = &self.err_ptr_val;
-        let ok_ptr_val = &self.ok_ptr_val;
-        let write_err_to_tag = &self.write_err_to_tag;
-        let err_ptr = quote! { reinterpret_cast<#err_ty_cpp*>(#err_ptr_val) };
-        if !has_move {
-            let ctor_msg = format!("Move constructor not available for Err variant because {} has not move constructor", self.err_ty_rs);
-            ApiSnippets::comment_only(&ctor_msg)
-        } else {
-            ApiSnippets {
-                main_api: CcSnippet::new(quote! {
-                    Result(rs_std::unexpected<#err_ty_cpp>&& err) noexcept;
-                    Result& operator=(rs_std::unexpected<#err_ty_cpp>&& err) noexcept;
-                }),
-                cc_details: CcSnippet::new(quote! {
-                    inline #full_self_ty::Result(rs_std::unexpected<#err_ty_cpp>&& err) noexcept {
-                        #write_err_to_tag
-                        ::std::construct_at(#err_ptr, ::std::move(err.error()));
-                    } __NEWLINE__
-
-                    inline #full_self_ty& #full_self_ty::operator=(rs_std::unexpected<#err_ty_cpp>&& err) noexcept {
-                        if (has_value()) {
-                            ::std::destroy_at(#ok_ptr_val);
-                            #write_err_to_tag
-                            ::std::construct_at(#err_ptr, ::std::move(err.error()));
-                        } else {
-                            #write_err_to_tag
-                            ::crubit::MoveAssignOrDestroyAndConstruct(#err_ptr, ::std::move(err.error()));
-                        }
-                        return *this;
-                    } __NEWLINE__
-                }),
-                ..Default::default()
-            }
-        }
-    }
-
+impl<'tcx> ResultApiGenerator<'tcx> {
     fn api_snippets(self) -> ApiSnippets<'tcx> {
-        let (drop, drop_details) = self.drop_method();
-        let move_constructor_ok = self.move_operations_ok();
-        let move_constructor_err = self.move_operations_err();
         let Self {
-            db,
             ok_ty_cpp,
             err_ty_cpp,
+            needs_drop,
             tag_method,
             has_value_impl,
             ok_ptr_val,
@@ -665,105 +469,104 @@ impl<'tcx> ResultApiGenerator<'_, 'tcx> {
         let mut prereqs = CcPrerequisites::default();
         let full_self_ty = quote! { rs_std::Result<#ok_ty_cpp, #err_ty_cpp> };
 
-        let move_construct_ok = move_constructor_ok.main_api.into_tokens(&mut prereqs);
-        let move_construct_err = move_constructor_err.main_api.into_tokens(&mut prereqs);
+        let (drop, drop_details) = if needs_drop {
+            (
+                quote! { ~Result() noexcept; },
+                quote! {
+                    inline #full_self_ty::~Result() noexcept {
+                        this->Reset();
+                    }
+                },
+            )
+        } else {
+            (
+                quote! { ~Result() noexcept = default; },
+                quote! { static_assert(::std::is_trivially_destructible_v<#full_self_ty>); },
+            )
+        };
 
         let tag_method_main_api = tag_method.main_api.into_tokens(&mut prereqs);
         let main_api = CcSnippet {
             tokens: quote! {
-                #move_construct_ok __NEWLINE__
-                #move_construct_err __NEWLINE__
+            public:
+                using base_type = rs_std::ResultBase<rs_std::Result<#ok_ty_cpp, #err_ty_cpp>, #ok_ty_cpp, #err_ty_cpp>;
+
+                template <typename U>
+                  requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+                           !rs_std::is_unexpected_v<std::decay_t<U>> &&
+                           !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+                           !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+                           std::is_constructible_v<#ok_ty_cpp, U>)
+                explicit constexpr Result(U&& ok) noexcept : base_type(::std::forward<U>(ok)) {}
+
+                template <typename U>
+                  requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+                           !rs_std::is_unexpected_v<std::decay_t<U>> &&
+                           !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+                           std::is_constructible_v<#ok_ty_cpp, U>)
+                constexpr Result& operator=(U&& ok) noexcept {
+                    base_type::operator=(::std::forward<U>(ok));
+                    return *this;
+                }
+
+                template <typename F>
+                  requires(std::is_constructible_v<#err_ty_cpp, F>)
+                explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept : base_type(::std::move(err)) {}
+
+                template <typename F>
+                  requires(std::is_constructible_v<#err_ty_cpp, F>)
+                constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+                    base_type::operator=(::std::move(err));
+                    return *this;
+                }
 
                 template <typename... Args>
-                Result(::std::in_place_t, Args&&... args); __NEWLINE__
+                explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+                    : base_type(ip, ::std::forward<Args>(args)...) {}
 
                 template <typename... Args>
-                Result(rs_std::unexpect_t, Args&&... args); __NEWLINE__
-
-                explicit constexpr operator bool() const noexcept; __NEWLINE__
-                constexpr bool has_value() const noexcept; __NEWLINE__
-
-                #ok_ty_cpp& value() &; __NEWLINE__
-                #ok_ty_cpp&& value() &&; __NEWLINE__
-
-                #err_ty_cpp& err() &; __NEWLINE__
-                #err_ty_cpp&& err() &&; __NEWLINE__
+                explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+                    : base_type(u, ::std::forward<Args>(args)...) {}
 
                 #drop
 
             private:
-                #tag_method_main_api
+                friend base_type;
 
-                void check_has_ok();
-                void check_has_err();
+                bool has_value_impl() const noexcept {
+                    return #has_value_impl;
+                }
+                #ok_ty_cpp* ok_ptr() noexcept {
+                    return reinterpret_cast<#ok_ty_cpp*>(#ok_ptr_val);
+                }
+                #ok_ty_cpp const* ok_const_ptr() const noexcept {
+                    return reinterpret_cast<#ok_ty_cpp const*>(#ok_ptr_val);
+                }
+                #err_ty_cpp* err_ptr() noexcept {
+                    return reinterpret_cast<#err_ty_cpp*>(#err_ptr_val);
+                }
+                #err_ty_cpp const* err_const_ptr() const noexcept {
+                    return reinterpret_cast<#err_ty_cpp const*>(#err_ptr_val);
+                }
+                void set_ok_tag() noexcept {
+                    #write_ok_to_tag
+                }
+                void set_err_tag() noexcept {
+                    #write_err_to_tag
+                }
+
+                #tag_method_main_api
             },
             prereqs,
         };
 
         let mut prereqs = CcPrerequisites::default();
-        prereqs.includes.insert(CcInclude::cstring());
         prereqs.includes.insert(CcInclude::utility());
-        prereqs.includes.insert(db.support_header("internal/check.h"));
-        prereqs.includes.insert(db.support_header("internal/move_assign.h"));
-        let move_construct_ok_details = move_constructor_ok.cc_details.into_tokens(&mut prereqs);
-        let move_construct_err_details = move_constructor_err.cc_details.into_tokens(&mut prereqs);
         let tag_method_cc_details = tag_method.cc_details.into_tokens(&mut prereqs);
         let cc_details = CcSnippet {
             tokens: quote! {
-                #move_construct_ok_details __NEWLINE__
-                #move_construct_err_details __NEWLINE__
-
-                template <typename... Args>
-                inline #full_self_ty::Result(std::in_place_t, Args&&... args) {
-                    #write_ok_to_tag
-                    std::construct_at(#ok_ptr_val, std::forward<Args>(args)...);
-                } __NEWLINE__
-
-                template <typename... Args>
-                inline #full_self_ty::Result(rs_std::unexpect_t, Args&&... args) {
-                    #write_err_to_tag
-                    std::construct_at(#err_ptr_val, std::forward<Args>(args)...);
-                } __NEWLINE__
-
-                inline constexpr #full_self_ty::operator bool() const noexcept {
-                    return has_value();
-                } __NEWLINE__
-
-                inline constexpr bool #full_self_ty::has_value() const noexcept {
-                    return #has_value_impl;
-                } __NEWLINE__
-
-                inline #ok_ty_cpp& #full_self_ty::value() & {
-                    check_has_ok();
-                    return *reinterpret_cast<#ok_ty_cpp*>(#ok_ptr_val);
-                } __NEWLINE__
-
-                inline #ok_ty_cpp&& #full_self_ty::value() && {
-                    check_has_ok();
-                    return ::std::move(*reinterpret_cast<#ok_ty_cpp*>(#ok_ptr_val));
-                } __NEWLINE__
-
-                inline #err_ty_cpp& #full_self_ty::err() & {
-                    check_has_err();
-                    return *reinterpret_cast<#err_ty_cpp*>(#err_ptr_val);
-                } __NEWLINE__
-
-                inline #err_ty_cpp&& #full_self_ty::err() && {
-                    check_has_err();
-                    return ::std::move(*reinterpret_cast<#err_ty_cpp*>(#err_ptr_val));
-                } __NEWLINE__
-
-
                 #drop_details __NEWLINE__
-                #tag_method_cc_details __NEWLINE__
-
-                inline void #full_self_ty::check_has_ok() {
-                    CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-                } __NEWLINE__
-
-                inline void #full_self_ty::check_has_err() {
-                    CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-                } __NEWLINE__
+                #tag_method_cc_details
             },
             prereqs,
         };
@@ -877,8 +680,12 @@ fn specialize_tuple<'tcx>(
 ) -> ApiSnippets<'tcx> {
     let layout = rs_std.layout;
     let mut prereqs = CcPrerequisites::default();
-    let element_cc_tys =
-        element_tys.iter().map(|ty| ty.for_cc.clone().into_tokens(&mut prereqs)).collect_vec();
+    let element_cc_tys = element_tys
+        .iter()
+        .map(|ty| {
+            db.format_ty_for_cc(ty.ty, TypeLocation::Field).unwrap().into_tokens(&mut prereqs)
+        })
+        .collect_vec();
 
     let tuple_api = TupleApiGenerator {
         db,
@@ -950,8 +757,276 @@ fn specialize_tuple<'tcx>(
     let cc_details_tokens = quote! {
         __HASH_TOKEN__ ifndef #guard_name __NEWLINE__
         __HASH_TOKEN__ define #guard_name __NEWLINE__
-        #cc_details_tokens
+        #cc_details_tokens __NEWLINE__
         __HASH_TOKEN__ endif __NEWLINE__
+    };
+
+    ApiSnippets {
+        main_api: CcSnippet { tokens: main_api_tokens, prereqs },
+        cc_details: CcSnippet::new(cc_details_tokens),
+        rs_details,
+    }
+}
+
+fn find_pointer_field_offset<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<u64> {
+    find_pointer_field_offset_impl(tcx, ty, 0)
+}
+
+fn find_pointer_field_offset_impl<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: Ty<'tcx>,
+    current_offset: u64,
+) -> Option<u64> {
+    let kind = ty.kind();
+
+    if matches!(kind, ty::TyKind::RawPtr(_, _)) {
+        return Some(current_offset);
+    }
+
+    if let ty::TyKind::Pat(underlying_ty, _) = kind {
+        return find_pointer_field_offset_impl(tcx, *underlying_ty, current_offset);
+    }
+
+    if let ty::TyKind::Adt(adt_def, args) = kind {
+        if adt_def.is_enum() {
+            return None;
+        }
+
+        let layout = get_layout(tcx, ty).ok()?;
+        let variant = adt_def.non_enum_variant();
+
+        for (i, field) in variant.fields.iter().enumerate() {
+            let field_offset = layout.fields().offset(i).bytes();
+            let field_ty = field.ty(tcx, args);
+            let field_ty = crate::normalize_ty(tcx, tcx.param_env(field.did), field_ty);
+
+            if let Some(offset) =
+                find_pointer_field_offset_impl(tcx, field_ty, current_offset + field_offset)
+            {
+                return Some(offset);
+            }
+        }
+    }
+
+    None
+}
+
+/// Computes the offsets of the pointer and length fields of `Vec`.
+///
+/// At the top level of `Vec<T>`, the layout consists of:
+/// - `len: usize` (primitive)
+/// - `buf: RawVec<T>` (ADT struct)
+///
+/// Because `capacity` is nested inside `buf` (at a deeper level), `len` is the
+/// only top-level field of type `usize`. This function exploits this structure:
+/// 1. It finds `len` by looking only at the top-level fields of `Vec` for a
+///    `usize` type.
+/// 2. It finds the data pointer by recursively searching the other top-level
+///    ADT fields for a raw pointer type.
+///
+/// This allows us to find the offsets without relying on the names of `buf`,
+/// `len`, `inner`, `ptr`, or `cap`.
+struct VecLayoutOffsets {
+    ptr_offset: u64,
+    len_offset: u64,
+}
+
+fn compute_vec_layout_offsets<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    self_ty: Ty<'tcx>,
+    layout: Layout<'tcx>,
+) -> VecLayoutOffsets {
+    let (adt_def, adt_generic_args) = match self_ty.kind() {
+        ty::TyKind::Adt(adt_def, args) => (adt_def, args),
+        _ => panic!("Expected Adt type"),
+    };
+    let variant = adt_def.non_enum_variant();
+
+    let mut len_offset_val = None;
+    let mut ptr_offset_val = None;
+
+    for (i, field) in variant.fields.iter().enumerate() {
+        let field_ty = field.ty(tcx, adt_generic_args);
+        let field_ty = crate::normalize_ty(tcx, tcx.param_env(field.did), field_ty);
+        let field_offset = layout.fields().offset(i).bytes();
+
+        if matches!(field_ty.kind(), ty::TyKind::Uint(ty::UintTy::Usize)) {
+            len_offset_val = Some(field_offset);
+        } else if let Some(nested_ptr_offset) = find_pointer_field_offset(tcx, field_ty) {
+            ptr_offset_val = Some(field_offset + nested_ptr_offset);
+        }
+    }
+
+    let len_offset = len_offset_val.expect("Failed to find len field in Vec");
+    let ptr_offset = ptr_offset_val.expect("Failed to find ptr field in Vec");
+
+    VecLayoutOffsets { ptr_offset, len_offset }
+}
+
+fn specialize_vec<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    rs_std: &RsStdTemplateSpecialization<'tcx>,
+    inner_ty: FormattedTy<'tcx>,
+) -> ApiSnippets<'tcx> {
+    let tcx = db.tcx();
+    let layout = rs_std.layout;
+    let mut prereqs = CcPrerequisites::default();
+    let inner_ty_cc =
+        db.format_ty_for_cc(inner_ty.ty, TypeLocation::Field).unwrap().into_tokens(&mut prereqs);
+    let inner_ty_rs = &inner_ty.for_rs;
+
+    let rs_fully_qualified_name = quote! { ::alloc::vec::Vec<#inner_ty_rs> };
+    let cc_fully_qualified_name = quote! { rs_std::Vec<#inner_ty_cc> };
+
+    let adt_def = rs_std.self_ty_rs.ty_adt_def().expect("Vec should be an ADT");
+    let def_id = Some(adt_def.did());
+
+    let core = Rc::new(database::AdtCoreBindings {
+        def_id,
+        keyword: quote! { struct },
+        cc_short_name: format_ident!("Vec"),
+        rs_fully_qualified_name: rs_fully_qualified_name.clone(),
+        cc_fully_qualified_name: cc_fully_qualified_name.clone(),
+        self_ty: rs_std.self_ty_rs,
+        alignment_in_bytes: layout.align().abi.bytes(),
+        size_in_bytes: layout.size().bytes(),
+    });
+
+    let default_ctor_snippets = db.generate_default_ctor(core.clone()).unwrap_or_else(|err| err);
+    let copy_ctor_and_assignment_snippets =
+        db.generate_copy_ctor_and_assignment_operator(core.clone()).unwrap_or_else(|err| err);
+    let move_ctor_and_assignment_snippets = db
+        .generate_move_ctor_and_assignment_operator(core.clone())
+        .unwrap_or_else(|err| err.explicitly_deleted);
+    let relocating_ctor_snippets = generate_relocating_ctor(db, &core.cc_short_name);
+
+    let target_path_mangled_hash = if db.is_golden_test() {
+        "".to_string()
+    } else {
+        format!("{:x}_", tcx.stable_crate_id(db.source_crate_num()))
+    };
+
+    let qualified_name = cc_fully_qualified_name.to_string();
+    let name = escape_non_identifier_chars(&qualified_name);
+    let drop_thunk_name = format_ident!("__crubit_drop_{}{}", target_path_mangled_hash, name);
+
+    let rs_drop = quote! {
+        #[unsafe(no_mangle)]
+        unsafe extern "C" fn #drop_thunk_name(vec: *mut #rs_fully_qualified_name) {
+            // SAFETY: The caller guarantees `vec` is a valid pointer to an initialized Vec.
+            unsafe { ::core::ptr::drop_in_place(vec) };
+        }
+    };
+
+    let drop_decl = quote! {
+        ~Vec() noexcept;
+    };
+    let drop_impl = quote! {
+        extern "C" void #drop_thunk_name(void* vec) noexcept;
+        inline rs_std::Vec<#inner_ty_cc>::~Vec() noexcept {
+            #drop_thunk_name(this);
+        }
+    };
+
+    let offsets = compute_vec_layout_offsets(tcx, rs_std.self_ty_rs, layout);
+
+    let ptr_offset = Literal::u64_unsuffixed(offsets.ptr_offset);
+    let len_offset = Literal::u64_unsuffixed(offsets.len_offset);
+
+    prereqs.includes.insert(CcInclude::bit());
+    prereqs.includes.insert(CcInclude::cstddef());
+    prereqs.includes.insert(CcInclude::cstdint());
+    prereqs.includes.insert(db.support_header("internal/check.h"));
+
+    let accessors_decl = quote! {
+        #inner_ty_cc* data() noexcept;
+        const #inner_ty_cc* data() const noexcept;
+        std::size_t size() const noexcept;
+        #inner_ty_cc& operator[](std::size_t index) noexcept;
+        const #inner_ty_cc& operator[](std::size_t index) const noexcept;
+        #inner_ty_cc* begin() noexcept;
+        const #inner_ty_cc* begin() const noexcept;
+        #inner_ty_cc* end() noexcept;
+        const #inner_ty_cc* end() const noexcept;
+    };
+
+    let full_self_ty = quote! { rs_std::Vec<#inner_ty_cc> };
+    let accessors_impl = quote! {
+        inline #inner_ty_cc* #full_self_ty::data() noexcept {
+            return std::bit_cast<#inner_ty_cc*>(
+                *reinterpret_cast<const std::uintptr_t*>(&storage_[#ptr_offset]));
+        }
+        inline const #inner_ty_cc* #full_self_ty::data() const noexcept {
+            return std::bit_cast<#inner_ty_cc*>(
+                *reinterpret_cast<const std::uintptr_t*>(&storage_[#ptr_offset]));
+        }
+        inline std::size_t #full_self_ty::size() const noexcept {
+            return std::bit_cast<std::size_t>(
+                *reinterpret_cast<const std::size_t*>(&storage_[#len_offset]));
+        }
+        inline #inner_ty_cc& #full_self_ty::operator[](std::size_t index) noexcept {
+            CRUBIT_CHECK(index < size());
+            return data()[index];
+        }
+        inline const #inner_ty_cc& #full_self_ty::operator[](std::size_t index) const noexcept {
+            CRUBIT_CHECK(index < size());
+            return data()[index];
+        }
+        inline #inner_ty_cc* #full_self_ty::begin() noexcept { return data(); }
+        inline const #inner_ty_cc* #full_self_ty::begin() const noexcept { return data(); }
+        inline #inner_ty_cc* #full_self_ty::end() noexcept { return data() + size(); }
+        inline const #inner_ty_cc* #full_self_ty::end() const noexcept { return data() + size(); }
+    };
+
+    let ApiSnippets { main_api, cc_details, rs_details } = [
+        default_ctor_snippets,
+        copy_ctor_and_assignment_snippets,
+        move_ctor_and_assignment_snippets,
+        relocating_ctor_snippets,
+    ]
+    .into_iter()
+    .collect();
+
+    let mut rs_details = rs_details;
+    rs_details.tokens.extend(rs_drop);
+
+    let main_api_tokens = main_api.into_tokens(&mut prereqs);
+    let guard_name = format_ident!("_CRUBIT_BINDINGS_FOR_{}", name);
+    let size_literal = Literal::u64_unsuffixed(layout.size().bytes());
+    let align_literal = Literal::u64_unsuffixed(layout.align().abi.bytes());
+    let internal_rust_type_string = rs_fully_qualified_name.to_string();
+
+    let main_api_tokens = quote! {
+        __HASH_TOKEN__ ifndef #guard_name __NEWLINE__
+        __HASH_TOKEN__ define #guard_name __NEWLINE__
+        template<> __NEWLINE__
+        struct alignas(#align_literal)
+        CRUBIT_INTERNAL_RUST_TYPE(#internal_rust_type_string)
+        rs_std::Vec<#inner_ty_cc> { __NEWLINE__
+        public:
+            #main_api_tokens __NEWLINE__
+            #drop_decl __NEWLINE__
+            #accessors_decl __NEWLINE__
+
+        private:
+            unsigned char storage_[#size_literal];
+            __NEWLINE__
+        }; __NEWLINE__
+
+        __HASH_TOKEN__ endif __NEWLINE__
+        __NEWLINE__
+    };
+
+    let guard_name = format_ident!("_CRUBIT_BINDINGS_FOR_IMPL_{}", name);
+    let cc_details_tokens = cc_details.into_tokens(&mut prereqs);
+    let cc_details_tokens = quote! {
+        __HASH_TOKEN__ ifndef #guard_name __NEWLINE__
+        __HASH_TOKEN__ define #guard_name __NEWLINE__
+        #cc_details_tokens __NEWLINE__
+        #drop_impl __NEWLINE__
+        #accessors_impl __NEWLINE__
+        __HASH_TOKEN__ endif __NEWLINE__
+        __NEWLINE__
     };
 
     ApiSnippets {
@@ -970,16 +1045,16 @@ fn specialize_result<'tcx>(
 ) -> ApiSnippets<'tcx> {
     let tcx = db.tcx();
     let mut prereqs = CcPrerequisites::default();
-    let ok_ty_tokens = ok_ty.for_cc.into_tokens(&mut prereqs);
-    let err_ty_tokens = err_ty.for_cc.into_tokens(&mut prereqs);
+    let ok_ty_tokens =
+        db.format_ty_for_cc(ok_ty.ty, TypeLocation::Field).unwrap().into_tokens(&mut prereqs);
+    let err_ty_tokens =
+        db.format_ty_for_cc(err_ty.ty, TypeLocation::Field).unwrap().into_tokens(&mut prereqs);
     let layout = rs_std.layout;
-    let (tag_encoding, tag_field, variants) = match layout.variants() {
+    let (tag_encoding, tag_field) = match layout.variants() {
         rustc_abi::Variants::Empty | rustc_abi::Variants::Single { .. } => {
             unreachable!("This should have been checked in parse_rs_std_template_specialization")
         }
-        rustc_abi::Variants::Multiple { tag_encoding, tag_field, variants, .. } => {
-            (tag_encoding, tag_field, variants)
-        }
+        rustc_abi::Variants::Multiple { tag_encoding, tag_field, .. } => (tag_encoding, tag_field),
     };
 
     let tag_type = enum_spec.tag_type_rs;
@@ -1043,12 +1118,22 @@ fn specialize_result<'tcx>(
     );
     let err_discr_val = literal_of_tag_ty(tcx, discr_for_err.val, tag_type);
 
-    #[rustversion::before(2026-05-18)]
-    let (ok_offset, err_offset) = (
-        Literal::u64_unsuffixed(variants[ok_idx].fields.offset(0).bytes()),
-        Literal::u64_unsuffixed(variants[err_idx].fields.offset(0).bytes()),
-    );
-    #[rustversion::since(2026-05-18)]
+    #[rustversion::stable]
+    let (ok_offset, err_offset) = {
+        let variants = match layout.variants() {
+            rustc_abi::Variants::Empty | rustc_abi::Variants::Single { .. } => {
+                unreachable!(
+                    "This should have been checked in parse_rs_std_template_specialization"
+                )
+            }
+            rustc_abi::Variants::Multiple { variants, .. } => variants,
+        };
+        (
+            Literal::u64_unsuffixed(variants[ok_idx].fields.offset(0).bytes()),
+            Literal::u64_unsuffixed(variants[err_idx].fields.offset(0).bytes()),
+        )
+    };
+    #[rustversion::nightly]
     let (ok_offset, err_offset) = (
         Literal::u64_unsuffixed(LayoutData::for_variant(&layout, ok_idx).fields.offset(0).bytes()),
         Literal::u64_unsuffixed(LayoutData::for_variant(&layout, err_idx).fields.offset(0).bytes()),
@@ -1056,10 +1141,7 @@ fn specialize_result<'tcx>(
 
     let result_api = match tag_encoding {
         rustc_abi::TagEncoding::Direct => ResultApiGenerator {
-            db,
-            ok_ty_rs: ok_ty.ty,
             ok_ty_cpp: ok_ty_tokens.clone(),
-            err_ty_rs: err_ty.ty,
             err_ty_cpp: err_ty_tokens.clone(),
             needs_drop,
             tag_method,
@@ -1116,10 +1198,7 @@ fn specialize_result<'tcx>(
                 )
             };
             ResultApiGenerator {
-                db,
-                ok_ty_rs: ok_ty.ty,
                 ok_ty_cpp: ok_ty_tokens.clone(),
-                err_ty_rs: err_ty.ty,
                 err_ty_cpp: err_ty_tokens.clone(),
                 needs_drop,
                 tag_method,
@@ -1175,7 +1254,8 @@ fn specialize_result<'tcx>(
         struct
         alignas(#align_literal) __NEWLINE__
         CRUBIT_INTERNAL_RUST_TYPE(#internal_rust_type_string)
-        rs_std::Result<#ok_ty_tokens, #err_ty_tokens> { __NEWLINE__
+        rs_std::Result<#ok_ty_tokens, #err_ty_tokens>
+            : public rs_std::ResultBase<rs_std::Result<#ok_ty_tokens, #err_ty_tokens>, #ok_ty_tokens, #err_ty_tokens> { __NEWLINE__
         public:
             #main_api_tokens __NEWLINE__
 
@@ -1192,7 +1272,7 @@ fn specialize_result<'tcx>(
     let cc_details_tokens = quote! {
         __HASH_TOKEN__ ifndef #guard_name __NEWLINE__
         __HASH_TOKEN__ define #guard_name __NEWLINE__
-        #cc_details_tokens
+        #cc_details_tokens __NEWLINE__
         __HASH_TOKEN__ endif __NEWLINE__
         __NEWLINE__
     };
@@ -1212,16 +1292,15 @@ fn specialize_option<'tcx>(
 ) -> ApiSnippets<'tcx> {
     let tcx = db.tcx();
     let mut prereqs = CcPrerequisites::default();
-    let ty_tokens = arg_ty.for_cc.into_tokens(&mut prereqs);
+    let ty_tokens =
+        db.format_ty_for_cc(arg_ty.ty, TypeLocation::Field).unwrap().into_tokens(&mut prereqs);
     let layout = rs_std.layout;
 
-    let (tag_encoding, tag_field, variants) = match layout.variants() {
+    let (tag_encoding, tag_field) = match layout.variants() {
         rustc_abi::Variants::Empty | rustc_abi::Variants::Single { .. } => {
             unreachable!("This should have been checked in parse_rs_std_template_specialization")
         }
-        rustc_abi::Variants::Multiple { tag_encoding, tag_field, variants, .. } => {
-            (tag_encoding, tag_field, variants)
-        }
+        rustc_abi::Variants::Multiple { tag_encoding, tag_field, .. } => (tag_encoding, tag_field),
     };
     let tag_type = enum_spec.tag_type_rs;
     let tag_type_cc: TokenStream = enum_spec.tag_type_cc.clone().into_tokens(&mut prereqs);
@@ -1280,10 +1359,19 @@ fn specialize_option<'tcx>(
     let option_api = match tag_encoding {
         rustc_abi::TagEncoding::Direct => {
             // Option::None is variant 0. Option::Some is variant 1.
-            #[rustversion::before(2026-05-18)]
-            let payload_offset =
-                Literal::u64_unsuffixed(variants[some_idx].fields.offset(0).bytes());
-            #[rustversion::since(2026-05-18)]
+            #[rustversion::stable]
+            let payload_offset = {
+                let variants = match layout.variants() {
+                    rustc_abi::Variants::Empty | rustc_abi::Variants::Single { .. } => {
+                        unreachable!(
+                            "This should have been checked in parse_rs_std_template_specialization"
+                        )
+                    }
+                    rustc_abi::Variants::Multiple { variants, .. } => variants,
+                };
+                Literal::u64_unsuffixed(variants[some_idx].fields.offset(0).bytes())
+            };
+            #[rustversion::nightly]
             let payload_offset = Literal::u64_unsuffixed(
                 LayoutData::for_variant(&layout, some_idx).fields.offset(0).bytes(),
             );
@@ -1292,8 +1380,6 @@ fn specialize_option<'tcx>(
             let some_discr_val = literal_of_tag_ty(tcx, discr_for_some.val, tag_type);
 
             OptionApiGenerator {
-                db,
-                arg_ty_rs: arg_ty.ty,
                 arg_ty: ty_tokens.clone(),
                 needs_drop,
                 tag_method,
@@ -1301,6 +1387,9 @@ fn specialize_option<'tcx>(
                 write_some_to_tag: quote! { set_tag(#some_discr_val); },
                 some_ptr_val: quote! {
                     reinterpret_cast<#ty_tokens*>(storage_ + #payload_offset)
+                },
+                some_const_ptr_val: quote! {
+                    reinterpret_cast<#ty_tokens const*>(storage_ + #payload_offset)
                 },
                 tag_type_cc: tag_type_cc.clone(),
             }
@@ -1315,14 +1404,15 @@ fn specialize_option<'tcx>(
             let none_relative_val =
                 literal_of_tag_ty(tcx, niche_start + none_relative_idx, tag_type);
             OptionApiGenerator {
-                db,
-                arg_ty_rs: arg_ty.ty,
                 arg_ty: ty_tokens.clone(),
                 needs_drop,
                 tag_method,
                 none_val: quote! { #none_relative_val },
                 some_ptr_val: quote! {
                     reinterpret_cast<#ty_tokens*>(storage_)
+                },
+                some_const_ptr_val: quote! {
+                    reinterpret_cast<#ty_tokens const*>(storage_)
                 },
                 // With a niche, the Some variant is implicitly encoded. We don't need to write out
                 // a discriminant value. It is accomplished by writing a value to the Some payload.
@@ -1377,7 +1467,8 @@ fn specialize_option<'tcx>(
         template<> __NEWLINE__
         struct alignas(#align_literal)
         CRUBIT_INTERNAL_RUST_TYPE(#internal_rust_type_string)
-        rs_std::Option<#ty_tokens> { __NEWLINE__
+        rs_std::Option<#ty_tokens>
+            : public rs_std::OptionBase<rs_std::Option<#ty_tokens>, #ty_tokens> { __NEWLINE__
         public:
             #main_api_tokens __NEWLINE__
 
@@ -1395,7 +1486,7 @@ fn specialize_option<'tcx>(
     let cc_details_tokens = quote! {
         __HASH_TOKEN__ ifndef #guard_name __NEWLINE__
         __HASH_TOKEN__ define #guard_name __NEWLINE__
-        #cc_details_tokens
+        #cc_details_tokens __NEWLINE__
         __HASH_TOKEN__ endif __NEWLINE__
         __NEWLINE__
     };
@@ -1437,6 +1528,12 @@ impl<'tcx> TemplateSpecializationExt<'tcx> for RsStdTemplateSpecialization<'tcx>
                 }
                 snippets
             }
+            RsStdSpecializationArgs::Vec(inner_ty) => {
+                let inner_ty_ty = inner_ty.ty;
+                let mut snippets = specialize_vec(db, &self, inner_ty.clone());
+                snippets.main_api.prereqs.forward_declare_type(inner_ty_ty);
+                snippets
+            }
         }
     }
 }
@@ -1476,12 +1573,6 @@ pub(crate) fn collect_trait_impls<'a, 'tcx>(
                     if canonical_name.unqualified.cpp_type.is_none()
                         && db.adt_needs_bindings(*did).is_err()
                     {
-                        return None;
-                    }
-                    let crate_name = tcx.crate_name(did.krate);
-                    // TODO: b/391443811 - Add support for implementations of stdlib types once
-                    // we have headers that can be included for those types.
-                    if ["std", "core", "alloc"].contains(&crate_name.as_str()) {
                         return None;
                     }
                     let adt_cc_name = canonical_name.format_for_cc(db).ok()?;
@@ -1564,7 +1655,33 @@ fn generate_trait_impl_specialization<'tcx>(
 
     prereqs.depend_on_def(db, trait_def_id).map_err(|err| (impl_def_id, err))?;
     if let Some(adt) = trait_ref.self_ty().ty_adt_def() {
-        prereqs.depend_on_def(db, adt.did()).map_err(|err| (impl_def_id, err))?;
+        let def_id = adt.did();
+        let canonical_name = db.symbol_canonical_name(def_id).expect(
+            "Self type should have a canonical name if we are generating a specialization for it",
+        );
+        // When `self_ty` belongs to the current crate (`source_crate_num()`), we must distinguish
+        // between standard Rust structs (which get a C++ definition in `main_apis`) and mapped C++
+        // types (`cpp_type.is_some()`, whose `main_api` generation is suppressed by Crubit).
+        //
+        // For standard Rust structs, we insert `def_id` into `fwd_decls` to avoid C++ dependency
+        // cycles between a container and its iterator. For mapped C++ types, emitting a forward
+        // declaration in the Rust crate's namespace is incorrect and fails to pull in the real C++
+        // header. Instead, we must explicitly add the annotated `include_path` to prerequisites.
+        if canonical_name.unqualified.cpp_type.is_some() {
+            let attrs = crubit_attr::get_attrs(db.tcx(), def_id)
+                .map_err(|err| (impl_def_id, arc_anyhow::Error::from(err)))?;
+            if let Some(path) = attrs.include_path {
+                prereqs.includes.insert(CcInclude::from_path(path.as_str()));
+            } else {
+                // The C++ type is already available (e.g., a fundamental type or from a header
+                // injected globally via command-line flags). No additional #include, forward
+                // declaration, or def dependency is needed.
+            }
+        } else if canonical_name.krate_num == db.source_crate_num() {
+            prereqs.fwd_decls.insert(def_id);
+        } else {
+            prereqs.depend_on_def(db, def_id).map_err(|err| (impl_def_id, err))?;
+        }
     }
 
     let mut member_function_names = HashSet::new();

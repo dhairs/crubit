@@ -75,10 +75,7 @@ cc_library(
     visibility = [
         "//visibility:public",
     ],
-    deps = [
-        "@abseil-cpp//absl/base:core_headers",
-        "@abseil-cpp//absl/base:nullability",
-    ],
+    deps = [],
 )
 
 cc_library(
@@ -92,7 +89,7 @@ cc_library(
 
 rust_proc_macro(
     name = "crubit_annotate",
-    srcs = ["crubit_annotate.rs"],
+    srcs = ["crubit_annotate/src/crubit_annotate.rs"],
     compatible_with = ["//buildenv/target:non_prod"],
     visibility = [
         "//visibility:public",
@@ -183,6 +180,9 @@ rust_library(
     visibility = [
         "//visibility:public",
     ],
+    deps = [
+        ":cref",
+    ],
 )
 
 rust_proc_macro(
@@ -249,7 +249,7 @@ rust_library(
 
 rust_library(
     name = "bridge_rust",
-    srcs = ["bridge.rs"],
+    srcs = ["crubit_bridge_rust/src/bridge.rs"],
     compatible_with = ["//buildenv/target:non_prod"],
     visibility = [
         "//visibility:public",
@@ -258,7 +258,7 @@ rust_library(
 
 rust_test(
     name = "bridge_rust_test",
-    srcs = ["bridge.rs"],
+    srcs = ["crubit_bridge_rust/src/bridge.rs"],
     deps = [
         "@crate_index//:googletest",
     ],
@@ -290,4 +290,3 @@ filegroup(
         "//visibility:public",
     ],
 )
-

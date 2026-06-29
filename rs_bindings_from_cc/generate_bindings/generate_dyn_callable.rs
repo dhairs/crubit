@@ -66,7 +66,7 @@ pub fn callable_crubit_abi_type(
         }
     };
 
-    let qualifier = match callable.fn_trait {
+    let qualifier = match callable.cpp_fn_trait {
         FnTrait::Fn => quote! { const },
         FnTrait::FnMut => quote! {},
         FnTrait::FnOnce => quote! { && },
@@ -169,7 +169,7 @@ fn generate_invoker_function_pointer(
                 let arg_ident = format_ident!("bridge_param_{i}");
                 arg_transforms.extend(quote! {
                     unsigned char #arg_ident[#crubit_abi_type_tokens::kSize];
-                    ::crubit::internal::Encode(#crubit_abi_type_expr_tokens, #arg_ident, #param_ident);
+                    ::crubit::internal::Encode(#crubit_abi_type_expr_tokens, #arg_ident, ::std::move(#param_ident));
                 });
                 arg_exprs.push(quote! { #arg_ident });
             }

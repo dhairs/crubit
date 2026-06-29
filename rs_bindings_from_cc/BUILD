@@ -419,7 +419,9 @@ cc_library(
 
 rust_library(
     name = "ir",
-    srcs = ["ir.rs"],
+    srcs = [
+        "ir.rs",
+    ],
     visibility = ["//:__subpackages__"],
     deps = [
         "//common:arc_anyhow",
@@ -453,9 +455,7 @@ rust_library(
     ],
     deps = [
         ":ir",
-        ":ir_rust_proto",
         ":json_from_cc",
-        ":proto_from_cc",
         "//common:arc_anyhow",
         "//common:crubit_feature",
         "//common:ffi_types",
@@ -574,30 +574,32 @@ multiplatform_rust_test(
     ],
 )
 
-multiplatform_rust_test(
-    name = "ir_from_cc_proto_test",
-    srcs = ["ir_from_cc_proto_test.rs"],
-    tags = [
-        "not_run:arm",
-        "not_run:mac",
-    ],
-    deps = [
-        ":ir_rust_proto",
-        ":ir_testing",
-        "//common:arc_anyhow",
-        "//common:multiplatform_testing",
-        "@crate_index//:googletest",
-    ],
-)
-
 cc_library(
     name = "src_code_gen_ffi",
-    srcs = ["src_code_gen_ffi.cc"],
+    srcs = [
+        "src_code_gen_ffi.cc",
+        "src_code_gen_ffi_serialized_proto.cc",
+    ],
     hdrs = ["src_code_gen_ffi.h"],
     deps = [
         "//common:cc_ffi_types",
         "//rs_bindings_from_cc/generate_bindings:generate_bindings_cc_proto",
         "@abseil-cpp//absl/strings:string_view",
+    ],
+)
+
+crubit_cc_test(
+    name = "src_code_gen_ffi_test",
+    srcs = ["src_code_gen_ffi_test.cc"],
+    deps = [
+        ":cmdline",  # buildcleaner: keep
+        ":cmdline_flags",
+        ":src_code_gen_ffi",
+        "//net/proto2/contrib/parse_proto:parse_text_proto",
+        "//rs_bindings_from_cc/generate_bindings:cc_api_ffi",  # buildcleaner: keep
+        "//rs_bindings_from_cc/generate_bindings:generate_bindings_cc_proto",  # buildcleaner: keep
+        "//testing/base/public:gunit_main",
+        "@abseil-cpp//absl/flags:flag",
     ],
 )
 

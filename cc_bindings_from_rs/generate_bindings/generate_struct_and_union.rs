@@ -18,14 +18,18 @@ use crate::generate_function_thunk::{
     generate_thunk_decl, generate_thunk_impl, replace_all_regions_with_static,
 };
 use crate::{
-    generate_const, generate_deprecated_tag, generate_must_use_tag, generate_trait_thunks,
-    generate_unsupported_def, get_layout, get_scalar_int_type, get_tag_size_with_padding,
-    is_bridged_type, is_copy, BridgedBuiltin, RsSnippet, SortedByDef, TraitThunks,
+    does_type_implement_trait, generate_const, generate_deprecated_tag, generate_must_use_tag,
+    generate_trait_thunks, generate_unsupported_def, get_layout, get_scalar_int_type,
+    get_tag_size_with_padding, is_bridged_type, is_copy, BridgedBuiltin, RsSnippet, SortedByDef,
+    TraitThunks,
 };
 
 use arc_anyhow::{Context, Result};
 use code_gen_utils::{expect_format_cc_type_name, make_rs_ident, CcInclude};
-use database::code_snippet::{ApiSnippets, CcPrerequisites, CcSnippet};
+use database::code_snippet::{
+    ApiSnippets, CcPrerequisites, CcSnippet, TemplateSpecialization,
+    TraitImplTemplateSpecialization,
+};
 use database::{AdtCoreBindings, BindingsGenerator, StaticMethodMode, TypeLocation};
 use error_report::{anyhow, bail, ensure};
 use itertools::Itertools;
@@ -45,7 +49,7 @@ use rustc_middle::mir::ConstValue;
 use rustc_middle::ty::Flags;
 use rustc_middle::ty::{self, AssocKind, Ty, TyCtxt, TyKind, TypeFlags, TypingEnv};
 use rustc_span::def_id::{CrateNum, DefId, LOCAL_CRATE};
-use rustc_span::symbol::sym;
+use rustc_span::symbol::{sym, Symbol};
 use std::collections::{BTreeSet, HashMap, HashSet};
 use std::iter::once;
 use std::rc::Rc;
@@ -98,7 +102,7 @@ pub(crate) fn cpp_enum_cpp_underlying_type<'tcx>(
     def_id: DefId,
 ) -> Result<CcSnippet<'tcx>> {
     let field_type = cpp_enum_rust_underlying_type(db.tcx(), def_id)?;
-    db.format_ty_for_cc(field_type, TypeLocation::Other)
+    db.format_ty_for_cc(field_type, TypeLocation::Field)
 }
 
 /// Returns a string representation of the value of a given numeric Scalar having a given TyKind.
@@ -551,7 +555,19 @@ fn generate_into_impls<'tcx>(
 
     from_impls
         .chain(into_impls)
-        .filter_map(|(middle_ty, cc_ty, def_id)| {
+        .avoid_colliding_types(tcx, |(middle_ty, _, _)| *middle_ty)
+        .into_iter()
+        .filter_map(|res| {
+            let (middle_ty, cc_ty, def_id) = match res {
+                Ok(item) => item,
+                Err(TypeCollisionRisk { item: (_, _, def_id), key_type, preferred_type }) => {
+                    let err = anyhow!(
+                        "Conversion to `{key_type}` is not supported when conversion to \
+                         `{preferred_type}` is implemented as they may overlap in C++."
+                    );
+                    return Some(generate_unsupported_def(db, def_id, err).into_main_api());
+                }
+            };
             let mut prereqs = CcPrerequisites::default();
             let cc_ty = cc_ty.into_tokens(&mut prereqs);
 
@@ -569,6 +585,7 @@ fn generate_into_impls<'tcx>(
                 core.def_id,
                 core.rs_fully_qualified_name.clone(),
                 /*is_constructor=*/ false,
+                /*within_template=*/ false,
             )
             .ok()?;
 
@@ -607,6 +624,7 @@ fn generate_into_impls<'tcx>(
                     },
                     ty: core.self_ty,
                 }],
+                /*is_async=*/ false,
             )
             .expect("Self type of `Into` impl should be bridgeable");
 
@@ -635,6 +653,27 @@ fn generate_into_impls<'tcx>(
         .collect()
 }
 
+fn is_newtype_relationship<'tcx>(tcx: TyCtxt<'tcx>, tgt_ty: Ty<'tcx>, src_ty: Ty<'tcx>) -> bool {
+    if let TyKind::Adt(adt_def, substs) = tgt_ty.kind()
+        && adt_def.is_struct()
+        && let variants = adt_def.variants()
+        && variants.len() == 1
+        && let variant = &variants[VariantIdx::from_usize(0)]
+        && variant.ctor_kind() == Some(rustc_hir::def::CtorKind::Fn)
+        && variant.fields.len() == 1
+        && let field = &variant.fields[FieldIdx::from_usize(0)]
+        && crate::field_def_is_pub_and_stable(tcx, field).is_ok()
+    {
+        let field_ty = field.ty(tcx, substs);
+        let field_ty = crate::normalize_ty(tcx, tcx.param_env(field.did), field_ty);
+        let static_field_ty = replace_all_regions_with_static(tcx, field_ty);
+        let static_src_ty = replace_all_regions_with_static(tcx, src_ty);
+        static_field_ty == static_src_ty
+    } else {
+        false
+    }
+}
+
 fn generate_constructor_impls<'tcx>(
     db: &BindingsGenerator<'tcx>,
     core: &AdtCoreBindings<'tcx>,
@@ -651,6 +690,13 @@ fn generate_constructor_impls<'tcx>(
         let trait_ref = get_trait_ref_from_impl_id(tcx, impl_id);
         let src_ty = trait_ref.args.type_at(1);
         if src_ty.flags().intersects(has_type_or_const_vars()) {
+            return None;
+        }
+        // Skip generating a constructor for the `From` impl if the target type is a
+        // newtype with a public field of the same type. In this case, we already
+        // synthesize a tuple constructor with the same signature, and generating
+        // another one would cause duplicate definition conflicts in C++.
+        if is_newtype_relationship(tcx, core.self_ty, src_ty) {
             return None;
         }
         // Skip if source type is Self or a reference to Self (e.g. &Self)
@@ -698,9 +744,27 @@ fn generate_constructor_impls<'tcx>(
             Some((src_ty, cc_ty, *impl_id, /*is_from=*/ false))
         });
 
+    // Avoid collisions in cases where types may map to the same underlying C++ type.
     from_impls
         .chain(into_impls)
-        .filter_map(|(src_ty, cc_ty, impl_id, is_from)| {
+        .avoid_colliding_types(tcx, |(src_ty, _, _, _)| *src_ty)
+        .into_iter()
+        .filter_map(|res| {
+            let (src_ty, cc_ty, impl_id, is_from) = match res {
+                Ok(item) => item,
+                Err(TypeCollisionRisk {
+                    item: (_, _, impl_id, is_from),
+                    key_type,
+                    preferred_type,
+                }) => {
+                    let trait_name = if is_from { "From" } else { "Into" };
+                    let err = anyhow!(
+                        "{trait_name} implementation for `{key_type}` is not supported when \
+                         `{trait_name}<{preferred_type}>` is implemented as it may overlap."
+                    );
+                    return Some(generate_unsupported_def(db, impl_id, err).into_main_api());
+                }
+            };
             let mut prereqs = CcPrerequisites::default();
             let cc_ty = cc_ty.into_tokens(&mut prereqs);
             // Generate thunk names, declarations, and implementations.
@@ -719,6 +783,7 @@ fn generate_constructor_impls<'tcx>(
                     core.def_id,
                     core.rs_fully_qualified_name.clone(),
                     /*is_constructor=*/ true,
+                    /*within_template=*/ false,
                 )
                 .ok()?;
                 let thunk_name = method_name_to_cc_thunk_name
@@ -775,6 +840,8 @@ fn generate_constructor_impls<'tcx>(
                     &thunk_name_cc_ident,
                     /*has_self_param=*/ true,
                     /*is_constructor=*/ true,
+                    /*within_template=*/ false,
+                    /*is_async=*/ false,
                 )
                 .ok()?;
                 let static_src_ty = replace_all_regions_with_static(tcx, src_ty);
@@ -789,6 +856,7 @@ fn generate_constructor_impls<'tcx>(
                     &thunk_name,
                     fully_qualified_fn_name,
                     /*is_constructor=*/ true,
+                    /*is_async=*/ false,
                 )
                 .ok()?;
                 (thunk_name_cc_ident, cc_thunk_decls, rs_details)
@@ -855,10 +923,15 @@ fn generate_trait_operator_impls<'tcx>(
         tcx.non_blanket_impls_for_ty(trait_def_id, core.self_ty)
             .map(|impl_id| {
                 let trait_ref = get_trait_ref_from_impl_id(tcx, impl_id);
-                // Index 0 of our trait ref is the self type, so index 1 is the real type arg
-                // (e.g. `T` in `Index<T>` or in `IndexMut<T>`).
+                // Index 0 of our trait ref is the self type.
+                // If there is a second argument, it is the real type arg (e.g. `T` in `Index<T>`).
+                // Otherwise (e.g. for `Neg` or `Not`), we use the self type as a placeholder.
                 let trait_args = trait_ref.args;
-                let trait_arg_ty = trait_args.type_at(1);
+                let trait_arg_ty = if trait_args.len() > 1 {
+                    trait_args.type_at(1)
+                } else {
+                    trait_args.type_at(0)
+                };
                 (impl_id, trait_arg_ty)
             })
             .avoid_colliding_types(tcx, |(_impl_id, trait_arg_ty)| *trait_arg_ty)
@@ -917,12 +990,210 @@ fn generate_trait_operator_impls<'tcx>(
             "eq",
             "operator==",
         ),
+        query_trait_impls(
+            tcx.lang_items().add_trait().expect("Could not find Add trait"),
+            "add",
+            "operator+",
+        ),
+        query_trait_impls(
+            tcx.lang_items().add_assign_trait().expect("Could not find AddAssign trait"),
+            "add_assign",
+            "operator+=",
+        ),
+        query_trait_impls(
+            tcx.lang_items().bitand_trait().expect("Could not find BitAnd trait"),
+            "bitand",
+            "operator&",
+        ),
+        query_trait_impls(
+            tcx.lang_items().bitand_assign_trait().expect("Could not find BitAndAssign trait"),
+            "bitand_assign",
+            "operator&=",
+        ),
+        query_trait_impls(
+            tcx.lang_items().bitor_trait().expect("Could not find BitOr trait"),
+            "bitor",
+            "operator|",
+        ),
+        query_trait_impls(
+            tcx.lang_items().bitor_assign_trait().expect("Could not find BitOrAssign trait"),
+            "bitor_assign",
+            "operator|=",
+        ),
+        query_trait_impls(
+            tcx.lang_items().bitxor_trait().expect("Could not find BitXor trait"),
+            "bitxor",
+            "operator^",
+        ),
+        query_trait_impls(
+            tcx.lang_items().bitxor_assign_trait().expect("Could not find BitXorAssign trait"),
+            "bitxor_assign",
+            "operator^=",
+        ),
+        query_trait_impls(
+            tcx.lang_items().div_trait().expect("Could not find Div trait"),
+            "div",
+            "operator/",
+        ),
+        query_trait_impls(
+            tcx.lang_items().div_assign_trait().expect("Could not find DivAssign trait"),
+            "div_assign",
+            "operator/=",
+        ),
+        query_trait_impls(
+            tcx.lang_items().mul_trait().expect("Could not find Mul trait"),
+            "mul",
+            "operator*",
+        ),
+        query_trait_impls(
+            tcx.lang_items().mul_assign_trait().expect("Could not find MulAssign trait"),
+            "mul_assign",
+            "operator*=",
+        ),
+        query_trait_impls(
+            tcx.lang_items().neg_trait().expect("Could not find Neg trait"),
+            "neg",
+            "operator-",
+        ),
+        query_trait_impls(
+            tcx.lang_items().not_trait().expect("Could not find Not trait"),
+            "not",
+            "operator!",
+        ),
+        query_trait_impls(
+            tcx.lang_items().rem_trait().expect("Could not find Rem trait"),
+            "rem",
+            "operator%",
+        ),
+        query_trait_impls(
+            tcx.lang_items().rem_assign_trait().expect("Could not find RemAssign trait"),
+            "rem_assign",
+            "operator%=",
+        ),
+        query_trait_impls(
+            tcx.lang_items().shl_trait().expect("Could not find Shl trait"),
+            "shl",
+            "operator<<",
+        ),
+        query_trait_impls(
+            tcx.lang_items().shl_assign_trait().expect("Could not find ShlAssign trait"),
+            "shl_assign",
+            "operator<<=",
+        ),
+        query_trait_impls(
+            tcx.lang_items().shr_trait().expect("Could not find Shr trait"),
+            "shr",
+            "operator>>",
+        ),
+        query_trait_impls(
+            tcx.lang_items().shr_assign_trait().expect("Could not find ShrAssign trait"),
+            "shr_assign",
+            "operator>>=",
+        ),
+        query_trait_impls(
+            tcx.lang_items().sub_trait().expect("Could not find Sub trait"),
+            "sub",
+            "operator-",
+        ),
+        query_trait_impls(
+            tcx.lang_items().sub_assign_trait().expect("Could not find SubAssign trait"),
+            "sub_assign",
+            "operator-=",
+        ),
         // TODO(b/483382648): Add support for other traits / operators - e.g. `PartialOrd`,
-        // (`operator<`, `operator<=`, etc., `operator<=>` seems hard), `Add`, `AddAssign`, etc.
+        // (`operator<`, `operator<=`, etc., `operator<=>` seems hard)
     ]
     .into_iter()
     .flatten()
     .collect()
+}
+
+fn generate_display_impl<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    core: &AdtCoreBindings<'tcx>,
+) -> ApiSnippets<'tcx> {
+    let tcx = db.tcx();
+    let Some(def_id) = core.def_id else {
+        return ApiSnippets::default();
+    };
+    let err_snippets = |err| generate_unsupported_def(db, def_id, err).into_main_api();
+    let Some(display_trait_id) = tcx.get_diagnostic_item(sym::Display) else {
+        return err_snippets(anyhow!(
+            "Internal Crubit Error: `std::fmt::Display` trait not found."
+        ));
+    };
+
+    if !does_type_implement_trait(tcx, core.self_ty, display_trait_id, []) {
+        // This isn't an error, our type doesn't implement `Display` and so we don't generate
+        // any bindings.
+        return ApiSnippets::default();
+    }
+
+    let crate_name = tcx.crate_name(db.source_crate_num());
+    // Omit Display implementations for the `core` crate, as formatting via
+    // `Display` delegates to `ToString` which requires `alloc::string::String`
+    // (which is not available in `core` as it doesn't support heap allocation).
+    if crate_name.as_str() == "core" {
+        return err_snippets(anyhow!("`core` crate does not support `std::fmt::Display` because it requires `alloc::string::String` which is not available in `core`"));
+    }
+
+    let Some(to_string_trait_id) = tcx.get_diagnostic_item(Symbol::intern("ToString")) else {
+        return err_snippets(anyhow!("Internal Crubit Error: `ToString` trait not found."));
+    };
+
+    let TraitThunks { method_name_to_cc_thunk_name, cc_thunk_decls, rs_thunk_impls: rs_details } =
+        match generate_trait_thunks(
+            db,
+            to_string_trait_id,
+            &[],
+            core.self_ty,
+            core.def_id,
+            core.rs_fully_qualified_name.clone(),
+            /*is_constructor=*/ false,
+            /*within_template=*/ true,
+        ) {
+            Ok(thunks) => thunks,
+            Err(err) => return err_snippets(err),
+        };
+
+    let to_string_thunk_name = method_name_to_cc_thunk_name
+        .into_values()
+        .exactly_one()
+        .expect("Expecting a single `to_string` method");
+    let adt_cc_short_name = &core.cc_short_name;
+
+    let main_api = CcSnippet::new(quote! {
+        __NEWLINE__ __COMMENT__ "AbslStringify and std::ostream support via std::fmt::Display"
+        template <typename Sink, typename Str = rs::alloc::string::String>
+        friend void AbslStringify(Sink& sink, const #adt_cc_short_name& self) {
+            crubit::Slot<Str> s;
+            #to_string_thunk_name(self, s.Get());
+            AbslStringify(sink, ::std::move(s).AssumeInitAndTakeValue().as_str());
+        }
+        __NEWLINE__
+        template <typename Str = rs::alloc::string::String>
+        friend ::std::ostream& operator<<(::std::ostream& os, const #adt_cc_short_name& self) {
+            crubit::Slot<Str> s;
+            #to_string_thunk_name(self, s.Get());
+            return os << ::std::string_view(::std::move(s).AssumeInitAndTakeValue().as_str());
+        }
+        __NEWLINE__
+    });
+
+    let cc_details = {
+        let mut prereqs = CcPrerequisites::default();
+        if let Some(includes) = db.crate_name_to_include_paths().get("alloc") {
+            prereqs.includes.extend(includes.iter().cloned());
+        }
+        prereqs.includes.insert(CcInclude::SystemHeader("string_view".into()));
+        prereqs.includes.insert(db.support_header("internal/slot.h"));
+        prereqs.includes.insert(CcInclude::SystemHeader("utility".into()));
+        prereqs.includes.insert(CcInclude::SystemHeader("ostream".into()));
+        let cc_thunk_decls = cc_thunk_decls.into_tokens(&mut prereqs);
+        CcSnippet { tokens: cc_thunk_decls, prereqs }
+    };
+
+    ApiSnippets { main_api, cc_details, rs_details }
 }
 
 /// Formats an algebraic data type (an ADT - a struct, an enum, or a union)
@@ -960,6 +1231,7 @@ pub fn generate_adt<'tcx>(
             core.def_id,
             core.rs_fully_qualified_name.clone(),
             /*is_constructor=*/ false,
+            /*within_template=*/ false,
         )
         .expect("`generate_adt_core` should have already validated `Drop` support");
         // Don't introduce additional feature prerequisites for the `Drop` trait impl, as this
@@ -1031,6 +1303,16 @@ pub fn generate_adt<'tcx>(
     let into_operator_snippets = generate_into_impls(db, core.as_ref());
     let trait_operator_snippets = generate_trait_operator_impls(db, core.as_ref());
     let constructor_operator_snippets = generate_constructor_impls(db, core.as_ref());
+    let display_snippets = generate_display_impl(db, core.as_ref());
+    let into_iterator_snippets = generate_into_iterator_impls(
+        db,
+        core.as_ref(),
+        &mut member_function_names,
+    )
+    .unwrap_or_else(|err| {
+        generate_unsupported_def(db, core.def_id.expect("DefId should be present for an ADT"), err)
+            .into_main_api()
+    });
 
     let ApiSnippets {
         main_api: public_functions_main_api,
@@ -1047,6 +1329,8 @@ pub fn generate_adt<'tcx>(
         into_operator_snippets,
         trait_operator_snippets,
         constructor_operator_snippets,
+        display_snippets,
+        into_iterator_snippets,
     ]
     .into_iter()
     .collect();
@@ -1296,28 +1580,6 @@ pub fn generate_adt_core<'tcx>(
     }))
 }
 
-struct IndexedVariantField<'tcx> {
-    index: usize,
-    field_def: &'tcx ty::FieldDef,
-}
-
-/// Given ADT bindings, iterates over the variants of that ADT and the fields of each variant.
-/// For each field, iteration always provides the middle FieldDef and it's index within it's variant.
-/// The hir type of the field will optionally be included if it is available.
-fn variant_fields_iter<'tcx>(
-    self_ty: Ty<'tcx>,
-) -> impl Iterator<Item = impl Iterator<Item = IndexedVariantField<'tcx>>> {
-    self_ty.ty_adt_def().expect("`core.def_id` needs to identify an ADT").variants().iter().map(
-        |variant| {
-            variant
-                .fields
-                .iter()
-                .enumerate()
-                .map(move |(index, field_def)| IndexedVariantField { index, field_def })
-        },
-    )
-}
-
 fn anonymous_field_ident(index: usize) -> Ident {
     format_ident!("__field{index}")
 }
@@ -1360,7 +1622,7 @@ fn generate_adt_based_ctors<'tcx>(
         .collect()
 }
 
-#[derive(Debug, PartialEq, Eq)]
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
 enum EnumKind {
     /// Enum with `#[repr(C)]` where bindings get `tag` and "payload" fields.
     ReprC,
@@ -1368,9 +1630,14 @@ enum EnumKind {
     /// (i.e. bindings only have a single, private `__opaque_blob_of_bytes` field).
     OpaqueBlobOfBytes,
 }
-fn get_enum_kind<'tcx>(db: &BindingsGenerator<'tcx>, ty: Ty<'tcx>) -> Option<EnumKind> {
-    let enum_adt_def = ty.ty_adt_def().filter(|adt_def| adt_def.is_enum())?;
-    let repr_attrs = db.repr_attrs(enum_adt_def.did());
+fn get_enum_kind<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    adt_def: ty::AdtDef<'tcx>,
+) -> Option<EnumKind> {
+    if !adt_def.is_enum() {
+        return None;
+    }
+    let repr_attrs = db.repr_attrs(adt_def.did());
     if repr_attrs.contains(&rustc_hir::attrs::ReprC) {
         Some(EnumKind::ReprC)
     } else {
@@ -1490,7 +1757,7 @@ fn generate_variant_ctor<'tcx>(
                 }
                 return result;
             }
-            let enum_kind = get_enum_kind(db, core.self_ty).expect("AtdKindEnum implied EnumKind");
+            let enum_kind = get_enum_kind(db, *adt_def).expect("AtdKindEnum implied EnumKind");
             let body = match enum_kind {
                 EnumKind::ReprC => {
                     let discr = core
@@ -1509,30 +1776,32 @@ fn generate_variant_ctor<'tcx>(
                     }
                 }
                 EnumKind::OpaqueBlobOfBytes => {
-                    let (tag_val, tag_size) = {
-                        let typing_env = post_analysis_typing_env(
-                            tcx,
-                            core.def_id.expect("Enums must have a DefId"),
-                        );
-                        let tag = tcx.tag_for_variant(typing_env.as_query_input((
-                            tcx.erase_and_anonymize_regions(core.self_ty),
-                            variant_index,
-                        )));
-                        match tag {
-                            Some(tag) => (tag.to_bits(tag.size()), tag.size()),
-                            None => (0, rustc_abi::Size::ZERO),
-                        }
-                    };
-                    let tag_offset = {
+                    let (tag_val, tag_size, tag_offset) = {
                         let layout =
                             get_layout(tcx, core.self_ty).expect("Should verify layout earlier");
-                        use rustc_abi::Variants::*;
-                        let tag_field = match layout.variants() {
-                            Empty => unreachable!("Uninhabited types should be rejected earlier"),
-                            Single { .. } => unreachable!("Single+NoPayload=ZST=rejected earlier"),
-                            Multiple { tag_field, .. } => tag_field,
-                        };
-                        layout.fields().offset(tag_field.as_usize()).bytes() as usize
+                        match layout.variants() {
+                            rustc_abi::Variants::Empty => {
+                                unreachable!("Uninhabited types should be rejected earlier")
+                            }
+                            rustc_abi::Variants::Single { .. } => (0, rustc_abi::Size::ZERO, 0),
+                            rustc_abi::Variants::Multiple { tag_field, .. } => {
+                                let typing_env = post_analysis_typing_env(
+                                    tcx,
+                                    core.def_id.expect("Enums must have a DefId"),
+                                );
+                                let tag = tcx.tag_for_variant(typing_env.as_query_input((
+                                    tcx.erase_and_anonymize_regions(core.self_ty),
+                                    variant_index,
+                                )));
+                                let (val, size) = match tag {
+                                    Some(tag) => (tag.to_bits(tag.size()), tag.size()),
+                                    None => unreachable!("Multiple variants must have a tag"),
+                                };
+                                let offset =
+                                    layout.fields().offset(tag_field.as_usize()).bytes() as usize;
+                                (val, size, offset)
+                            }
+                        }
                     };
                     let adt_size = core.size_in_bytes as usize;
                     let discr_bytesize = (adt_size - tag_offset).min(tag_size.bytes() as usize);
@@ -1584,6 +1853,855 @@ fn generate_variant_ctor<'tcx>(
     }
 }
 
+struct FieldTypeInfo<'tcx> {
+    size: u64,
+    cpp_type: CcSnippet<'tcx>,
+}
+
+struct Field<'tcx> {
+    type_info: Result<FieldTypeInfo<'tcx>>,
+    cc_name: Ident,
+    rs_name: TokenStream,
+    is_public: bool,
+    index: usize,
+    offset: u64,
+    offset_of_next_field: u64,
+    doc_comment: TokenStream,
+    attributes: Vec<TokenStream>,
+}
+
+impl<'tcx> Field<'tcx> {
+    fn size(&self) -> u64 {
+        match self.type_info {
+            Err(_) => self.offset_of_next_field - self.offset,
+            Ok(FieldTypeInfo { size, .. }) => size,
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+struct CcFieldVisState {
+    is_public: Option<bool>,
+}
+
+impl CcFieldVisState {
+    fn public() -> Self {
+        Self { is_public: Some(true) }
+    }
+    /// Ensures the current field visibility matches `is_public` by returning tokens to
+    /// switch from `private:` to `public:` or vice versa. If the current access specifier
+    /// already matches the requested one, no specifier is returned.
+    fn set_is_public(&mut self, is_public: bool) -> TokenStream {
+        if self.is_public == Some(is_public) {
+            quote! {}
+        } else {
+            self.is_public = Some(is_public);
+            if is_public {
+                quote! { public: }
+            } else {
+                quote! { private: }
+            }
+        }
+    }
+}
+
+struct AdtVariantLayout<'tcx> {
+    fields: Vec<Field<'tcx>>,
+    size: u64,
+}
+
+enum AdtLayout<'tcx> {
+    Struct { fields: Vec<Field<'tcx>>, always_omit_padding: bool },
+    Union { fields: Vec<Field<'tcx>> },
+    Enum { enum_kind: EnumKind, tag_size_with_padding: u64, variants: Vec<AdtVariantLayout<'tcx>> },
+}
+
+struct AdtFieldGenerator<'a, 'tcx> {
+    db: &'a BindingsGenerator<'tcx>,
+    layout: rustc_abi::Layout<'tcx>,
+    adt_def: ty::AdtDef<'tcx>,
+    adt_generic_args: ty::GenericArgsRef<'tcx>,
+    cc_short_name: &'a Ident,
+    rs_fully_qualified_name: &'a TokenStream,
+    repr_attrs: &'a [rustc_hir::attrs::ReprAttr],
+    size_in_bytes: u64,
+    alignment_in_bytes: u64,
+    member_function_names: &'a HashSet<String>,
+}
+
+impl<'a, 'tcx> AdtFieldGenerator<'a, 'tcx> {
+    /// Returns the fields of each variant of an ADT. For structs, there will be only one variant.
+    ///
+    /// If a valid C++ representation is not possible, returns a single error field for the ADT.
+    fn variant_fields(
+        &self,
+        enum_kind: Option<EnumKind>,
+        tag_size_with_padding: u64,
+    ) -> Vec<Vec<Field<'tcx>>> {
+        if let ty::AdtKind::Enum = self.adt_def.adt_kind()
+            && enum_kind != Some(EnumKind::ReprC)
+        {
+            return vec![vec![Field {
+                type_info: Err(anyhow!(
+                    "No support for bindings of individual non-repr(C) `enum`s"
+                )),
+                cc_name: format_ident!("__opaque_blob_of_bytes"),
+                rs_name: quote! { __opaque_blob_of_bytes },
+                is_public: false,
+                index: 0,
+                offset: 0,
+                offset_of_next_field: self.size_in_bytes,
+                doc_comment: quote! {},
+                attributes: vec![],
+            }]];
+        };
+
+        let layout = &self.layout;
+        let layout_variants = layout.variants();
+
+        #[rustversion::before(2026-05-18)]
+        let get_fields =
+            |(_, variant): (VariantIdx, &LayoutData<FieldIdx, VariantIdx>)| variant.fields.clone();
+        #[rustversion::since(2026-05-18)]
+        let get_fields = |(i, _): (VariantIdx, &VariantLayout<FieldIdx>)| {
+            LayoutData::for_variant(layout, i).fields
+        };
+        let variant_layout_field_sizes = match layout_variants {
+            Variants::Single { .. } | Variants::Empty => {
+                vec![(layout.fields.clone(), layout.size.bytes())]
+            }
+            Variants::Multiple { tag: _, tag_encoding: _, tag_field: _, variants } => variants
+                .iter_enumerated()
+                .map(|(variant_index, variant)| {
+                    (
+                        get_fields((variant_index, variant)),
+                        variant.size.bytes() - tag_size_with_padding,
+                    )
+                })
+                .collect_vec(),
+        };
+
+        self.adt_def
+            .variants()
+            .iter()
+            .zip(variant_layout_field_sizes)
+            .map(|(variant, (field_shape, size))| {
+                let enum_adjustment =
+                    if enum_kind == Some(EnumKind::ReprC) { tag_size_with_padding } else { 0 };
+
+                let offsets = match field_shape {
+                    FieldsShape::Arbitrary { ref offsets, .. } => {
+                        offsets.iter().map(|size| size.bytes() - enum_adjustment).collect_vec()
+                    }
+                    FieldsShape::Union { .. } => (0..variant.fields.len())
+                        .map(|i| layout.fields().offset(i).bytes())
+                        .collect_vec(),
+                    unexpected => panic!("Unexpected FieldsShape: {unexpected:?}"),
+                };
+
+                let mut fields = variant
+                    .fields
+                    .iter()
+                    .zip(offsets)
+                    .enumerate()
+                    .map(|(index, (field_def, offset))| {
+                        self.analyze_field(index, field_def, offset)
+                    })
+                    .collect_vec();
+
+                // We only need to worry about this for variant multiples.
+                // TODO: We sort after analyze field because we sort by `field_size` which is
+                // determined by `analyze_field`. We could instead determine field size prior and
+                // have analyze_field set `next_offset` instead of mutating after the fact.
+                if let FieldsShape::Arbitrary { .. } = field_shape {
+                    fields.sort_by_key(|field| {
+                        let field_size =
+                            field.type_info.as_ref().map(|info| info.size).unwrap_or(0);
+                        (field.offset, field_size, field.index)
+                    });
+                }
+
+                let next_offsets = fields
+                    .iter()
+                    .map(|Field { offset, .. }| offset)
+                    .skip(1)
+                    .copied()
+                    .chain(once(size))
+                    .collect_vec();
+                for (field, next_offset) in fields.iter_mut().zip(next_offsets) {
+                    field.offset_of_next_field = next_offset;
+                }
+
+                fields
+            })
+            .collect_vec()
+    }
+
+    fn analyze_layout(&self) -> Result<AdtLayout<'tcx>> {
+        let layout = &self.layout;
+        let layout_variants = layout.variants();
+
+        let enum_kind = get_enum_kind(self.db, self.adt_def);
+        let tag_size_with_padding = match enum_kind {
+            Some(EnumKind::ReprC) => get_tag_size_with_padding(*layout),
+            None | Some(EnumKind::OpaqueBlobOfBytes) => 0,
+        };
+
+        let variants_fields = self.variant_fields(enum_kind, tag_size_with_padding);
+
+        match self.adt_def.adt_kind() {
+            ty::AdtKind::Struct => {
+                let always_omit_padding = self.repr_attrs.contains(&rustc_hir::attrs::ReprC)
+                    && variants_fields.iter().flatten().all(|field| field.type_info.is_ok());
+                let fields = variants_fields.into_iter().next().unwrap_or_default();
+                Ok(AdtLayout::Struct { fields, always_omit_padding })
+            }
+            ty::AdtKind::Union => {
+                let fields = variants_fields.into_iter().next().unwrap_or_default();
+                Ok(AdtLayout::Union { fields })
+            }
+            ty::AdtKind::Enum => {
+                let variant_sizes = match layout_variants {
+                    Variants::Multiple { tag: _, tag_encoding: _, tag_field: _, variants } => {
+                        variants
+                            .iter()
+                            .map(|layout| layout.size.bytes() - tag_size_with_padding)
+                            .collect_vec()
+                    }
+                    Variants::Single { .. } | Variants::Empty => vec![self.size_in_bytes],
+                };
+                let variants = variants_fields
+                    .into_iter()
+                    .zip(variant_sizes)
+                    .map(|(fields, size)| AdtVariantLayout { fields, size })
+                    .collect_vec();
+                let enum_kind = enum_kind.expect("Enum kind should be set for enums");
+                Ok(AdtLayout::Enum { enum_kind, tag_size_with_padding, variants })
+            }
+        }
+    }
+
+    /// Ensures that a given field has a valid C++ type and returns its size and C++ type, if so.
+    fn prepare_field_type(&self, field_def: &ty::FieldDef) -> Result<FieldTypeInfo<'tcx>> {
+        let tcx = self.db.tcx();
+        let ty = field_def.ty(tcx, self.adt_generic_args);
+        #[rustversion::since(2026-05-13)]
+        let ty = crate::normalize_ty(tcx, tcx.param_env(field_def.did), ty);
+        let size = get_layout(tcx, ty).map(|layout| layout.size().bytes())?;
+
+        if is_bridged_type(self.db, ty).is_ok_and(|bridged_type| {
+            bridged_type.is_some_and(|bridged_type| !bridged_type.is_layout_compatible())
+        }) && !ty
+            .ty_adt_def()
+            .and_then(|adt_def| BridgedBuiltin::new(self.db, adt_def))
+            .is_some_and(|builtin| matches!(builtin, BridgedBuiltin::Option))
+        {
+            bail!(
+                "Field is a bridged type and might not be layout-compatible
+                with the C++ type (b/400633609)"
+            );
+        }
+
+        let cpp_type = self
+            .db
+            .format_ty_for_cc(ty, TypeLocation::Field)?
+            .resolve_feature_requirements(self.db.crate_features(self.db.source_crate_num()))?;
+
+        Ok(FieldTypeInfo { size, cpp_type })
+    }
+
+    fn analyze_field(&self, index: usize, field_def: &ty::FieldDef, offset: u64) -> Field<'tcx> {
+        let tcx = self.db.tcx();
+        let type_info = self.prepare_field_type(field_def);
+        let name = field_def.ident(tcx).to_string();
+        let cc_name = code_gen_utils::unkeyword_cpp_ident(&name).to_string();
+        let cc_name = if self.member_function_names.contains(&cc_name) {
+            format!("{cc_name}_")
+        } else {
+            cc_name
+        };
+        let cc_name = format_cc_ident(self.db, cc_name.as_str())
+            .unwrap_or_else(|_err| anonymous_field_ident(index));
+        let rs_name = {
+            let name_starts_with_digit = name
+                .as_str()
+                .chars()
+                .next()
+                .expect("Empty names are unexpected (here and in general)")
+                .is_ascii_digit();
+            if name_starts_with_digit {
+                let index = Literal::usize_unsuffixed(index);
+                quote! { #index }
+            } else {
+                let name = make_rs_ident(name.as_str());
+                quote! { #name }
+            }
+        };
+
+        let mut attributes = vec![];
+        if let Some(cc_deprecated_tag) = generate_deprecated_tag(tcx, field_def.did) {
+            attributes.push(cc_deprecated_tag);
+        }
+        let offset_of_next_field = 0;
+
+        Field {
+            type_info,
+            cc_name,
+            rs_name,
+            is_public: crate::field_def_is_pub_and_stable(tcx, field_def).is_ok(),
+            index,
+            offset,
+            offset_of_next_field,
+            doc_comment: generate_doc_comment(self.db, field_def.did),
+            attributes,
+        }
+    }
+
+    fn generate_common_assertions(&self, fields: &[Field<'tcx>]) -> ApiSnippets<'tcx> {
+        let adt_cc_name = self.cc_short_name;
+        let adt_rs_name = self.rs_fully_qualified_name;
+
+        let cc_details = if fields.is_empty() {
+            CcSnippet::default()
+        } else {
+            let cc_assertions: TokenStream = fields
+                .iter()
+                .filter(|field| field.size() != 0)
+                .map(|Field { cc_name, offset, .. }| {
+                    let offset = Literal::u64_unsuffixed(*offset);
+                    quote! { static_assert(#offset == offsetof(#adt_cc_name, #cc_name)); }
+                })
+                .collect();
+
+            CcSnippet::with_include(
+                quote! {
+                    inline void #adt_cc_name::__crubit_field_offset_assertions() {
+                        #cc_assertions
+                    }
+                },
+                CcInclude::cstddef(),
+            )
+        };
+
+        let rs_details: RsSnippet = fields
+            .iter()
+            .filter(|field| field.is_public)
+            .map(|Field { rs_name, offset, .. }| {
+                let expected_offset = Literal::u64_unsuffixed(*offset);
+                let actual_offset = quote! { ::core::mem::offset_of!(#adt_rs_name, #rs_name) };
+                RsSnippet::new(
+                    quote! { const _: () = assert!(#actual_offset == #expected_offset); },
+                )
+            })
+            .collect();
+
+        let method_decl = if fields.is_empty() {
+            quote! {}
+        } else {
+            quote! { private: static void __crubit_field_offset_assertions(); }
+        };
+
+        ApiSnippets { main_api: CcSnippet::new(method_decl), cc_details, rs_details }
+    }
+
+    fn assemble_snippets(
+        &self,
+        fields_tokens: TokenStream,
+        mut prereqs: CcPrerequisites<'tcx>,
+        assertions: ApiSnippets<'tcx>,
+    ) -> ApiSnippets<'tcx> {
+        let method_decl = assertions.main_api.into_tokens(&mut prereqs);
+        let main_api = CcSnippet {
+            prereqs,
+            tokens: quote! {
+                #fields_tokens
+                #method_decl
+            },
+        };
+        ApiSnippets {
+            main_api,
+            cc_details: assertions.cc_details,
+            rs_details: assertions.rs_details,
+        }
+    }
+
+    fn emit_field_err(
+        &self,
+        field: &Field<'tcx>,
+        err: &arc_anyhow::Error,
+        current_visibility: &mut CcFieldVisState,
+    ) -> CcSnippet<'tcx> {
+        let cc_name = &field.cc_name;
+        let size = field.size();
+        let msg = format!("Field type has been replaced with a blob of bytes: {err:#}");
+
+        if size == 0 {
+            let msg = format!("Field `{cc_name}` omitted: C++ does not support zero-sized types.");
+            return CcSnippet::new(quote! {__NEWLINE__ __COMMENT__ #msg});
+        }
+        let visibility = current_visibility.set_is_public(false);
+        let size = Literal::u64_unsuffixed(size);
+        let tokens = quote! {
+            #visibility __NEWLINE__
+                __COMMENT__ #msg
+                ::std::array<unsigned char, #size> #cc_name;
+        };
+        CcSnippet::with_include(tokens, CcInclude::array())
+    }
+
+    fn emit_struct_field(
+        &self,
+        field: Field<'tcx>,
+        current_visibility: &mut CcFieldVisState,
+        always_omit_padding: bool,
+    ) -> CcSnippet<'tcx> {
+        let cc_name = &field.cc_name;
+        let bracketed_cc_name = if self.db.kythe_annotations() {
+            quote! { __CAPTURE_BEGIN__ #cc_name __CAPTURE_END__ }
+        } else {
+            quote! { #cc_name }
+        };
+
+        let (cpp_type, size) = match field.type_info {
+            Err(ref err) => return self.emit_field_err(&field, err, current_visibility),
+            Ok(FieldTypeInfo { cpp_type, size }) => (cpp_type, size),
+        };
+
+        assert!((field.offset + size) <= field.offset_of_next_field);
+        let padding = field.offset_of_next_field - field.offset - size;
+
+        let visibility = current_visibility.set_is_public(field.is_public);
+        let mut prereqs = CcPrerequisites::default();
+        let cpp_type = cpp_type.into_tokens(&mut prereqs);
+        let doc_comment = field.doc_comment;
+        let attributes = field.attributes;
+
+        let padding = if always_omit_padding || padding == 0 {
+            quote! {}
+        } else {
+            let padding = Literal::u64_unsuffixed(padding);
+            let ident = format_ident!("__padding{}", field.index);
+            let padding_visibility = current_visibility.set_is_public(false);
+            quote! { #padding_visibility unsigned char #ident[#padding]; }
+        };
+        let tokens = quote! {
+            #visibility __NEWLINE__
+                // The anonymous union gives more control over when exactly
+                // the field constructors and destructors run. For example,
+                // this lets us initialize the fields for the first time via
+                // memcpy, in the move or UnsafeRelocateTag constructor, and lets
+                // us destroy them only by calling into Rust.
+                // See also b/288138612.
+                union { __NEWLINE__
+                    #doc_comment
+                    #(#attributes)*
+                    #cpp_type #bracketed_cc_name;
+                };
+            #padding
+        };
+        CcSnippet { tokens, prereqs }
+    }
+
+    fn emit_union_field(
+        &self,
+        field: Field<'tcx>,
+        current_visibility: &mut CcFieldVisState,
+        is_repr_c: bool,
+    ) -> CcSnippet<'tcx> {
+        let cc_name = &field.cc_name;
+        let bracketed_cc_name = if self.db.kythe_annotations() {
+            quote! { __CAPTURE_BEGIN__ #cc_name __CAPTURE_END__ }
+        } else {
+            quote! { #cc_name }
+        };
+
+        let cpp_type = match field.type_info {
+            Err(ref err) => return self.emit_field_err(&field, err, current_visibility),
+            Ok(FieldTypeInfo { cpp_type, .. }) => cpp_type,
+        };
+
+        let visibility = current_visibility.set_is_public(field.is_public);
+        let mut prereqs = CcPrerequisites::default();
+        let cpp_type = cpp_type.into_tokens(&mut prereqs);
+        let doc_comment = field.doc_comment;
+
+        let tokens = if is_repr_c {
+            quote! {
+                #visibility __NEWLINE__
+                #doc_comment
+                #cpp_type #bracketed_cc_name;
+            }
+        } else {
+            let internal_padding = if field.offset == 0 {
+                quote! {}
+            } else {
+                let internal_padding_size = Literal::u64_unsuffixed(field.offset);
+                quote! {char __crubit_internal_padding[#internal_padding_size]}
+            };
+            quote! {
+                #visibility __NEWLINE__
+                #doc_comment
+                struct {
+                    #internal_padding
+                    #cpp_type value;
+                } #bracketed_cc_name;
+            }
+        };
+        CcSnippet { tokens, prereqs }
+    }
+
+    fn emit_enum_field(
+        &self,
+        field: &Field<'tcx>,
+        current_visibility: &mut CcFieldVisState,
+    ) -> CcSnippet<'tcx> {
+        let cc_name = &field.cc_name;
+
+        let cpp_type = match &field.type_info {
+            Err(err) => return self.emit_field_err(field, err, current_visibility),
+            Ok(FieldTypeInfo { cpp_type, .. }) => cpp_type,
+        };
+
+        let visibility = current_visibility.set_is_public(field.is_public);
+        let mut prereqs = CcPrerequisites::default();
+        let cpp_type = cpp_type.clone().into_tokens(&mut prereqs);
+
+        let tokens = quote! {
+            #visibility __NEWLINE__ #cpp_type #cc_name;
+        };
+        CcSnippet { tokens, prereqs }
+    }
+
+    fn generate_struct(
+        &self,
+        fields: Vec<Field<'tcx>>,
+        always_omit_padding: bool,
+    ) -> ApiSnippets<'tcx> {
+        let assertions = self.generate_common_assertions(&fields);
+
+        let mut prereqs = CcPrerequisites::default();
+        let mut current_visibility = CcFieldVisState::public();
+        let fields_tokens: TokenStream = fields
+            .into_iter()
+            .map(|field| {
+                self.emit_struct_field(field, &mut current_visibility, always_omit_padding)
+                    .into_tokens(&mut prereqs)
+            })
+            .collect();
+
+        self.assemble_snippets(fields_tokens, prereqs, assertions)
+    }
+
+    fn generate_union(&self, fields: Vec<Field<'tcx>>) -> ApiSnippets<'tcx> {
+        let assertions = self.generate_common_assertions(&fields);
+
+        let is_repr_c = self.repr_attrs.contains(&rustc_hir::attrs::ReprC);
+        let mut prereqs = CcPrerequisites::default();
+        let mut current_visibility = CcFieldVisState::public();
+        let fields_tokens: TokenStream = fields
+            .into_iter()
+            .map(|field| {
+                self.emit_union_field(field, &mut current_visibility, is_repr_c)
+                    .into_tokens(&mut prereqs)
+            })
+            .collect();
+
+        self.assemble_snippets(fields_tokens, prereqs, assertions)
+    }
+
+    fn generate_enum(
+        &self,
+        enum_kind: EnumKind,
+        tag_size_with_padding: u64,
+        variants: Vec<AdtVariantLayout<'tcx>>,
+    ) -> ApiSnippets<'tcx> {
+        let tcx = self.db.tcx();
+        let adt_cc_name = self.cc_short_name;
+        let adt_rs_name = self.rs_fully_qualified_name;
+        let layout_variants = &self.layout.variants;
+
+        let cc_details = if variants.is_empty() {
+            CcSnippet::default()
+        } else {
+            let cc_assertions: TokenStream = match enum_kind {
+                EnumKind::OpaqueBlobOfBytes => variants
+                    .iter()
+                    .flat_map(|v| &v.fields)
+                    .filter(|field| field.size() != 0)
+                    .map(|Field { cc_name, offset, .. }| {
+                        let offset = Literal::u64_unsuffixed(*offset);
+                        quote! { static_assert(#offset == offsetof(#adt_cc_name, #cc_name)); }
+                    })
+                    .collect(),
+                EnumKind::ReprC => {
+                    let variant_offset_assertions: TokenStream = self.adt_def.variants().iter().zip(variants.iter())
+                        .map(|(variant_def, variant)| {
+                            if variant.size == 0 {
+                                quote! {}
+                            } else {
+                                let cc_variant_struct_name = format_cc_ident(self.db, variant_def.ident(tcx).as_str())
+                                    .unwrap_or_else(|_err| format_ident!("err_field"));
+                                let tag_unsuffixed = Literal::u64_unsuffixed(tag_size_with_padding);
+                                quote! { static_assert(#tag_unsuffixed == offsetof(#adt_cc_name, #cc_variant_struct_name)); }
+                            }
+                        }).collect();
+                    let variant_field_assertions: TokenStream = variants
+                        .iter()
+                        .enumerate()
+                        .flat_map(|(variant_index, variant_layout)| {
+                            let variant_def = self.adt_def.variant(VariantIdx::from_usize(variant_index));
+                            let cc_variant = variant_def.ident(tcx);
+                            let qualified_struct_name =
+                                expect_format_cc_type_name(&format!("{}::__crubit_{}_struct", adt_cc_name, cc_variant));
+                            if variant_def.fields.is_empty() {
+                                quote! {}
+                            } else {
+                                variant_layout.fields.iter().filter(|field| field.type_info.is_ok() && field.size() != 0 ).flat_map(move |Field { cc_name, offset, .. }| {
+                                    let offset = Literal::u64_unsuffixed(*offset);
+                                    quote! { static_assert(#offset == offsetof(#qualified_struct_name, #cc_name)); }
+                                }).collect()
+                            }
+                    }).collect();
+                    quote! {#variant_offset_assertions #variant_field_assertions }
+                }
+            };
+
+            CcSnippet::with_include(
+                quote! {
+                    inline void #adt_cc_name::__crubit_field_offset_assertions() {
+                        #cc_assertions
+                    }
+                },
+                CcInclude::cstddef(),
+            )
+        };
+
+        let rs_details: RsSnippet = if enum_kind == EnumKind::ReprC {
+            RsSnippet::default()
+        } else {
+            variants
+                .iter()
+                .flat_map(|v| &v.fields)
+                .filter(|field| field.is_public)
+                .map(|Field { rs_name, offset, .. }| {
+                    let expected_offset = Literal::u64_unsuffixed(*offset);
+                    let actual_offset = quote! { ::core::mem::offset_of!(#adt_rs_name, #rs_name) };
+                    RsSnippet::new(
+                        quote! { const _: () = assert!(#actual_offset == #expected_offset); },
+                    )
+                })
+                .collect()
+        };
+
+        let assertions_method_decl = if variants.is_empty() {
+            quote! {}
+        } else {
+            quote! { private: static void __crubit_field_offset_assertions(); }
+        };
+
+        let adt_size = Literal::u64_unsuffixed(self.size_in_bytes);
+        let mut prereqs = CcPrerequisites::default();
+
+        let fields = if enum_kind != EnumKind::ReprC {
+            variants
+                .iter()
+                .flat_map(|v| &v.fields)
+                .map(|field| {
+                    self.emit_enum_field(field, &mut Default::default()).into_tokens(&mut prereqs)
+                })
+                .collect()
+        } else {
+            let tag_enum = match layout_variants {
+                Variants::Single { .. } | Variants::Empty => quote! {},
+                Variants::Multiple { tag, .. } => {
+                    let tag_ty = get_scalar_int_type(self.db.tcx(), *tag);
+
+                    let tag_tokens = self
+                        .db
+                        .format_ty_for_cc(tag_ty, TypeLocation::Other)
+                        .expect("discriminant should be a integer type.")
+                        .into_tokens(&mut prereqs);
+
+                    let variant_enum_fields: TokenStream = self
+                        .adt_def
+                        .variants()
+                        .iter_enumerated()
+                        .map(|(variant_index, variant_def)| {
+                            let cc_variant_name =
+                                format_cc_ident(self.db, variant_def.name.as_str())
+                                    .unwrap_or_else(|_err| format_ident!("err_field"));
+                            let (tag_size, _signed) = tag_ty.int_size_and_signed(tcx);
+                            let (scalar_int, _) = ty::ScalarInt::truncate_from_uint(
+                                self.adt_def.discriminant_for_variant(tcx, variant_index).val,
+                                tag_size,
+                            );
+                            let tag_value = scalar_value_to_string(
+                                tcx,
+                                Scalar::Int(scalar_int),
+                                *tag_ty.kind(),
+                            )
+                            .expect("tag to be a valid scalar constant")
+                            .parse::<TokenStream>()
+                            .expect("tag string to consist of valid scalar tokens");
+                            quote! {
+                                __NEWLINE__ #cc_variant_name = #tag_value,
+                            }
+                        })
+                        .collect();
+                    quote! {
+                        __NEWLINE__ enum class Tag : #tag_tokens {
+                            #variant_enum_fields
+                        }; __NEWLINE__
+                    }
+                }
+            };
+
+            let mut current_visibility = CcFieldVisState::default();
+            let tokens_per_variant: Vec<TokenStream> = variants
+                .iter()
+                .map(|variant_layout| {
+                    variant_layout
+                        .fields
+                        .iter()
+                        .map(|field| {
+                            self.emit_enum_field(field, &mut current_visibility)
+                                .into_tokens(&mut prereqs)
+                        })
+                        .collect()
+                })
+                .collect();
+
+            #[rustversion::since(2026-05-18)]
+            let layout = &self.layout;
+            let variant_alignments = match layout_variants {
+                Variants::Multiple { variants: layout_vars, .. } => {
+                    #[rustversion::before(2026-05-18)]
+                    let get_align =
+                        |(_, layout): (VariantIdx, &LayoutData<FieldIdx, VariantIdx>)| {
+                            layout.align.abi.bytes() - tag_size_with_padding
+                        };
+                    #[rustversion::since(2026-05-18)]
+                    let get_align = |(i, _): (VariantIdx, &VariantLayout<FieldIdx>)| {
+                        LayoutData::for_variant(layout, i).align.abi.bytes() - tag_size_with_padding
+                    };
+                    layout_vars.iter_enumerated().map(get_align).collect_vec()
+                }
+                Variants::Single { .. } | Variants::Empty => {
+                    vec![self.alignment_in_bytes]
+                }
+            };
+
+            let variant_structs: TokenStream = self
+                .adt_def
+                .variants()
+                .iter_enumerated()
+                .map(|(variant_index, variant_def)| {
+                    let cc_variant_struct_name = format_cc_ident(
+                        self.db,
+                        format!("__crubit_{}_struct", variant_def.ident(tcx).as_str()).as_ref(),
+                    )
+                    .unwrap_or_else(|_err| format_ident!("err_struct"));
+
+                    let fields_for_variant = &tokens_per_variant[variant_index.index()];
+
+                    let variant_alignment =
+                        Literal::u64_unsuffixed(variant_alignments[variant_index.index()]);
+
+                    if variants[variant_index.index()].size == 0 {
+                        let cc_variant_name = format_cc_ident(self.db, variant_def.name.as_str())
+                            .unwrap_or_else(|_err| format_ident!("err_field"));
+                        let msg = format!(
+                            "Variant {} has no size, so no struct is generated.",
+                            cc_variant_name
+                        );
+                        quote! {__NEWLINE__
+                        __COMMENT__ #msg}
+                    } else {
+                        quote! {
+                            __NEWLINE__
+                            struct alignas(#variant_alignment) #cc_variant_struct_name {
+                                #fields_for_variant
+                            };
+                        }
+                    }
+                })
+                .collect();
+
+            let variants_union_fields: TokenStream = self
+                .adt_def
+                .variants()
+                .iter_enumerated()
+                .map(|(variant_index, variant_def)| {
+                    let cc_variant_name = format_cc_ident(self.db, variant_def.name.as_str())
+                        .unwrap_or_else(|_err| format_ident!("err_field"));
+                    let cc_variant_struct_type = format_cc_ident(
+                        self.db,
+                        format!("__crubit_{}_struct", variant_def.ident(tcx).as_str()).as_ref(),
+                    )
+                    .unwrap_or_else(|_err| format_ident!("err_struct"));
+
+                    if variants[variant_index.index()].size == 0 {
+                        quote! {}
+                    } else {
+                        quote! {
+                            #cc_variant_struct_type #cc_variant_name; __NEWLINE__
+                        }
+                    }
+                })
+                .collect();
+
+            let variants_union: TokenStream = {
+                let has_no_fields = variants.iter().all(|v| v.size == 0);
+
+                if has_no_fields {
+                    quote! {}
+                } else {
+                    quote! {
+                        public: union {
+                            #variants_union_fields
+                        };
+                    }
+                }
+            };
+
+            quote! {
+                #variant_structs __NEWLINE__
+                #tag_enum __NEWLINE__
+                public: Tag tag; __NEWLINE__
+                #variants_union
+            }
+        };
+
+        let cc_short_name = self.cc_short_name;
+        let enum_opaque_bytes_ctor = match enum_kind {
+            EnumKind::OpaqueBlobOfBytes => quote! {
+                private:
+                    struct PrivateBytesTag {};
+                    constexpr #cc_short_name(PrivateBytesTag,
+                                             ::std::array<unsigned char, #adt_size> bytes)
+                        : __opaque_blob_of_bytes(bytes) {}
+            },
+            EnumKind::ReprC => quote! {
+                private:
+                    struct PrivateTagCtorTag {};
+                    constexpr #cc_short_name(PrivateTagCtorTag, Tag tag)
+                        : tag(tag) {}
+            },
+        };
+
+        let main_api = CcSnippet {
+            prereqs,
+            tokens: quote! {
+                #fields
+                #enum_opaque_bytes_ctor
+                #assertions_method_decl
+            },
+        };
+
+        ApiSnippets { main_api, cc_details, rs_details }
+    }
+}
+
 /// Returns the body of the C++ struct that represents the given ADT.
 pub(crate) fn generate_fields<'tcx>(
     db: &BindingsGenerator<'tcx>,
@@ -1595,768 +2713,39 @@ pub(crate) fn generate_fields<'tcx>(
     alignment_in_bytes: u64,
     member_function_names: &HashSet<String>,
 ) -> ApiSnippets<'tcx> {
-    let tcx = db.tcx();
     let TyKind::Adt(adt_def, adt_generic_args) = self_ty.kind() else {
         panic!("Attempted to generate fields for a non-ADT type: {:?}", self_ty)
     };
-    struct FieldTypeInfo<'tcx> {
-        size: u64,
-        cpp_type: CcSnippet<'tcx>,
-    }
-    struct Field<'tcx> {
-        type_info: Result<FieldTypeInfo<'tcx>>,
-        cc_name: Ident,
-        rs_name: TokenStream,
-        is_public: bool,
-        index: usize,
-        offset: u64,
-        offset_of_next_field: u64,
-        doc_comment: TokenStream,
-        attributes: Vec<TokenStream>,
-    }
-    impl<'a> Field<'a> {
-        fn size(&self) -> u64 {
-            match self.type_info {
-                Err(_) => self.offset_of_next_field - self.offset,
-                Ok(FieldTypeInfo { size, .. }) => size,
-            }
+
+    let layout = get_layout(db.tcx(), self_ty)
+        .expect("Layout should be already verified by `generate_adt_core`");
+
+    let generator = AdtFieldGenerator {
+        db,
+        layout,
+        adt_def: *adt_def,
+        adt_generic_args,
+        cc_short_name,
+        rs_fully_qualified_name,
+        repr_attrs,
+        size_in_bytes,
+        alignment_in_bytes,
+        member_function_names,
+    };
+
+    let layout_data = generator
+        .analyze_layout()
+        .expect("Layout analysis should succeed if `generate_adt_core` verified layout");
+
+    match layout_data {
+        AdtLayout::Struct { fields, always_omit_padding } => {
+            generator.generate_struct(fields, always_omit_padding)
+        }
+        AdtLayout::Union { fields } => generator.generate_union(fields),
+        AdtLayout::Enum { enum_kind, tag_size_with_padding, variants } => {
+            generator.generate_enum(enum_kind, tag_size_with_padding, variants)
         }
     }
-
-    let layout =
-        get_layout(tcx, self_ty).expect("Layout should be already verified by `generate_adt_core`");
-    let err_fields = |err| {
-        vec![Field {
-            type_info: Err(err),
-            cc_name: format_ident!("__opaque_blob_of_bytes"),
-            rs_name: quote! { __opaque_blob_of_bytes },
-            is_public: false,
-            index: 0,
-            offset: 0,
-            offset_of_next_field: size_in_bytes,
-            doc_comment: quote! {},
-            attributes: vec![],
-        }]
-    };
-
-    let layout_variants = layout.variants();
-
-    // If the ADT has one variant, then just use the fields in `layout.fields`.
-    // If the ADT has multiple variants, then we need to use the layout of each
-    // variant. The `layout.fields` just contains the tag.
-    let fields_shape = match layout_variants {
-        Variants::Single { .. } | Variants::Empty => vec![layout.fields.clone()],
-        Variants::Multiple { tag: _, tag_encoding: _, tag_field: _, variants } => {
-            #[rustversion::before(2026-05-18)]
-            let get_fields = |(_, variant): (VariantIdx, &LayoutData<FieldIdx, VariantIdx>)| {
-                variant.fields.clone()
-            };
-            #[rustversion::since(2026-05-18)]
-            let get_fields = |(i, _): (VariantIdx, &VariantLayout<FieldIdx>)| {
-                LayoutData::for_variant(&layout, i).fields
-            };
-            variants.iter_enumerated().map(get_fields).collect_vec()
-        }
-    };
-
-    // Used for generating enum bindings.
-    let enum_kind = get_enum_kind(db, self_ty);
-    let tag_size_with_padding = match enum_kind {
-        Some(EnumKind::ReprC) => get_tag_size_with_padding(layout),
-        None | Some(EnumKind::OpaqueBlobOfBytes) => 0,
-    };
-
-    let variant_sizes = match layout_variants {
-        Variants::Multiple { tag: _, tag_encoding: _, tag_field: _, variants } => {
-            variants.iter().map(|layout| layout.size.bytes() - tag_size_with_padding).collect_vec()
-        }
-        Variants::Single { .. } | Variants::Empty => {
-            vec![alignment_in_bytes]
-        }
-    };
-
-    // The size of each variant. Note for enums, this removes the size (and padding)
-    // for the tag.
-    let layout_size = match layout_variants {
-        Variants::Single { .. } | Variants::Empty => vec![layout.size().bytes()],
-        Variants::Multiple { tag: _, tag_encoding: _, tag_field: _, variants } => variants
-            .iter()
-            .map(|variant| variant.size.bytes() - tag_size_with_padding)
-            .collect_vec(),
-    };
-    let variants_fields: Vec<Vec<Field<'tcx>>> = match adt_def.adt_kind() {
-        // Handle cases of unsupported ADTs.
-        ty::AdtKind::Enum if enum_kind != Some(EnumKind::ReprC) => {
-            vec![err_fields(anyhow!("No support for bindings of individual non-repr(C) `enum`s"))]
-        }
-
-        // Otherwise, get the fields and determine the memory layout.
-        _ => {
-            let mut variants_fields = variant_fields_iter(self_ty)
-                .map(|field_iter| {
-                    field_iter
-                        .map(|IndexedVariantField { index, field_def }| {
-                            let ty = field_def.ty(tcx, adt_generic_args);
-                            #[rustversion::since(2026-05-13)]
-                            let ty = crate::normalize_ty(tcx, tcx.param_env(field_def.did), ty);
-                            let size = get_layout(tcx, ty).map(|layout| layout.size().bytes());
-                            let type_info = size.and_then(|size| {
-                                if is_bridged_type(db, ty).is_ok_and(|bridged_type| {
-                                    // Pointer-like transmute types are layout-compatible, not
-                                    // bridged by-value.
-                                    bridged_type.is_some_and(|bridged_type| {
-                                        !bridged_type.is_layout_compatible()
-                                    })
-                                }) && !ty
-                                    .ty_adt_def()
-                                    .and_then(|adt_def| BridgedBuiltin::new(db, adt_def))
-                                    .is_some_and(|builtin| {
-                                        matches!(builtin, BridgedBuiltin::Option)
-                                    })
-                                {
-                                    bail!(
-                                        "Field is a bridged type and might not be layout-compatible
-                                    with the C++ type (b/400633609)"
-                                    );
-                                }
-
-                                Ok(FieldTypeInfo {
-                                    size,
-                                    cpp_type: db
-                                        .format_ty_for_cc(ty, TypeLocation::Other)?
-                                        .resolve_feature_requirements(
-                                            db.crate_features(db.source_crate_num()),
-                                        )?,
-                                })
-                            });
-                            let name = field_def.ident(tcx).to_string();
-                            let cc_name = code_gen_utils::unkeyword_cpp_ident(&name).to_string();
-                            let cc_name = if member_function_names.contains(&cc_name) {
-                                // TODO: Handle the case of name_ itself also being taken? e.g. the
-                                // Rust struct struct S {a: i32, a_:
-                                // i32} impl S { fn a() {} fn a_()
-                                // {} fn a__(){}.
-                                format!("{cc_name}_")
-                            } else {
-                                cc_name
-                            };
-                            let cc_name = format_cc_ident(db, cc_name.as_str())
-                                .unwrap_or_else(|_err| anonymous_field_ident(index));
-                            let rs_name = {
-                                let name_starts_with_digit = name
-                                    .as_str()
-                                    .chars()
-                                    .next()
-                                    .expect("Empty names are unexpected (here and in general)")
-                                    .is_ascii_digit();
-                                if name_starts_with_digit {
-                                    let index = Literal::usize_unsuffixed(index);
-                                    quote! { #index }
-                                } else {
-                                    let name = make_rs_ident(name.as_str());
-                                    quote! { #name }
-                                }
-                            };
-
-                            // `offset` and `offset_of_next_field` will be fixed by
-                            // FieldsShape::Arbitrary branch below.
-                            let offset = 0;
-                            let offset_of_next_field = 0;
-
-                            // Populate attributes.
-                            let mut attributes = vec![];
-                            if let Some(cc_deprecated_tag) =
-                                generate_deprecated_tag(tcx, field_def.did)
-                            {
-                                attributes.push(cc_deprecated_tag);
-                            }
-
-                            Field {
-                                type_info,
-                                cc_name,
-                                rs_name,
-                                is_public: crate::field_def_is_pub_and_stable(tcx, field_def)
-                                    .is_ok(),
-                                index,
-                                offset,
-                                offset_of_next_field,
-                                doc_comment: generate_doc_comment(db, field_def.did),
-                                attributes,
-                            }
-                        })
-                        .collect_vec()
-                })
-                .collect_vec();
-
-            for (variant_index, variant_fields) in fields_shape.iter().enumerate() {
-                match variant_fields {
-                    // Struct/Enum case
-                    FieldsShape::Arbitrary { offsets, .. } => {
-                        for (index, offset) in offsets.iter().enumerate() {
-                            // Documentation of `FieldsShape::Arbitrary says that the offsets are
-                            // "ordered to match the source definition order".
-                            // We can coorelate them with elements
-                            // of the `fields` vector because we've explicitly `sorted_by_key` using
-                            // `def_span`.
-                            variants_fields[variant_index][index].offset = offset.bytes();
-
-                            if enum_kind == Some(EnumKind::ReprC) {
-                                // Find the offset for the variant, and take it into
-                                // account.
-                                variants_fields[variant_index][index].offset -=
-                                    tag_size_with_padding;
-                            }
-                        }
-                        // Sort by offset first; ZSTs in the same offset are sorted by source order.
-                        // Use `field_size` to ensure ZSTs at the same offset as
-                        // non-ZSTs sort first to avoid weird offset issues later on.
-                        variants_fields[variant_index].sort_by_key(|field| {
-                            let field_size =
-                                field.type_info.as_ref().map(|info| info.size).unwrap_or(0);
-                            (field.offset, field_size, field.index)
-                        });
-                    }
-                    FieldsShape::Union { .. } => {
-                        // Compute the offset of each field
-                        for (field_index, field) in
-                            variants_fields[variant_index].iter_mut().enumerate()
-                        {
-                            field.offset = layout.fields().offset(field_index).bytes();
-                        }
-                    }
-                    unexpected => panic!("Unexpected FieldsShape: {unexpected:?}"),
-                }
-            }
-
-            for (variant_index, variant_fields) in variants_fields.iter_mut().enumerate() {
-                let next_offsets = variant_fields
-                    .iter()
-                    .map(|Field { offset, .. }| *offset)
-                    .skip(1)
-                    .chain(once(layout_size[variant_index]))
-                    .collect_vec();
-                for (field, next_offset) in variant_fields.iter_mut().zip(next_offsets) {
-                    field.offset_of_next_field = next_offset;
-                }
-            }
-            variants_fields
-        }
-    };
-
-    let cc_details = if variants_fields.is_empty() {
-        CcSnippet::default()
-    } else {
-        let adt_cc_name = cc_short_name;
-        let cc_assertions: TokenStream = match adt_def.adt_kind() {
-            ty::AdtKind::Struct | ty::AdtKind::Union => {
-                variants_fields
-                    .iter()
-                    .flatten()
-                    // TODO(b/298660437): Add support for ZST fields.
-                    .filter(|field| field.size() != 0)
-                    .map(|Field { cc_name, offset, .. }| {
-                        let offset = Literal::u64_unsuffixed(*offset);
-                        quote! { static_assert(#offset == offsetof(#adt_cc_name, #cc_name)); }
-                    })
-                    .collect()
-            }
-            // Check if each variant has the tag (and appropriate padding) in the front.
-            ty::AdtKind::Enum => match enum_kind {
-                None => unreachable!("ty::AdtKind::Enum with no enum_kind is impossible"),
-                Some(EnumKind::OpaqueBlobOfBytes) => {
-                    variants_fields
-                        .iter()
-                        .flatten()
-                        // TODO(b/298660437): Add support for ZST fields.
-                        .filter(|field| field.size() != 0)
-                        .map(|Field { cc_name, offset, .. }| {
-                            let offset = Literal::u64_unsuffixed(*offset);
-                            quote! { static_assert(#offset == offsetof(#adt_cc_name, #cc_name)); }
-                        })
-                        .collect()
-                }
-                Some(EnumKind::ReprC) => {
-                    let variant_offset_assertions: TokenStream = adt_def.variants().iter_enumerated().map(|(variant_index, variant_def)| {
-                        let cc_variant_struct_name = format_cc_ident(db, variant_def.ident(tcx).as_str())
-                            .unwrap_or_else(|_err| format_ident!("err_field"));
-                        let tag_unsuffixed = Literal::u64_unsuffixed(tag_size_with_padding);
-                        // If the variant has no fields, don't bother generating any assertions.
-                        if variant_sizes[variant_index.index()] == 0  {
-                            quote! {}
-                        } else {
-                            quote! { static_assert(#tag_unsuffixed == offsetof(#adt_cc_name, #cc_variant_struct_name)); }
-                        }
-                    }).collect();
-                    // Check for each field's offsets within the variant.
-                    let variant_field_assertions: TokenStream = variants_fields
-                        .iter()
-                        .enumerate()
-                        .flat_map(|(variant_index, fields_for_variant)| {
-                            let variant_def = adt_def.variant(VariantIdx::from_usize(variant_index));
-                            let cc_variant = variant_def.ident(tcx);
-                            let qualified_struct_name =
-                                expect_format_cc_type_name(&format!("{}::__crubit_{}_struct", adt_cc_name, cc_variant));
-                            // If the variant has no fields, don't bother generating any assertions.
-                            if variant_def.fields.is_empty() {
-                                quote! {}
-                            } else {
-                                //
-                                fields_for_variant.iter().filter(|field| field.type_info.is_ok() && field.size() != 0 ).flat_map(move |Field { cc_name, offset, .. }| {
-                                    let offset = Literal::u64_unsuffixed(*offset);
-                                    quote! { static_assert(#offset == offsetof(#qualified_struct_name, #cc_name)); }
-                                }).collect()
-                            }
-                    }).collect();
-                    quote! {#variant_offset_assertions #variant_field_assertions }
-                }
-            },
-        };
-
-        CcSnippet::with_include(
-            quote! {
-                inline void #adt_cc_name::__crubit_field_offset_assertions() {
-                    #cc_assertions
-                }
-            },
-            CcInclude::cstddef(),
-        )
-    };
-
-    let rs_details: RsSnippet = if enum_kind == Some(EnumKind::ReprC) {
-        // Offsets for enums is an experimental feature.
-        // TODO(b/355642210): Add these assertions once they're not
-        // experiemtnal. let adt_rs_name =
-        // &core.rs_fully_qualified_name; variants_fields
-        //     .iter()
-        //     .enumerate()
-        //     .map(|(variant_index, fields)| {
-        //         let variant_def =
-        // adt_def.variant(VariantIdx::from_usize(variant_index));         let
-        // variant_name = make_rs_ident(variant_def.ident(tcx).as_str());
-        //         let variant_offset_assertions: TokenStream = fields
-        //             .iter()
-        //             .map(|Field { rs_name, offset, .. }| {
-        //                 let expected_offset =
-        // Literal::u64_unsuffixed(*offset);                 let
-        // actual_offset =                     quote! {
-        // ::core::mem::offset_of!(#adt_rs_name, #variant_name.#rs_name)
-        // };                 quote! { const _: () =
-        // assert!(#actual_offset == #expected_offset); }             })
-        //             .collect();
-        //         variant_offset_assertions
-        //     })
-        //     .collect()
-        RsSnippet::default()
-    } else {
-        let adt_rs_name = rs_fully_qualified_name;
-        variants_fields
-            .iter()
-            .flatten()
-            // TODO(b/298660437): Even though we don't generate bindings for ZST fields,
-            // we'd still like to make sure we computed the offset of
-            // ZST fields correctly on the Rust side, so we still emit
-            // offset assertions for ZST fields here. TODO(b/298660437):
-            // Remove the comment above when ZST fields are supported.
-            .filter(|field| field.is_public)
-            .map(|Field { rs_name, offset, .. }| {
-                let expected_offset = Literal::u64_unsuffixed(*offset);
-                let actual_offset = quote! { ::core::mem::offset_of!(#adt_rs_name, #rs_name) };
-                RsSnippet::new(
-                    quote! { const _: () = assert!(#actual_offset == #expected_offset); },
-                )
-            })
-            .collect()
-    };
-    let main_api = {
-        let assertions_method_decl = if variants_fields.is_empty() {
-            quote! {}
-        } else {
-            // We put the assertions in a method so that they can read private member
-            // variables.
-            quote! { private: static void __crubit_field_offset_assertions(); }
-        };
-
-        // If all fields are known, and the type is repr(C), then we don't need padding
-        // fields, and can instead use the natural padding from alignment.
-        //
-        // Note: it does need to be repr(C) to be guaranteed, since the compiler might
-        // reasonably place a field later than it has to for layout
-        // randomization purposes. For example, in `#[repr(align(4))] struct
-        // Foo(i8);` there are four different places the `i8` could be.
-        // If it was placed in the second byte, for any reason, then we would need
-        // explicit padding bytes.
-        let always_omit_padding = repr_attrs.contains(&rustc_hir::attrs::ReprC)
-            && variants_fields.iter().flatten().all(|field| field.type_info.is_ok());
-
-        let mut prereqs = CcPrerequisites::default();
-
-        #[derive(Debug, Default)]
-        struct CcFieldVisState {
-            is_public: Option<bool>,
-        }
-
-        impl CcFieldVisState {
-            fn public() -> Self {
-                Self { is_public: Some(true) }
-            }
-            /// Ensures the current field visibility matches `is_public` by returning tokens to
-            /// switch from `private:` to `public:` or vice versa. If the current access specifier
-            /// already matches the requested one, no specifier is returned.
-            fn set_is_public(&mut self, is_public: bool) -> TokenStream {
-                if self.is_public == Some(is_public) {
-                    quote! {}
-                } else {
-                    self.is_public = Some(is_public);
-                    if is_public {
-                        quote! { public: }
-                    } else {
-                        quote! { private: }
-                    }
-                }
-            }
-        }
-
-        // Takes a field and converts it to a token stream.
-        let get_field_tokens = |field: Field<'tcx>,
-                                prereqs: &mut CcPrerequisites<'tcx>,
-                                current_visibility: &mut CcFieldVisState|
-         -> TokenStream {
-            let cc_name = &field.cc_name;
-            let bracketed_cc_name = if db.kythe_annotations() {
-                quote! { __CAPTURE_BEGIN__ #cc_name __CAPTURE_END__ }
-            } else {
-                quote! { #cc_name }
-            };
-            match field.type_info {
-                Err(ref err) => {
-                    let size = field.size();
-                    let msg = format!("Field type has been replaced with a blob of bytes: {err:#}");
-
-                    // Empty arrays are ill-formed, but also unnecessary for padding.
-                    if size > 0 {
-                        let visibility = current_visibility.set_is_public(false);
-                        let size = Literal::u64_unsuffixed(size);
-                        let tokens = quote! {
-                            #visibility __NEWLINE__
-                                __COMMENT__ #msg
-                                ::std::array<unsigned char, #size> #cc_name;
-                        };
-                        prereqs.includes.insert(CcInclude::array());
-                        tokens
-                    } else {
-                        // TODO(b/258259459): Generate bindings for ZST fields.
-                        let msg = format!(
-                            "Skipped bindings for field `{cc_name}`: \
-                             ZST fields are not supported (b/258259459)"
-                        );
-                        quote! {__NEWLINE__ __COMMENT__ #msg}
-                    }
-                }
-                Ok(FieldTypeInfo { cpp_type, size }) => {
-                    let padding = match adt_def.adt_kind() {
-                        ty::AdtKind::Struct | ty::AdtKind::Enum => {
-                            assert!((field.offset + size) <= field.offset_of_next_field);
-                            field.offset_of_next_field - field.offset - size
-                        }
-                        ty::AdtKind::Union => field.offset,
-                    };
-
-                    // Visibility specifier needed by the current field.
-                    // We have to update this field's visibility before calculating its padding,
-                    // since the padding may update the current visibility to private.
-                    let visibility = current_visibility.set_is_public(field.is_public);
-
-                    let cpp_type = cpp_type.into_tokens(prereqs);
-                    let doc_comment = field.doc_comment;
-                    let attributes = field.attributes;
-
-                    let tokens = match adt_def.adt_kind() {
-                        ty::AdtKind::Struct => {
-                            // Omit explicit padding if:
-                            //   1. The type is repr(C) and has known types for all fields, so we can reuse
-                            //      the natural repr(C) padding.
-                            //   2. There is no padding
-                            // TODO(jeanpierreda): also omit padding for the final field?
-                            let padding = if always_omit_padding || padding == 0 {
-                                quote! {}
-                            } else {
-                                let padding = Literal::u64_unsuffixed(padding);
-                                let ident = format_ident!("__padding{}", field.index);
-                                let padding_visibility = current_visibility.set_is_public(false);
-                                quote! { #padding_visibility unsigned char #ident[#padding]; }
-                            };
-                            quote! {
-                                #visibility __NEWLINE__
-                                    // The anonymous union gives more control over when exactly
-                                    // the field constructors and destructors run. For example,
-                                    // this lets us initialize the fields for the first time via
-                                    // memcpy, in the move or UnsafeRelocateTag constructor, and lets
-                                    // us destroy them only by calling into Rust.
-                                    // See also b/288138612.
-                                    union {  __NEWLINE__
-                                        #doc_comment
-                                        #(#attributes)*
-                                        #cpp_type #bracketed_cc_name;
-                                    };
-                                #padding
-                            }
-                        }
-                        ty::AdtKind::Union => {
-                            if repr_attrs.contains(&rustc_hir::attrs::ReprC) {
-                                quote! {
-                                    #visibility __NEWLINE__
-                                    #doc_comment
-                                    #cpp_type #bracketed_cc_name;
-                                }
-                            } else {
-                                let internal_padding = if field.offset == 0 {
-                                    quote! {}
-                                } else {
-                                    let internal_padding_size =
-                                        Literal::u64_unsuffixed(field.offset);
-                                    quote! {char __crubit_internal_padding[#internal_padding_size]}
-                                };
-                                quote! {
-                                    #visibility __NEWLINE__
-                                    #doc_comment
-                                    struct {
-                                        #internal_padding
-                                        #cpp_type value;
-                                    } #bracketed_cc_name;
-                                }
-                            }
-                        }
-                        ty::AdtKind::Enum => {
-                            // TODO(b/460420108) : Why is there no #doc_comment here? We need one
-                            // for __CAPTURE_BEGIN__ et al to work properly.
-                            quote! {
-                                #visibility __NEWLINE__ #cpp_type #cc_name;
-                            }
-                        }
-                    };
-                    tokens
-                }
-            }
-        };
-
-        // For structs and unions, we can just flatten the fields variant. For enums, we
-        // need to handle each variant separately.
-        let adt_size = Literal::u64_unsuffixed(layout.size().bytes());
-        let fields = match adt_def.adt_kind() {
-            ty::AdtKind::Struct | ty::AdtKind::Union => {
-                let mut current_visibility = CcFieldVisState::public();
-                variants_fields
-                    .into_iter()
-                    .flatten()
-                    .map(|field| get_field_tokens(field, &mut prereqs, &mut current_visibility))
-                    .collect()
-            }
-            ty::AdtKind::Enum if enum_kind != Some(EnumKind::ReprC) => variants_fields
-                .into_iter()
-                .flatten()
-                .map(|field| get_field_tokens(field, &mut prereqs, &mut Default::default()))
-                .collect(),
-            ty::AdtKind::Enum => {
-                // We need three things:
-                // 1. A representation of the tag (tag_enum).
-                // 2. A representation of the fields in each variant (variant_structs).
-                // 3. A union of the results of (2) (variants_union).
-
-                // Step 1 is ignored if there is only one variant.
-
-                // See https://doc.rust-lang.org/reference/type-layout.html#reprc-enums-with-fields
-
-                // Get tokens for the tag, if it exists.
-                let tag_enum = match layout_variants {
-                    Variants::Single { .. } | Variants::Empty => quote! {},
-                    Variants::Multiple { tag, .. } => {
-                        let tag_ty = get_scalar_int_type(db.tcx(), *tag);
-
-                        let tag_tokens = db
-                            .format_ty_for_cc(
-                                // An enum cannot have repr(c_char), or any other alias, so there's
-                                // never sugar.
-                                tag_ty,
-                                TypeLocation::Other,
-                            )
-                            .expect("discriminant should be a integer type.")
-                            .into_tokens(&mut prereqs);
-
-                        let variant_enum_fields: TokenStream = adt_def
-                            .variants()
-                            .iter_enumerated()
-                            .map(|(variant_index, variant_def)| {
-                                let cc_variant_name =
-                                    format_cc_ident(db, variant_def.name.as_str())
-                                        .unwrap_or_else(|_err| format_ident!("err_field"));
-                                let tag_value = Literal::u128_unsuffixed(
-                                    adt_def.discriminant_for_variant(tcx, variant_index).val,
-                                );
-                                quote! {
-                                    __NEWLINE__ #cc_variant_name = #tag_value,
-                                }
-                            })
-                            .collect();
-                        quote! {
-                            __NEWLINE__ enum class Tag : #tag_tokens {
-                                #variant_enum_fields
-                            }; __NEWLINE__
-                        }
-                    }
-                };
-
-                let mut tokens_per_variant: Vec<TokenStream> =
-                    Vec::with_capacity(variants_fields.len());
-
-                for fields_for_variant in variants_fields.into_iter() {
-                    let mut current_visibility = CcFieldVisState::default();
-                    tokens_per_variant.push(
-                        fields_for_variant
-                            .into_iter()
-                            .map(|field| {
-                                get_field_tokens(field, &mut prereqs, &mut current_visibility)
-                            })
-                            .collect(),
-                    );
-                }
-
-                // We need to get the alignment of each variant struct.
-                let variant_alignments = match layout_variants {
-                    Variants::Multiple { tag: _, tag_encoding: _, tag_field: _, variants } => {
-                        #[rustversion::before(2026-05-18)]
-                        let get_align =
-                            |(_, layout): (VariantIdx, &LayoutData<FieldIdx, VariantIdx>)| {
-                                layout.align.abi.bytes() - tag_size_with_padding
-                            };
-                        #[rustversion::since(2026-05-18)]
-                        let get_align = |(i, _): (VariantIdx, &VariantLayout<FieldIdx>)| {
-                            LayoutData::for_variant(&layout, i).align.abi.bytes()
-                                - tag_size_with_padding
-                        };
-                        variants.iter_enumerated().map(get_align).collect_vec()
-                    }
-                    Variants::Single { .. } | Variants::Empty => {
-                        vec![alignment_in_bytes]
-                    }
-                };
-
-                let variant_structs: TokenStream = adt_def
-                    .variants()
-                    .iter_enumerated()
-                    .map(|(variant_index, variant_def)| {
-                        // Get the variant name.
-                        let cc_variant_struct_name = format_cc_ident(
-                            db,
-                            format!("__crubit_{}_struct", variant_def.ident(tcx).as_str()).as_ref(),
-                        )
-                        .unwrap_or_else(|_err| format_ident!("err_struct"));
-
-                        // Get the corresponding field tokens.
-                        let fields_for_variant = &tokens_per_variant[variant_index.index()];
-
-                        // Get the aligment of the variant...
-                        let variant_alignment =
-                            Literal::u64_unsuffixed(variant_alignments[variant_index.index()]);
-
-                        // Create the actual struct, if the variant has size. Otherwise, make
-                        // a note that the variant is empty.
-                        if variant_sizes[variant_index.index()] == 0 {
-                            let cc_variant_name = format_cc_ident(db, variant_def.name.as_str())
-                                .unwrap_or_else(|_err| format_ident!("err_field"));
-                            let msg = format!(
-                                "Variant {} has no size, so no struct is generated.",
-                                cc_variant_name
-                            );
-                            quote! {__NEWLINE__
-                            __COMMENT__ #msg}
-                        } else {
-                            quote! {
-                                __NEWLINE__
-                                struct alignas(#variant_alignment) #cc_variant_struct_name {
-                                    #fields_for_variant
-                                };
-                            }
-                        }
-                    })
-                    .collect();
-
-                let variants_union_fields: TokenStream = adt_def
-                    .variants()
-                    .iter_enumerated()
-                    .map(|(variant_index, variant_def)| {
-                        // Get the variant name.
-                        let cc_variant_name = format_cc_ident(db, variant_def.name.as_str())
-                            .unwrap_or_else(|_err| format_ident!("err_field"));
-                        let cc_variant_struct_type = format_cc_ident(
-                            db,
-                            format!("__crubit_{}_struct", variant_def.ident(tcx).as_str()).as_ref(),
-                        )
-                        .unwrap_or_else(|_err| format_ident!("err_struct"));
-
-                        // If the variant has no fields (i.e. the struct is empty), we can skip
-                        // this declaration.
-                        if variant_sizes[variant_index.index()] == 0 {
-                            quote! {}
-                        } else {
-                            quote! {
-                                #cc_variant_struct_type #cc_variant_name; __NEWLINE__
-                            }
-                        }
-                    })
-                    .collect();
-
-                let variants_union: TokenStream = {
-                    let has_no_fields =
-                        variant_sizes.iter().all(|size_of_variant| *size_of_variant == 0);
-
-                    if has_no_fields {
-                        // If there are no fields in any variant, we must skip this union
-                        quote! {}
-                    } else {
-                        quote! {
-                            public: union  {
-                                #variants_union_fields
-                            };
-                        }
-                    }
-                };
-
-                // Combine everything together.
-                quote! {
-                    #variant_structs __NEWLINE__
-                    #tag_enum __NEWLINE__
-                    public: Tag tag; __NEWLINE__
-                    #variants_union
-                }
-            }
-        };
-        let enum_opaque_bytes_ctor = match enum_kind {
-            Some(EnumKind::OpaqueBlobOfBytes) => quote! {
-                private:
-                    struct PrivateBytesTag {};
-                    constexpr #cc_short_name(PrivateBytesTag,
-                                             ::std::array<unsigned char, #adt_size> bytes)
-                        : __opaque_blob_of_bytes(bytes) {}
-            },
-            Some(EnumKind::ReprC) => quote! {
-                private:
-                    struct PrivateTagCtorTag {};
-                    constexpr #cc_short_name(PrivateTagCtorTag, Tag tag)
-                        : tag(tag) {}
-            },
-            _ => quote! {},
-        };
-        CcSnippet {
-            prereqs,
-            tokens: quote! {
-                #fields
-                #enum_opaque_bytes_ctor
-                #assertions_method_decl
-            },
-        }
-    };
-
-    ApiSnippets { main_api, cc_details, rs_details }
 }
 
 /// Generates the `(UnsafeRelocateTag, T&&)` constructor for the given ADT.
@@ -2385,4 +2774,326 @@ pub(crate) fn generate_relocating_ctor<'tcx>(
     // We include this for `std::memcpy`.
     main_api.prereqs.includes.insert(CcInclude::cstring());
     main_api.into_main_api()
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum PassingMode {
+    Value,
+    SharedRef,
+    MutRef,
+}
+
+fn get_into_iter_ty<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    self_ty: Ty<'tcx>,
+    into_iterator_trait_id: DefId,
+) -> Result<Ty<'tcx>> {
+    let into_iter_assoc_item = tcx
+        .associated_items(into_iterator_trait_id)
+        .in_definition_order()
+        .find(|item| {
+            item.name() == rustc_span::symbol::Symbol::intern("IntoIter")
+                && matches!(item.kind, ty::AssocKind::Type { .. })
+        })
+        .expect("IntoIter to be a required associated item of IntoIterator");
+
+    #[rustversion::before(2026-06-25)]
+    let projection_ty = Ty::new_projection(tcx, into_iter_assoc_item.def_id, [self_ty]);
+    #[rustversion::since(2026-06-25)]
+    let projection_ty =
+        Ty::new_projection(tcx, ty::IsRigid::No, into_iter_assoc_item.def_id, [self_ty]);
+
+    query_compiler::try_normalize(
+        tcx,
+        ty::PseudoCanonicalInput {
+            typing_env: rustc_middle::ty::TypingEnv::fully_monomorphized(),
+            value: projection_ty,
+        },
+    )
+    .map_err(|_| anyhow!("Failed to normalize `<{} as IntoIterator>::IntoIter`", self_ty))
+}
+
+fn get_into_iter_item_ty<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    self_ty: Ty<'tcx>,
+    into_iterator_trait_id: DefId,
+) -> Result<Ty<'tcx>> {
+    let item_assoc_item = tcx
+        .associated_items(into_iterator_trait_id)
+        .in_definition_order()
+        .find(|item| {
+            item.name() == Symbol::intern("Item") && matches!(item.kind, ty::AssocKind::Type { .. })
+        })
+        .expect("Item to be a required associated item of IntoIterator");
+
+    #[rustversion::before(2026-06-25)]
+    let projection_ty = Ty::new_projection(tcx, item_assoc_item.def_id, [self_ty]);
+    #[rustversion::since(2026-06-25)]
+    let projection_ty = Ty::new_projection(tcx, ty::IsRigid::No, item_assoc_item.def_id, [self_ty]);
+
+    query_compiler::try_normalize(
+        tcx,
+        ty::PseudoCanonicalInput {
+            typing_env: rustc_middle::ty::TypingEnv::fully_monomorphized(),
+            value: projection_ty,
+        },
+    )
+    .map_err(|_| anyhow!("Failed to normalize `<{} as IntoIterator>::Item`", self_ty))
+}
+
+fn generate_begin_and_end_for_type<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    core: &AdtCoreBindings<'tcx>,
+    into_iterator_trait_id: DefId,
+    passing_mode: PassingMode,
+) -> Result<Option<ApiSnippets<'tcx>>> {
+    let tcx = db.tcx();
+    let self_ty = core.self_ty;
+
+    let check_ty = match passing_mode {
+        PassingMode::Value => self_ty,
+        PassingMode::SharedRef => Ty::new_imm_ref(tcx, tcx.lifetimes.re_erased, self_ty),
+        PassingMode::MutRef => Ty::new_mut_ref(tcx, tcx.lifetimes.re_erased, self_ty),
+    };
+
+    if let Some(iterator_trait_id) = tcx.get_diagnostic_item(sym::Iterator)
+        && does_type_implement_trait(tcx, self_ty, iterator_trait_id, [])
+    {
+        let PassingMode::MutRef = passing_mode else {
+            return Ok(None);
+        };
+
+        let adt_cc_name = &core.cc_short_name;
+        let mut main_api_prereqs = CcPrerequisites::default();
+        main_api_prereqs.includes.insert(db.support_header("rs_std/iterator_adapter.h"));
+        main_api_prereqs.move_only_defs_to_fwd_decls();
+
+        let main_api = CcSnippet {
+            tokens: quote! {
+                template <typename TAdaptedSelf_ = #adt_cc_name>
+                inline rs::IteratorAdapter<TAdaptedSelf_*> begin() & {
+                    return rs::IteratorAdapter<TAdaptedSelf_*>(this);
+                }
+                inline rs::IteratorEnd end() & {
+                    return rs::IteratorEnd();
+                }
+            },
+            prereqs: main_api_prereqs,
+        };
+
+        return Ok(Some(ApiSnippets { main_api, ..Default::default() }));
+    }
+
+    if !does_type_implement_trait(tcx, check_ty, into_iterator_trait_id, []) {
+        return Ok(None);
+    }
+
+    let into_iter_ty = get_into_iter_ty(tcx, check_ty, into_iterator_trait_id)?;
+
+    let item_ty = get_into_iter_item_ty(tcx, check_ty, into_iterator_trait_id)?;
+
+    let _ = db
+        .format_ty_for_cc(item_ty, TypeLocation::Other)
+        .context("Failed to format IntoIterator::Item")?;
+
+    let into_iter_cc_ty = db
+        .format_ty_for_cc(into_iter_ty, TypeLocation::Other)
+        .context("Failed to format IntoIterator::IntoIter")?;
+
+    let static_check_ty = replace_all_regions_with_static(tcx, check_ty);
+    let rs_fully_qualified_name = db.format_ty_for_rs(static_check_ty)?;
+
+    let TraitThunks { method_name_to_cc_thunk_name, cc_thunk_decls, rs_thunk_impls } =
+        generate_trait_thunks(
+            db,
+            into_iterator_trait_id,
+            &[],
+            check_ty,
+            core.def_id,
+            rs_fully_qualified_name,
+            /*is_constructor=*/ false,
+            /*within_template=*/ false,
+        )?;
+
+    let into_iter_thunk_name = method_name_to_cc_thunk_name
+        .get(&sym::into_iter)
+        .expect("IntoIterator trait missing into_iter method");
+
+    let into_iter_fn_assoc_item = tcx
+        .associated_items(into_iterator_trait_id)
+        .in_definition_order()
+        .find(|item| item.name() == sym::into_iter && matches!(item.kind, ty::AssocKind::Fn { .. }))
+        .expect("IntoIterator should have into_iter method");
+    let into_iter_fn_id = into_iter_fn_assoc_item.def_id;
+
+    let adt_cc_name = &core.cc_short_name;
+    let param_cc_type_tokens = match passing_mode {
+        PassingMode::Value => quote! { #adt_cc_name && },
+        PassingMode::SharedRef => quote! { const #adt_cc_name & },
+        PassingMode::MutRef => quote! { #adt_cc_name & },
+    };
+
+    let param = Param {
+        cc_name: format_ident!("self_"),
+        cpp_type: CcParamTy {
+            snippet: CcSnippet::new(param_cc_type_tokens.clone()),
+            is_lifetime_bound: false,
+        },
+        ty: check_ty,
+    };
+
+    let impl_body = generate_thunk_call(
+        db,
+        into_iter_fn_id,
+        into_iter_thunk_name.clone(),
+        into_iter_ty,
+        ThunkSelfParameter::new(
+            /*has_self=*/ false, /*by_copy=*/ false, /*is_trait_method=*/ false,
+        ),
+        &[param],
+        /* is_async= */ false,
+    )?;
+
+    let mut main_api_prereqs = CcPrerequisites::default();
+    let into_iter_cc_ty_tokens_main = into_iter_cc_ty.clone().into_tokens(&mut main_api_prereqs);
+    main_api_prereqs.includes.insert(db.support_header("rs_std/iterator_adapter.h"));
+    main_api_prereqs.move_defs_to_fwd_decls();
+
+    let iterator_trait_id = tcx
+        .get_diagnostic_item(sym::Iterator)
+        .ok_or_else(|| anyhow!("Iterator trait not found"))?;
+    let mut impls = tcx.non_blanket_impls_for_ty(iterator_trait_id, into_iter_ty);
+    let Some(trait_impl_def_id) = impls.next() else {
+        return Ok(None);
+    };
+    let generics = tcx.generics_of(trait_impl_def_id);
+    let has_type_or_const_params = generics.own_params.iter().any(|param| {
+        matches!(
+            param.kind,
+            ty::GenericParamDefKind::Type { .. } | ty::GenericParamDefKind::Const { .. }
+        )
+    });
+    if has_type_or_const_params {
+        bail!("IntoIterator/Iterator impls with generic type or const parameters are not supported yet.");
+    }
+    let specialization = TemplateSpecialization::TraitImpl(TraitImplTemplateSpecialization {
+        self_ty_cc_name: into_iter_cc_ty_tokens_main.clone(),
+        trait_impl: trait_impl_def_id,
+    });
+    main_api_prereqs.template_specializations.insert(specialization);
+
+    let mut cc_details_prereqs = CcPrerequisites::default();
+    let into_iter_cc_ty_tokens_details = into_iter_cc_ty.into_tokens(&mut cc_details_prereqs);
+    cc_details_prereqs.includes.insert(db.support_header("rs_std/iterator_adapter.h"));
+
+    let cc_thunk_decls_tokens = cc_thunk_decls.into_tokens(&mut cc_details_prereqs);
+    let impl_body_tokens = impl_body.into_tokens(&mut cc_details_prereqs);
+    cc_details_prereqs.move_defs_to_fwd_decls();
+
+    let call_expr = if matches!(into_iter_ty.kind(), ty::Ref(..)) {
+        quote! { &call_into_iter() }
+    } else {
+        quote! { call_into_iter() }
+    };
+
+    let (main_api_tokens, cc_details_tokens) = match passing_mode {
+        PassingMode::Value => {
+            let self_binding = quote! { #adt_cc_name&& self_ = ::std::move(*this); };
+            (
+                quote! {
+                    template <typename TAdaptedSelf_ = #adt_cc_name>
+                    inline #into_iter_cc_ty_tokens_main into_iter() &&;
+                },
+                quote! {
+                    #cc_thunk_decls_tokens
+
+                    template <typename TAdaptedSelf_>
+                    inline #into_iter_cc_ty_tokens_details #adt_cc_name :: into_iter () && {
+                        #self_binding
+                        auto call_into_iter = [&]() -> decltype(auto) {
+                            #impl_body_tokens
+                        };
+                        return #call_expr;
+                    }
+                },
+            )
+        }
+        PassingMode::SharedRef | PassingMode::MutRef => {
+            let (ref_qualifiers, self_binding) = match passing_mode {
+                PassingMode::SharedRef => {
+                    (quote! { const & }, quote! { const #adt_cc_name& self_ = *this; })
+                }
+                PassingMode::MutRef => (quote! { & }, quote! { #adt_cc_name& self_ = *this; }),
+                PassingMode::Value => unreachable!(),
+            };
+            (
+                quote! {
+                    template <typename TAdaptedSelf_ = #adt_cc_name>
+                    rs::IteratorAdapter< #into_iter_cc_ty_tokens_main > begin() #ref_qualifiers;
+                    template <typename TAdaptedSelf_ = #adt_cc_name>
+                    rs::IteratorEnd end() #ref_qualifiers;
+                },
+                quote! {
+                    #cc_thunk_decls_tokens
+
+                    template <typename TAdaptedSelf_>
+                    inline rs::IteratorAdapter< #into_iter_cc_ty_tokens_details > #adt_cc_name :: begin () #ref_qualifiers {
+                        #self_binding
+                        auto call_into_iter = [&]() -> decltype(auto) {
+                            #impl_body_tokens
+                        };
+                        return rs::IteratorAdapter< #into_iter_cc_ty_tokens_details >(#call_expr);
+                    }
+                    template <typename TAdaptedSelf_>
+                    inline rs::IteratorEnd #adt_cc_name :: end () #ref_qualifiers {
+                        return rs::IteratorEnd();
+                    }
+                },
+            )
+        }
+    };
+
+    let main_api = CcSnippet { tokens: main_api_tokens, prereqs: main_api_prereqs };
+
+    let cc_details = CcSnippet { tokens: cc_details_tokens, prereqs: cc_details_prereqs };
+
+    Ok(Some(ApiSnippets { main_api, cc_details, rs_details: rs_thunk_impls }))
+}
+
+fn generate_into_iterator_impls<'tcx>(
+    db: &BindingsGenerator<'tcx>,
+    core: &AdtCoreBindings<'tcx>,
+    member_function_names: &mut HashSet<String>,
+) -> Result<ApiSnippets<'tcx>> {
+    let tcx = db.tcx();
+
+    if member_function_names.contains("begin")
+        || member_function_names.contains("end")
+        || member_function_names.contains("into_iter")
+    {
+        bail!("{} has a method named `begin`, `end`, or `into_iter`, which prevents binding methods for IntoIterator.", core.self_ty);
+    }
+
+    let adt_def =
+        core.self_ty.ty_adt_def().expect("generate_adt_core should have confirmed this was an ADT");
+    let has_conflicting_field = adt_def
+        .all_fields()
+        .any(|field| matches!(field.name.as_str(), "begin" | "end" | "into_iter"));
+    if has_conflicting_field {
+        bail!("{} has a field named `begin`, `end`, or `into_iter`, which prevents binding methods for IntoIterator.", core.self_ty);
+    }
+
+    let into_iterator_trait_id = tcx
+        .get_diagnostic_item(sym::IntoIterator)
+        .expect("Could not find IntoIterator trait. Please file a crubit bug.");
+
+    Ok([PassingMode::Value, PassingMode::SharedRef, PassingMode::MutRef]
+        .into_iter()
+        .map(|mode| generate_begin_and_end_for_type(db, core, into_iterator_trait_id, mode))
+        .filter_map(|result| {
+            result.unwrap_or_else(|err| {
+                core.def_id.map(|def_id| generate_unsupported_def(db, def_id, err).into_main_api())
+            })
+        })
+        .collect())
 }

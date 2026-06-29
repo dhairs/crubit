@@ -23,14 +23,16 @@ use database::{BindingsGenerator, StaticMethodMode, TypeLocation};
 use error_report::{anyhow, bail};
 use itertools::Itertools;
 use proc_macro2::{Ident, Literal, TokenStream};
-use query_compiler::{is_copy, post_analysis_typing_env};
+use query_compiler::{
+    does_type_implement_trait_considering_regions, is_copy, post_analysis_typing_env,
+};
 use quote::quote;
 use rustc_hir::attrs::AttributeKind;
 use rustc_hir::{self as hir, def::DefKind};
 use rustc_middle::mir::Mutability;
 use rustc_middle::ty::{self, TraitRef, Ty, TyCtxt};
 use rustc_span::def_id::DefId;
-use rustc_span::symbol::Symbol;
+use rustc_span::symbol::{sym, Symbol};
 use std::collections::BTreeSet;
 
 #[derive(Debug, Eq, PartialEq)]
@@ -89,12 +91,12 @@ fn thunk_name(
                 .to_string();
             tcx.trait_impl_of_assoc(def_id)
                 .map(|impl_id| {
-                    let trait_id = crate::normalize_ty(
+                    let trait_ref = crate::normalize_ty(
                         tcx,
                         tcx.param_env(impl_id),
                         tcx.impl_trait_ref(impl_id).instantiate_identity(),
-                    )
-                    .def_id;
+                    );
+                    let trait_id = trait_ref.def_id;
                     let trait_name = db
                         .symbol_unqualified_name(trait_id)
                         .map(|name| name.rs_name)
@@ -102,7 +104,13 @@ fn thunk_name(
                             panic!("Traits are assumed to always have a name {trait_id:?}")
                         })
                         .to_string();
-                    format!("{}_{}", trait_name, def_name)
+                    let trait_args =
+                        trait_ref.args.iter().map(|arg| format!("{}", arg)).collect_vec();
+                    if trait_args.is_empty() {
+                        format!("{}_{}", trait_name, def_name)
+                    } else {
+                        format!("{}_{}_{}", trait_name, def_name, trait_args.join("_"))
+                    }
                 })
                 .unwrap_or(def_name)
         }
@@ -162,14 +170,22 @@ pub(crate) fn cc_param_to_c_abi<'tcx>(
             BridgedType::Legacy { cpp_type, .. } => {
                 if let CcType::Pointer { .. } = cpp_type {
                     quote! { #cc_ident }
-                } else {
+                } else if !ty.needs_drop(db.tcx(), post_analysis_typing_env) {
                     quote! { & #cc_ident }
+                } else {
+                    includes.insert(db.support_header("internal/slot.h"));
+                    let slot_name = expect_format_cc_ident(&format!("{cc_ident}_slot"));
+                    statements.extend(quote! {
+                        crubit::Slot #slot_name((::std::move(#cc_ident)));
+                    });
+                    quote! { #slot_name.Get() }
                 }
             }
             BridgedType::Composable(composable) => {
                 // We're the library, and are about to send it over to Rust.
                 // We need to encode it into a buffer, then send that over.
                 includes.insert(db.support_header("bridge.h"));
+                includes.insert(code_gen_utils::CcInclude::utility());
                 let crubit_abi_type = CrubitAbiTypeToCppTokens(&composable.crubit_abi_type);
                 let crubit_abi_type_expr =
                     CrubitAbiTypeToCppExprTokens(&composable.crubit_abi_type);
@@ -179,7 +195,7 @@ pub(crate) fn cc_param_to_c_abi<'tcx>(
                 // what we sent to Rust across the C ABI.
                 statements.extend(quote! {
                     unsigned char #buffer_name[#crubit_abi_type::kSize];
-                    ::crubit::internal::Encode<#crubit_abi_type>(#crubit_abi_type_expr, #buffer_name, #cc_ident);
+                    ::crubit::internal::Encode<#crubit_abi_type>(#crubit_abi_type_expr, #buffer_name, ::std::move(#cc_ident));
                 });
                 quote! { #buffer_name }
             }
@@ -286,6 +302,7 @@ fn format_ty_for_cc_amending_prereqs<'tcx>(
 
 fn cc_return_value_from_c_abi<'tcx>(
     db: &BindingsGenerator<'tcx>,
+    post_analysis_typing_env: ty::TypingEnv<'tcx>,
     ident: Ident,
     ty: Ty<'tcx>,
     prereqs: &mut CcPrerequisites<'tcx>,
@@ -303,27 +320,43 @@ fn cc_return_value_from_c_abi<'tcx>(
                 let cpp_type = db
                     .format_ty_for_cc(ty, TypeLocation::FnReturn { is_constructor: false })?
                     .into_tokens(prereqs);
-                // Below, we use a union to allocate uninitialized memory that fits cpp_type.
-                // The union prevents the type from being default constructed. It's
-                // the responsibility of the thunk to properly initialize the
-                // memory. In the union's destructor we use std::destroy_at to call
-                // the cpp_type's destructor after the value has been moved on return.
-                let union_type = expect_format_cc_ident(&format!("__{ident}_crubit_return_union"));
-                let local_name = expect_format_cc_ident(&format!("__{ident}_ret_val_holder"));
-                storage_statements.extend(quote! {
-                    union #union_type {
-                        constexpr #union_type() {}
-                        ~#union_type() { ::std::destroy_at(&this->val); }
-                        #cpp_type val;
-                    } #local_name;
-                    auto* #storage_name = &#local_name.val;
-                });
-                Ok(ReturnConversion {
-                    storage_name: storage_name.clone(),
-                    unpack_expr: quote! {
-                        ::std::move(#local_name.val)
-                    },
-                })
+                if ty.needs_drop(db.tcx(), post_analysis_typing_env) {
+                    prereqs.includes.insert(db.support_header("internal/slot.h"));
+                    let local_name = expect_format_cc_ident(&format!("__{ident}_ret_val_holder"));
+                    storage_statements.extend(quote! {
+                        crubit::Slot<#cpp_type> #local_name;
+                        auto* #storage_name = #local_name.Get();
+                    });
+                    Ok(ReturnConversion {
+                        storage_name: storage_name.clone(),
+                        unpack_expr: quote! {
+                            ::std::move(#local_name).AssumeInitAndTakeValue()
+                        },
+                    })
+                } else {
+                    // Below, we use a union to allocate uninitialized memory that fits cpp_type.
+                    // The union prevents the type from being default constructed. It's
+                    // the responsibility of the thunk to properly initialize the
+                    // memory. In the union's destructor we use std::destroy_at to call
+                    // the cpp_type's destructor after the value has been moved on return.
+                    let union_type =
+                        expect_format_cc_ident(&format!("__{ident}_crubit_return_union"));
+                    let local_name = expect_format_cc_ident(&format!("__{ident}_ret_val_holder"));
+                    storage_statements.extend(quote! {
+                        union #union_type {
+                            constexpr #union_type() {}
+                            ~#union_type() { ::std::destroy_at(&this->val); }
+                            #cpp_type val;
+                        } #local_name;
+                        auto* #storage_name = &#local_name.val;
+                    });
+                    Ok(ReturnConversion {
+                        storage_name: storage_name.clone(),
+                        unpack_expr: quote! {
+                            ::std::move(#local_name.val)
+                        },
+                    })
+                }
             }
             BridgedType::Composable(composable) => {
                 // make the buffer space for it, then decode the buffer into a value
@@ -369,6 +402,7 @@ fn cc_return_value_from_c_abi<'tcx>(
                 unpack_expr: element_unpack_expr,
             } = cc_return_value_from_c_abi(
                 db,
+                post_analysis_typing_env,
                 tuple_element_ident,
                 tuple_tys[i],
                 prereqs,
@@ -601,6 +635,7 @@ pub(crate) fn generate_thunk_call<'tcx>(
     rs_return_type: Ty<'tcx>,
     self_param: ThunkSelfParameter,
     params: &[Param<'tcx>],
+    is_async: bool,
 ) -> Result<CcSnippet<'tcx>> {
     let tcx = db.tcx();
     let mut prereqs = CcPrerequisites::default();
@@ -672,7 +707,21 @@ pub(crate) fn generate_thunk_call<'tcx>(
         quote! { __crubit_internal }
     };
 
-    let return_body = if is_bridged_type(db, rs_return_type)?.is_none()
+    let return_body = if is_async {
+        let CcSnippet { tokens: cc_ret_ty, prereqs: ret_prereqs } =
+            db.format_ty_for_cc(rs_return_type, TypeLocation::FnReturn { is_constructor: false })?;
+        prereqs += ret_prereqs;
+        let local_name = expect_format_cc_ident("__return_value_ret_val_holder");
+        prereqs.includes.insert(CcInclude::utility()); // for `std::move`
+        prereqs.includes.insert(db.support_header("internal/slot.h"));
+        prereqs.includes.insert(db.support_header("rs_std/dyn_erased_future.h"));
+        thunk_args.push(quote! { #local_name.Get() });
+        quote! {
+            ::crubit::Slot<::crubit::DynErasedFuture<#cc_ret_ty>> #local_name;
+            #qualifier::#thunk_name(#( #thunk_args ),*);
+            return ::std::move(#local_name).AssumeInitAndTakeValue();
+        }
+    } else if is_bridged_type(db, rs_return_type)?.is_none()
         && is_c_abi_compatible_by_value(tcx, rs_return_type)
     {
         // C++ compilers can emit diagnostics if a function marked [[noreturn]] looks like it
@@ -688,6 +737,7 @@ pub(crate) fn generate_thunk_call<'tcx>(
     } else {
         let ReturnConversion { storage_name, unpack_expr } = cc_return_value_from_c_abi(
             db,
+            post_analysis_typing_env(tcx, def_id),
             expect_format_cc_ident("return_value"),
             rs_return_type,
             &mut prereqs,
@@ -819,11 +869,30 @@ pub fn generate_function<'tcx>(
     check_fn_sig(&sig_mid)?;
 
     let rs_return_type = sig_mid.output();
-    if tcx.asyncness(def_id).is_async() {
-        let return_ty = get_async_future_output_ty(tcx, rs_return_type)?;
-        // TODO(b/453897096): Support async functions.
-        bail!("async functions are not yet supported, consider manually wrapping with `DynFuture` instead and writing to an output `*mut {return_ty}` parameter instead.");
-    }
+    let is_async = tcx.asyncness(def_id).is_async();
+    let actual_rs_return_type = if is_async {
+        let send_trait_id = tcx
+            .get_diagnostic_item(sym::Send)
+            .ok_or_else(|| anyhow!("crubit.rs-bug: Send trait not found"))?;
+        if !does_type_implement_trait_considering_regions(
+            tcx,
+            rs_return_type,
+            send_trait_id,
+            def_id,
+            [],
+        ) {
+            bail!("Crubit currently only supports async functions that return a Send future.");
+        }
+        let future_output_ty = get_async_future_output_ty(tcx, rs_return_type)?;
+        if let Some(bridged) = is_bridged_type(db, future_output_ty)?
+            && !bridged.is_layout_compatible()
+        {
+            bail!("Crubit currently does not support async functions returning bridged types that require conversion thunks, found `{future_output_ty}`.");
+        }
+        future_output_ty
+    } else {
+        rs_return_type
+    };
 
     let trait_ref = tcx
         .impl_of_assoc(def_id)
@@ -858,7 +927,17 @@ pub fn generate_function<'tcx>(
     };
 
     let mut main_api_prereqs = CcPrerequisites::default();
-    let main_api_ret_type = format_ret_ty_for_cc(db, &sig_mid)?.into_tokens(&mut main_api_prereqs);
+    let main_api_ret_type = if is_async {
+        let CcSnippet { tokens: cc_ret_ty, prereqs: ret_prereqs } = db.format_ty_for_cc(
+            actual_rs_return_type,
+            TypeLocation::FnReturn { is_constructor: false },
+        )?;
+        main_api_prereqs += ret_prereqs;
+        main_api_prereqs.includes.insert(db.support_header("rs_std/dyn_erased_future.h"));
+        quote! { ::crubit::DynErasedFuture<#cc_ret_ty> }
+    } else {
+        format_ret_ty_for_cc(db, &sig_mid)?.into_tokens(&mut main_api_prereqs)
+    };
 
     let params = {
         let names = fn_arg_idents(tcx, def_id);
@@ -971,9 +1050,10 @@ pub fn generate_function<'tcx>(
         db,
         def_id,
         thunk_name_cc.clone(),
-        rs_return_type,
+        actual_rs_return_type,
         thunk_self,
         &params,
+        is_async,
     )?
     .into_tokens(&mut main_api_prereqs);
 
@@ -1050,6 +1130,8 @@ pub fn generate_function<'tcx>(
             &thunk_name_cc,
             function_kind.has_self_param(),
             /*is_constructor=*/ false,
+            /*within_template=*/ false,
+            is_async,
         )?
         .into_tokens(&mut prereqs);
         if static_method_mode == StaticMethodMode::ForceStaticMethod {
@@ -1140,6 +1222,7 @@ pub fn generate_function<'tcx>(
             &thunk_name,
             fully_qualified_fn_name,
             /*is_constructor=*/ false,
+            is_async,
         )?
     };
 
@@ -1164,11 +1247,11 @@ pub fn get_async_future_output_ty<'tcx>(
     tcx: TyCtxt<'tcx>,
     rs_return_type: Ty<'tcx>,
 ) -> Result<Ty<'tcx>> {
-    #[rustversion::stable(1.95)]
+    #[rustversion::any(all(nightly, since(2026-06-25)), stable(1.95))]
     let ty::TyKind::Alias(_, alias_ty) = rs_return_type.kind() else {
         bail!("async functions should always return a TyKind::Alias, this should never happen.");
     };
-    #[rustversion::any(nightly, stable(1.96))]
+    #[rustversion::any(all(nightly, before(2026-06-25)), stable(1.96))]
     let ty::TyKind::Alias(alias_ty) = rs_return_type.kind() else {
         bail!("async functions should always return a TyKind::Alias, this should never happen.");
     };
@@ -1178,8 +1261,15 @@ pub fn get_async_future_output_ty<'tcx>(
         .ok_or_else(|| anyhow!("crubit.rs-bug: Future::Output lang item not found"))?;
     #[rustversion::stable(1.95)]
     let alias_def_id = alias_ty.def_id;
-    #[rustversion::any(nightly, stable(1.96))]
+    #[rustversion::any(all(nightly, before(2026-06-23)), stable(1.96))]
     let alias_def_id = alias_ty.kind.def_id();
+    #[rustversion::all(nightly, since(2026-06-23))]
+    let alias_def_id: DefId =
+        alias_ty.kind.try_to_opaque().map(|id| id.into()).ok_or_else(|| {
+            anyhow!(
+            "crubit.rs-bug: Future::Output alias is not an opaque type, this should never happen.",
+        )
+        })?;
     tcx.explicit_item_bounds(alias_def_id)
         .iter_instantiated_copied(tcx, alias_ty.args)
         .find_map(|unnorm| {

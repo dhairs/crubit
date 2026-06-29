@@ -97,13 +97,6 @@ crubit_feature_hint(
     visibility = ["//visibility:public"],
 )
 
-crubit_feature_hint(
-    name = "callables",
-    compatible_with = ["//buildenv/target:non_prod"],
-    crubit_features = SUPPORTED_FEATURES + ["callables"],
-    visibility = ["//visibility:public"],
-)
-
 # A feature set enabling bindings generation via Protobuf IR rather than JSON IR.
 #
 # See crubit.rs-features#other
@@ -184,10 +177,13 @@ bzl_library(
     visibility = [
         "//:__subpackages__",
     ],
+    deps = [":global_features_bzl"],
 )
 
 bzl_library(
     name = "global_features_bzl",
     srcs = ["global_features.bzl"],
-    visibility = ["//cc_bindings_from_rs/bazel_support:__pkg__"],
+    visibility = [
+        "//:__subpackages__",
+    ],
 )

@@ -45,10 +45,11 @@ pub fn generate_enum(db: &BindingsGenerator, enum_: Rc<Enum>) -> Result<ApiSnipp
                 return omitting_bindings_comment(format!("unknown attribute(s): {unknown_attr}"));
             }
             let ident = make_rs_ident(&enumerator.identifier.identifier);
-            let value = match integer_constant_to_token_stream(enumerator.value, &underlying_type) {
-                Ok(value) => value,
-                Err(err) => return omitting_bindings_comment(err.to_string()),
-            };
+            let value =
+                match integer_constant_to_token_stream(db, enumerator.value, &underlying_type) {
+                    Ok(value) => value,
+                    Err(err) => return omitting_bindings_comment(err.to_string()),
+                };
             let deprecated_attr = enumerator.deprecated.clone().map(DeprecatedAttr);
             quote! { #deprecated_attr pub const #ident: #name = #name(#value); }
         })
@@ -89,12 +90,12 @@ pub fn generate_enum(db: &BindingsGenerator, enum_: Rc<Enum>) -> Result<ApiSnipp
         db.is_golden_test(),
         db.kythe_annotations(),
     );
-    let capture_tags = if db.kythe_annotations() {
-        if let Some((file_name, start, end)) = parse_extended_source_loc(&enum_.source_loc) {
-            quote! { __CAPTURE_TAG__ #file_name #start #end }
-        } else {
-            quote! { __CAPTURE_TAG__ "" "0" "0" }
-        }
+    let capture_tags = if db.kythe_annotations()
+        && let Some((file_name, start, end)) = parse_extended_source_loc(&enum_.source_loc)
+    {
+        quote! { __CAPTURE_TAG__ #file_name #start #end }
+    } else if db.kythe_annotations() {
+        quote! { __CAPTURE_TAG__ "" "0" "0" }
     } else {
         quote! {}
     };

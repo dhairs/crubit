@@ -15,9 +15,8 @@
 #pragma clang diagnostic ignored "-Wdeprecated-declarations"
 #pragma clang diagnostic ignored "-Wignored-attributes"
 #include "support/annotations_internal.h"
-#include "support/internal/check.h"
+#include "support/internal/cxx20_backports.h"
 #include "support/internal/memswap.h"
-#include "support/internal/move_assign.h"
 #include "support/internal/slot.h"
 #include "support/lifetime_annotations.h"
 #include "support/rs_std/result.h"
@@ -89,6 +88,8 @@ struct CRUBIT_INTERNAL_RUST_TYPE(":: result_golden :: CopyNoDefault") alignas(1)
   static void __crubit_field_offset_assertions();
 };
 
+using FreeFunc CRUBIT_INTERNAL_RUST_TYPE(":: result_golden :: FreeFunc") =
+    crubit::type_identity_t<void(void*, void*)>*;
 struct CRUBIT_INTERNAL_RUST_TYPE(":: result_golden :: HasDefault") alignas(8)
     [[clang::trivial_abi]] HasDefault final {
  public:
@@ -189,6 +190,23 @@ ResultWithSizeTypes final {
   static void __crubit_field_offset_assertions();
 };
 
+using Voidpf CRUBIT_INTERNAL_RUST_TYPE(":: result_golden :: Voidpf") = void*;
+
+rs_std::Result<::std::uint8_t, ::std::uint8_t> return_result_by_value();
+
+::std::uint8_t take_result_by_value(
+    rs_std::Result<::std::uint8_t, ::std::uint8_t> r);
+
+::std::uint8_t take_result_clone_no_default_err(
+    rs_std::Result<::std::uint8_t, ::result::CloneNoDefault> const& r);
+
+::std::uint8_t take_result_copy_no_default_ok(
+    rs_std::Result<::result::CopyNoDefault, ::std::uint8_t> const& r);
+
+rs_std::StrRef take_result_has_default(
+    rs_std::Result<::result::HasDefault, ::std::uint8_t> const* $(__anon1)
+        crubit_nonnull r CRUBIT_LIFETIME_BOUND);
+
 }  // namespace result
 
 #ifndef _CRUBIT_BINDINGS_FOR_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020CloneNoDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
@@ -196,7 +214,10 @@ ResultWithSizeTypes final {
 template <>
 struct alignas(1) CRUBIT_INTERNAL_RUST_TYPE(
     "std :: result :: Result < :: result_golden :: CloneNoDefault , u8 >")
-    rs_std::Result<::result::CloneNoDefault, ::std::uint8_t> {
+    rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>
+    : public rs_std::ResultBase<
+          rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>,
+          ::result::CloneNoDefault, ::std::uint8_t> {
  public:
   // Clone::clone
   Result(const Result&);
@@ -211,27 +232,65 @@ struct alignas(1) CRUBIT_INTERNAL_RUST_TYPE(
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(::result::CloneNoDefault&& ok) noexcept;
-  Result& operator=(::result::CloneNoDefault&& ok) noexcept;
-  Result(rs_std::unexpected<::std::uint8_t>&& err) noexcept;
-  Result& operator=(rs_std::unexpected<::std::uint8_t>&& err) noexcept;
+
+ public:
+  using base_type = rs_std::ResultBase<
+      rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>,
+      ::result::CloneNoDefault, ::std::uint8_t>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::result::CloneNoDefault, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::result::CloneNoDefault, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint8_t, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint8_t, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::result::CloneNoDefault& value() &;
-  ::result::CloneNoDefault&& value() &&;
-  ::std::uint8_t& err() &;
-  ::std::uint8_t&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept = default;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept { return tag() == 0; }
+  ::result::CloneNoDefault* ok_ptr() noexcept {
+    return reinterpret_cast<::result::CloneNoDefault*>(__storage + 1);
+  }
+  ::result::CloneNoDefault const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::result::CloneNoDefault const*>(__storage + 1);
+  }
+  ::std::uint8_t* err_ptr() noexcept {
+    return reinterpret_cast<::std::uint8_t*>(__storage + 1);
+  }
+  ::std::uint8_t const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint8_t const*>(__storage + 1);
+  }
+  void set_ok_tag() noexcept { set_tag(0); }
+  void set_err_tag() noexcept { set_tag(1); }
   constexpr ::std::uint8_t tag() const& noexcept;
   constexpr void set_tag(::std::uint8_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[2];
@@ -243,7 +302,10 @@ struct alignas(1) CRUBIT_INTERNAL_RUST_TYPE(
 template <>
 struct alignas(1) CRUBIT_INTERNAL_RUST_TYPE(
     "std :: result :: Result < :: result_golden :: CopyNoDefault , u8 >")
-    rs_std::Result<::result::CopyNoDefault, ::std::uint8_t> {
+    rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>
+    : public rs_std::ResultBase<
+          rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>,
+          ::result::CopyNoDefault, ::std::uint8_t> {
  public:
   // Rust types that are `Copy` get trivial, `default` C++ copy constructor and
   // assignment operator.
@@ -255,46 +317,80 @@ struct alignas(1) CRUBIT_INTERNAL_RUST_TYPE(
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(::result::CopyNoDefault&& ok) noexcept;
-  Result& operator=(::result::CopyNoDefault&& ok) noexcept;
-  Result(rs_std::unexpected<::std::uint8_t>&& err) noexcept;
-  Result& operator=(rs_std::unexpected<::std::uint8_t>&& err) noexcept;
+
+ public:
+  using base_type = rs_std::ResultBase<
+      rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>,
+      ::result::CopyNoDefault, ::std::uint8_t>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::result::CopyNoDefault, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::result::CopyNoDefault, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint8_t, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint8_t, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::result::CopyNoDefault& value() &;
-  ::result::CopyNoDefault&& value() &&;
-  ::std::uint8_t& err() &;
-  ::std::uint8_t&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept = default;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept { return tag() == 0; }
+  ::result::CopyNoDefault* ok_ptr() noexcept {
+    return reinterpret_cast<::result::CopyNoDefault*>(__storage + 1);
+  }
+  ::result::CopyNoDefault const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::result::CopyNoDefault const*>(__storage + 1);
+  }
+  ::std::uint8_t* err_ptr() noexcept {
+    return reinterpret_cast<::std::uint8_t*>(__storage + 1);
+  }
+  ::std::uint8_t const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint8_t const*>(__storage + 1);
+  }
+  void set_ok_tag() noexcept { set_tag(0); }
+  void set_err_tag() noexcept { set_tag(1); }
   constexpr ::std::uint8_t tag() const& noexcept;
   constexpr void set_tag(::std::uint8_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[2];
 };
 #endif
 
-namespace result {
-
-::std::uint8_t take_result_copy_no_default_ok(
-    rs_std::Result<::result::CopyNoDefault, ::std::uint8_t> const& r);
-
-}
-
 #ifndef _CRUBIT_BINDINGS_FOR_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
 #define _CRUBIT_BINDINGS_FOR_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
 template <>
 struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
     "std :: result :: Result < :: result_golden :: HasDefault , u8 >")
-    rs_std::Result<::result::HasDefault, ::std::uint8_t> {
+    rs_std::Result<::result::HasDefault, ::std::uint8_t>
+    : public rs_std::ResultBase<
+          rs_std::Result<::result::HasDefault, ::std::uint8_t>,
+          ::result::HasDefault, ::std::uint8_t> {
  public:
   // `core::result::Result` doesn't implement the `Clone` trait
   Result(const Result&) = delete;
@@ -308,47 +404,82 @@ struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(::result::HasDefault&& ok) noexcept;
-  Result& operator=(::result::HasDefault&& ok) noexcept;
-  Result(rs_std::unexpected<::std::uint8_t>&& err) noexcept;
-  Result& operator=(rs_std::unexpected<::std::uint8_t>&& err) noexcept;
+
+ public:
+  using base_type =
+      rs_std::ResultBase<rs_std::Result<::result::HasDefault, ::std::uint8_t>,
+                         ::result::HasDefault, ::std::uint8_t>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::result::HasDefault, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::result::HasDefault, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint8_t, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint8_t, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::result::HasDefault& value() &;
-  ::result::HasDefault&& value() &&;
-  ::std::uint8_t& err() &;
-  ::std::uint8_t&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept {
+    return tag() != UINT64_C(18446744073709551615);
+  }
+  ::result::HasDefault* ok_ptr() noexcept {
+    return reinterpret_cast<::result::HasDefault*>(__storage);
+  }
+  ::result::HasDefault const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::result::HasDefault const*>(__storage);
+  }
+  ::std::uint8_t* err_ptr() noexcept {
+    return reinterpret_cast<::std::uint8_t*>(__storage + 8);
+  }
+  ::std::uint8_t const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint8_t const*>(__storage + 8);
+  }
+  void set_ok_tag() noexcept {}
+  void set_err_tag() noexcept { set_tag(UINT64_C(18446744073709551615)); }
   constexpr ::std::uint64_t tag() const& noexcept;
   constexpr void set_tag(::std::uint64_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[24];
 };
 #endif
 
-namespace result {
-
-rs_std::StrRef take_result_has_default(
-    rs_std::Result<::result::HasDefault, ::std::uint8_t> const* $(__anon1)
-        crubit_nonnull r CRUBIT_LIFETIME_BOUND);
-
-}
-
 #ifndef _CRUBIT_BINDINGS_FOR_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasNoDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
 #define _CRUBIT_BINDINGS_FOR_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasNoDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
 template <>
 struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
     "std :: result :: Result < :: result_golden :: HasNoDefault , u8 >")
-    rs_std::Result<::result::HasNoDefault, ::std::uint8_t> {
+    rs_std::Result<::result::HasNoDefault, ::std::uint8_t>
+    : public rs_std::ResultBase<
+          rs_std::Result<::result::HasNoDefault, ::std::uint8_t>,
+          ::result::HasNoDefault, ::std::uint8_t> {
  public:
   // `core::result::Result` doesn't implement the `Clone` trait
   Result(const Result&) = delete;
@@ -361,28 +492,68 @@ struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
       delete;
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
-  }  // Move constructor is not available for the Ok variant because
-     // result_golden::HasNoDefault does not have a move constructor
+  }
 
-  Result(rs_std::unexpected<::std::uint8_t>&& err) noexcept;
-  Result& operator=(rs_std::unexpected<::std::uint8_t>&& err) noexcept;
+ public:
+  using base_type =
+      rs_std::ResultBase<rs_std::Result<::result::HasNoDefault, ::std::uint8_t>,
+                         ::result::HasNoDefault, ::std::uint8_t>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::result::HasNoDefault, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::result::HasNoDefault, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint8_t, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint8_t, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::result::HasNoDefault& value() &;
-  ::result::HasNoDefault&& value() &&;
-  ::std::uint8_t& err() &;
-  ::std::uint8_t&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept {
+    return tag() != UINT64_C(18446744073709551615);
+  }
+  ::result::HasNoDefault* ok_ptr() noexcept {
+    return reinterpret_cast<::result::HasNoDefault*>(__storage);
+  }
+  ::result::HasNoDefault const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::result::HasNoDefault const*>(__storage);
+  }
+  ::std::uint8_t* err_ptr() noexcept {
+    return reinterpret_cast<::std::uint8_t*>(__storage + 8);
+  }
+  ::std::uint8_t const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint8_t const*>(__storage + 8);
+  }
+  void set_ok_tag() noexcept {}
+  void set_err_tag() noexcept { set_tag(UINT64_C(18446744073709551615)); }
   constexpr ::std::uint64_t tag() const& noexcept;
   constexpr void set_tag(::std::uint64_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[24];
@@ -394,7 +565,10 @@ struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
 template <>
 struct alignas(4)
     CRUBIT_INTERNAL_RUST_TYPE("std :: result :: Result < u32 , u32 >")
-        rs_std::Result<::std::uint32_t, ::std::uint32_t> {
+        rs_std::Result<::std::uint32_t, ::std::uint32_t>
+    : public rs_std::ResultBase<
+          rs_std::Result<::std::uint32_t, ::std::uint32_t>, ::std::uint32_t,
+          ::std::uint32_t> {
  public:
   // Rust types that are `Copy` get trivial, `default` C++ copy constructor and
   // assignment operator.
@@ -406,27 +580,65 @@ struct alignas(4)
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(::std::uint32_t&& ok) noexcept;
-  Result& operator=(::std::uint32_t&& ok) noexcept;
-  Result(rs_std::unexpected<::std::uint32_t>&& err) noexcept;
-  Result& operator=(rs_std::unexpected<::std::uint32_t>&& err) noexcept;
+
+ public:
+  using base_type =
+      rs_std::ResultBase<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
+                         ::std::uint32_t, ::std::uint32_t>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::std::uint32_t, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::std::uint32_t, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint32_t, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint32_t, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::std::uint32_t& value() &;
-  ::std::uint32_t&& value() &&;
-  ::std::uint32_t& err() &;
-  ::std::uint32_t&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept = default;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept { return tag() == 0; }
+  ::std::uint32_t* ok_ptr() noexcept {
+    return reinterpret_cast<::std::uint32_t*>(__storage + 4);
+  }
+  ::std::uint32_t const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint32_t const*>(__storage + 4);
+  }
+  ::std::uint32_t* err_ptr() noexcept {
+    return reinterpret_cast<::std::uint32_t*>(__storage + 4);
+  }
+  ::std::uint32_t const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint32_t const*>(__storage + 4);
+  }
+  void set_ok_tag() noexcept { set_tag(0); }
+  void set_err_tag() noexcept { set_tag(1); }
   constexpr ::std::uint32_t tag() const& noexcept;
   constexpr void set_tag(::std::uint32_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[8];
@@ -471,7 +683,11 @@ template <>
 struct alignas(4) CRUBIT_INTERNAL_RUST_TYPE(
     "std :: result :: Result < :: core :: result :: Result < u32 , u32 > , u32 "
     ">") rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-                        ::std::uint32_t> {
+                        ::std::uint32_t>
+    : public rs_std::ResultBase<
+          rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
+                         ::std::uint32_t>,
+          rs_std::Result<::std::uint32_t, ::std::uint32_t>, ::std::uint32_t> {
  public:
   // Rust types that are `Copy` get trivial, `default` C++ copy constructor and
   // assignment operator.
@@ -483,28 +699,71 @@ struct alignas(4) CRUBIT_INTERNAL_RUST_TYPE(
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(rs_std::Result<::std::uint32_t, ::std::uint32_t>&& ok) noexcept;
-  Result& operator=(
-      rs_std::Result<::std::uint32_t, ::std::uint32_t>&& ok) noexcept;
-  Result(rs_std::unexpected<::std::uint32_t>&& err) noexcept;
-  Result& operator=(rs_std::unexpected<::std::uint32_t>&& err) noexcept;
+
+ public:
+  using base_type = rs_std::ResultBase<
+      rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
+                     ::std::uint32_t>,
+      rs_std::Result<::std::uint32_t, ::std::uint32_t>, ::std::uint32_t>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<
+                 rs_std::Result<::std::uint32_t, ::std::uint32_t>, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<
+                 rs_std::Result<::std::uint32_t, ::std::uint32_t>, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint32_t, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint32_t, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  rs_std::Result<::std::uint32_t, ::std::uint32_t>& value() &;
-  rs_std::Result<::std::uint32_t, ::std::uint32_t>&& value() &&;
-  ::std::uint32_t& err() &;
-  ::std::uint32_t&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept = default;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept { return tag() != UINT32_C(4294967295); }
+  rs_std::Result<::std::uint32_t, ::std::uint32_t>* ok_ptr() noexcept {
+    return reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
+        __storage);
+  }
+  rs_std::Result<::std::uint32_t, ::std::uint32_t> const* ok_const_ptr()
+      const noexcept {
+    return reinterpret_cast<
+        rs_std::Result<::std::uint32_t, ::std::uint32_t> const*>(__storage);
+  }
+  ::std::uint32_t* err_ptr() noexcept {
+    return reinterpret_cast<::std::uint32_t*>(__storage + 4);
+  }
+  ::std::uint32_t const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint32_t const*>(__storage + 4);
+  }
+  void set_ok_tag() noexcept {}
+  void set_err_tag() noexcept { set_tag(UINT32_C(4294967295)); }
   constexpr ::std::uint32_t tag() const& noexcept;
   constexpr void set_tag(::std::uint32_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[8];
@@ -517,7 +776,11 @@ template <>
 struct alignas(4) CRUBIT_INTERNAL_RUST_TYPE(
     "std :: result :: Result < u32 , :: core :: result :: Result < u32 , u32 > "
     ">") rs_std::Result<::std::uint32_t,
-                        rs_std::Result<::std::uint32_t, ::std::uint32_t>> {
+                        rs_std::Result<::std::uint32_t, ::std::uint32_t>>
+    : public rs_std::ResultBase<
+          rs_std::Result<::std::uint32_t,
+                         rs_std::Result<::std::uint32_t, ::std::uint32_t>>,
+          ::std::uint32_t, rs_std::Result<::std::uint32_t, ::std::uint32_t>> {
  public:
   // Rust types that are `Copy` get trivial, `default` C++ copy constructor and
   // assignment operator.
@@ -529,30 +792,71 @@ struct alignas(4) CRUBIT_INTERNAL_RUST_TYPE(
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(::std::uint32_t&& ok) noexcept;
-  Result& operator=(::std::uint32_t&& ok) noexcept;
-  Result(rs_std::unexpected<rs_std::Result<::std::uint32_t, ::std::uint32_t>>&&
-             err) noexcept;
-  Result& operator=(
-      rs_std::unexpected<rs_std::Result<::std::uint32_t, ::std::uint32_t>>&&
-          err) noexcept;
+
+ public:
+  using base_type = rs_std::ResultBase<
+      rs_std::Result<::std::uint32_t,
+                     rs_std::Result<::std::uint32_t, ::std::uint32_t>>,
+      ::std::uint32_t, rs_std::Result<::std::uint32_t, ::std::uint32_t>>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::std::uint32_t, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::std::uint32_t, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<
+             rs_std::Result<::std::uint32_t, ::std::uint32_t>, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<
+             rs_std::Result<::std::uint32_t, ::std::uint32_t>, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::std::uint32_t& value() &;
-  ::std::uint32_t&& value() &&;
-  rs_std::Result<::std::uint32_t, ::std::uint32_t>& err() &;
-  rs_std::Result<::std::uint32_t, ::std::uint32_t>&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept = default;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept { return tag() == UINT32_C(4294967295); }
+  ::std::uint32_t* ok_ptr() noexcept {
+    return reinterpret_cast<::std::uint32_t*>(__storage + 4);
+  }
+  ::std::uint32_t const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint32_t const*>(__storage + 4);
+  }
+  rs_std::Result<::std::uint32_t, ::std::uint32_t>* err_ptr() noexcept {
+    return reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
+        __storage);
+  }
+  rs_std::Result<::std::uint32_t, ::std::uint32_t> const* err_const_ptr()
+      const noexcept {
+    return reinterpret_cast<
+        rs_std::Result<::std::uint32_t, ::std::uint32_t> const*>(__storage);
+  }
+  void set_ok_tag() noexcept { set_tag(UINT32_C(4294967295)); }
+  void set_err_tag() noexcept {}
   constexpr ::std::uint32_t tag() const& noexcept;
   constexpr void set_tag(::std::uint32_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[8];
@@ -603,7 +907,10 @@ struct CRUBIT_INTERNAL_RUST_TYPE(":: result_golden :: NestedResult") alignas(4)
 template <>
 struct alignas(1) CRUBIT_INTERNAL_RUST_TYPE(
     "std :: result :: Result < u8 , :: result_golden :: CloneNoDefault >")
-    rs_std::Result<::std::uint8_t, ::result::CloneNoDefault> {
+    rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>
+    : public rs_std::ResultBase<
+          rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>,
+          ::std::uint8_t, ::result::CloneNoDefault> {
  public:
   // Clone::clone
   Result(const Result&);
@@ -618,28 +925,65 @@ struct alignas(1) CRUBIT_INTERNAL_RUST_TYPE(
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(::std::uint8_t&& ok) noexcept;
-  Result& operator=(::std::uint8_t&& ok) noexcept;
-  Result(rs_std::unexpected<::result::CloneNoDefault>&& err) noexcept;
-  Result& operator=(
-      rs_std::unexpected<::result::CloneNoDefault>&& err) noexcept;
+
+ public:
+  using base_type = rs_std::ResultBase<
+      rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>, ::std::uint8_t,
+      ::result::CloneNoDefault>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::std::uint8_t, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::std::uint8_t, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::result::CloneNoDefault, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::result::CloneNoDefault, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::std::uint8_t& value() &;
-  ::std::uint8_t&& value() &&;
-  ::result::CloneNoDefault& err() &;
-  ::result::CloneNoDefault&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept = default;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept { return tag() == 0; }
+  ::std::uint8_t* ok_ptr() noexcept {
+    return reinterpret_cast<::std::uint8_t*>(__storage + 1);
+  }
+  ::std::uint8_t const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint8_t const*>(__storage + 1);
+  }
+  ::result::CloneNoDefault* err_ptr() noexcept {
+    return reinterpret_cast<::result::CloneNoDefault*>(__storage + 1);
+  }
+  ::result::CloneNoDefault const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::result::CloneNoDefault const*>(__storage + 1);
+  }
+  void set_ok_tag() noexcept { set_tag(0); }
+  void set_err_tag() noexcept { set_tag(1); }
   constexpr ::std::uint8_t tag() const& noexcept;
   constexpr void set_tag(::std::uint8_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[2];
@@ -681,9 +1025,6 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   static void __crubit_field_offset_assertions();
 };
 
-::std::uint8_t take_result_clone_no_default_err(
-    rs_std::Result<::std::uint8_t, ::result::CloneNoDefault> const& r);
-
 }  // namespace result
 
 #ifndef _CRUBIT_BINDINGS_FOR_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020CopyNoDefault_x00000020_x0000003e
@@ -691,7 +1032,10 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
 template <>
 struct alignas(1) CRUBIT_INTERNAL_RUST_TYPE(
     "std :: result :: Result < u8 , :: result_golden :: CopyNoDefault >")
-    rs_std::Result<::std::uint8_t, ::result::CopyNoDefault> {
+    rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>
+    : public rs_std::ResultBase<
+          rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>,
+          ::std::uint8_t, ::result::CopyNoDefault> {
  public:
   // Rust types that are `Copy` get trivial, `default` C++ copy constructor and
   // assignment operator.
@@ -703,27 +1047,65 @@ struct alignas(1) CRUBIT_INTERNAL_RUST_TYPE(
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(::std::uint8_t&& ok) noexcept;
-  Result& operator=(::std::uint8_t&& ok) noexcept;
-  Result(rs_std::unexpected<::result::CopyNoDefault>&& err) noexcept;
-  Result& operator=(rs_std::unexpected<::result::CopyNoDefault>&& err) noexcept;
+
+ public:
+  using base_type = rs_std::ResultBase<
+      rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>, ::std::uint8_t,
+      ::result::CopyNoDefault>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::std::uint8_t, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::std::uint8_t, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::result::CopyNoDefault, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::result::CopyNoDefault, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::std::uint8_t& value() &;
-  ::std::uint8_t&& value() &&;
-  ::result::CopyNoDefault& err() &;
-  ::result::CopyNoDefault&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept = default;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept { return tag() == 0; }
+  ::std::uint8_t* ok_ptr() noexcept {
+    return reinterpret_cast<::std::uint8_t*>(__storage + 1);
+  }
+  ::std::uint8_t const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint8_t const*>(__storage + 1);
+  }
+  ::result::CopyNoDefault* err_ptr() noexcept {
+    return reinterpret_cast<::result::CopyNoDefault*>(__storage + 1);
+  }
+  ::result::CopyNoDefault const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::result::CopyNoDefault const*>(__storage + 1);
+  }
+  void set_ok_tag() noexcept { set_tag(0); }
+  void set_err_tag() noexcept { set_tag(1); }
   constexpr ::std::uint8_t tag() const& noexcept;
   constexpr void set_tag(::std::uint8_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[2];
@@ -772,7 +1154,10 @@ CopyNoDefaultResult final {
 template <>
 struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
     "std :: result :: Result < u8 , :: result_golden :: HasDefault >")
-    rs_std::Result<::std::uint8_t, ::result::HasDefault> {
+    rs_std::Result<::std::uint8_t, ::result::HasDefault>
+    : public rs_std::ResultBase<
+          rs_std::Result<::std::uint8_t, ::result::HasDefault>, ::std::uint8_t,
+          ::result::HasDefault> {
  public:
   // `core::result::Result` doesn't implement the `Clone` trait
   Result(const Result&) = delete;
@@ -786,27 +1171,67 @@ struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(::std::uint8_t&& ok) noexcept;
-  Result& operator=(::std::uint8_t&& ok) noexcept;
-  Result(rs_std::unexpected<::result::HasDefault>&& err) noexcept;
-  Result& operator=(rs_std::unexpected<::result::HasDefault>&& err) noexcept;
+
+ public:
+  using base_type =
+      rs_std::ResultBase<rs_std::Result<::std::uint8_t, ::result::HasDefault>,
+                         ::std::uint8_t, ::result::HasDefault>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::std::uint8_t, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::std::uint8_t, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::result::HasDefault, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::result::HasDefault, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::std::uint8_t& value() &;
-  ::std::uint8_t&& value() &&;
-  ::result::HasDefault& err() &;
-  ::result::HasDefault&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept {
+    return tag() == UINT64_C(18446744073709551615);
+  }
+  ::std::uint8_t* ok_ptr() noexcept {
+    return reinterpret_cast<::std::uint8_t*>(__storage + 8);
+  }
+  ::std::uint8_t const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint8_t const*>(__storage + 8);
+  }
+  ::result::HasDefault* err_ptr() noexcept {
+    return reinterpret_cast<::result::HasDefault*>(__storage);
+  }
+  ::result::HasDefault const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::result::HasDefault const*>(__storage);
+  }
+  void set_ok_tag() noexcept { set_tag(UINT64_C(18446744073709551615)); }
+  void set_err_tag() noexcept {}
   constexpr ::std::uint64_t tag() const& noexcept;
   constexpr void set_tag(::std::uint64_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[24];
@@ -857,7 +1282,10 @@ HasDefaultResult final {
 template <>
 struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
     "std :: result :: Result < u8 , :: result_golden :: HasNoDefault >")
-    rs_std::Result<::std::uint8_t, ::result::HasNoDefault> {
+    rs_std::Result<::std::uint8_t, ::result::HasNoDefault>
+    : public rs_std::ResultBase<
+          rs_std::Result<::std::uint8_t, ::result::HasNoDefault>,
+          ::std::uint8_t, ::result::HasNoDefault> {
  public:
   // `core::result::Result` doesn't implement the `Clone` trait
   Result(const Result&) = delete;
@@ -871,28 +1299,67 @@ struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(::std::uint8_t&& ok) noexcept;
-  Result& operator=(::std::uint8_t&& ok) noexcept;
-  // Move constructor not available for Err variant because
-  // result_golden::HasNoDefault has not move constructor
 
+ public:
+  using base_type =
+      rs_std::ResultBase<rs_std::Result<::std::uint8_t, ::result::HasNoDefault>,
+                         ::std::uint8_t, ::result::HasNoDefault>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::std::uint8_t, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::std::uint8_t, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::result::HasNoDefault, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::result::HasNoDefault, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::std::uint8_t& value() &;
-  ::std::uint8_t&& value() &&;
-  ::result::HasNoDefault& err() &;
-  ::result::HasNoDefault&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept {
+    return tag() == UINT64_C(18446744073709551615);
+  }
+  ::std::uint8_t* ok_ptr() noexcept {
+    return reinterpret_cast<::std::uint8_t*>(__storage + 8);
+  }
+  ::std::uint8_t const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint8_t const*>(__storage + 8);
+  }
+  ::result::HasNoDefault* err_ptr() noexcept {
+    return reinterpret_cast<::result::HasNoDefault*>(__storage);
+  }
+  ::result::HasNoDefault const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::result::HasNoDefault const*>(__storage);
+  }
+  void set_ok_tag() noexcept { set_tag(UINT64_C(18446744073709551615)); }
+  void set_err_tag() noexcept {}
   constexpr ::std::uint64_t tag() const& noexcept;
   constexpr void set_tag(::std::uint64_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[24];
@@ -943,7 +1410,9 @@ HasNoDefaultResult final {
 template <>
 struct alignas(1)
     CRUBIT_INTERNAL_RUST_TYPE("std :: result :: Result < u8 , u8 >")
-        rs_std::Result<::std::uint8_t, ::std::uint8_t> {
+        rs_std::Result<::std::uint8_t, ::std::uint8_t>
+    : public rs_std::ResultBase<rs_std::Result<::std::uint8_t, ::std::uint8_t>,
+                                ::std::uint8_t, ::std::uint8_t> {
  public:
   // Rust types that are `Copy` get trivial, `default` C++ copy constructor and
   // assignment operator.
@@ -955,39 +1424,201 @@ struct alignas(1)
   Result(::crubit::UnsafeRelocateTag, Result&& value) {
     ::std::memcpy(this, &value, sizeof(value));
   }
-  Result(::std::uint8_t&& ok) noexcept;
-  Result& operator=(::std::uint8_t&& ok) noexcept;
-  Result(rs_std::unexpected<::std::uint8_t>&& err) noexcept;
-  Result& operator=(rs_std::unexpected<::std::uint8_t>&& err) noexcept;
+
+ public:
+  using base_type =
+      rs_std::ResultBase<rs_std::Result<::std::uint8_t, ::std::uint8_t>,
+                         ::std::uint8_t, ::std::uint8_t>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<::std::uint8_t, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<::std::uint8_t, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint8_t, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<::std::uint8_t, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
   template <typename... Args>
-  Result(::std::in_place_t, Args&&... args);
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
   template <typename... Args>
-  Result(rs_std::unexpect_t, Args&&... args);
-  explicit constexpr operator bool() const noexcept;
-  constexpr bool has_value() const noexcept;
-  ::std::uint8_t& value() &;
-  ::std::uint8_t&& value() &&;
-  ::std::uint8_t& err() &;
-  ::std::uint8_t&& err() &&;
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
   ~Result() noexcept = default;
 
  private:
+  friend base_type;
+  bool has_value_impl() const noexcept { return tag() == 0; }
+  ::std::uint8_t* ok_ptr() noexcept {
+    return reinterpret_cast<::std::uint8_t*>(__storage + 1);
+  }
+  ::std::uint8_t const* ok_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint8_t const*>(__storage + 1);
+  }
+  ::std::uint8_t* err_ptr() noexcept {
+    return reinterpret_cast<::std::uint8_t*>(__storage + 1);
+  }
+  ::std::uint8_t const* err_const_ptr() const noexcept {
+    return reinterpret_cast<::std::uint8_t const*>(__storage + 1);
+  }
+  void set_ok_tag() noexcept { set_tag(0); }
+  void set_err_tag() noexcept { set_tag(1); }
   constexpr ::std::uint8_t tag() const& noexcept;
   constexpr void set_tag(::std::uint8_t tag) noexcept;
-  void check_has_ok();
-  void check_has_err();
 
  private:
   unsigned char __storage[2];
 };
 #endif
 
+#ifndef _CRUBIT_BINDINGS_FOR_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020crubit_x00000020_x0000003a_x0000003a_x00000020type_uidentity_ut_x00000020_x0000003c_x00000020void_x00000020_x00000028void_x00000020_x0000002a_x00000020_x0000002c_x00000020void_x00000020_x0000002a_x00000029_x00000020_x0000003e_x00000020_x0000002a_x00000020_x0000002c_x00000020crubit_x00000020_x0000003a_x0000003a_x00000020type_uidentity_ut_x00000020_x0000003c_x00000020void_x00000020_x00000028void_x00000020_x0000002a_x00000020_x0000002c_x00000020void_x00000020_x0000002a_x00000029_x00000020_x0000003e_x00000020_x0000002a_x00000020_x0000003e
+#define _CRUBIT_BINDINGS_FOR_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020crubit_x00000020_x0000003a_x0000003a_x00000020type_uidentity_ut_x00000020_x0000003c_x00000020void_x00000020_x00000028void_x00000020_x0000002a_x00000020_x0000002c_x00000020void_x00000020_x0000002a_x00000029_x00000020_x0000003e_x00000020_x0000002a_x00000020_x0000002c_x00000020crubit_x00000020_x0000003a_x0000003a_x00000020type_uidentity_ut_x00000020_x0000003c_x00000020void_x00000020_x00000028void_x00000020_x0000002a_x00000020_x0000002c_x00000020void_x00000020_x0000002a_x00000029_x00000020_x0000003e_x00000020_x0000002a_x00000020_x0000003e
+template <>
+struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
+    "std :: result :: Result < unsafe extern \"C\" fn (* mut :: core :: ffi :: "
+    "c_void , * mut :: core :: ffi :: c_void) , unsafe extern \"C\" fn (* mut "
+    ":: core :: ffi :: c_void , * mut :: core :: ffi :: c_void) >")
+    rs_std::Result<crubit::type_identity_t<void(void*, void*)>*,
+                   crubit::type_identity_t<void(void*, void*)>*>
+    : public rs_std::ResultBase<
+          rs_std::Result<crubit::type_identity_t<void(void*, void*)>*,
+                         crubit::type_identity_t<void(void*, void*)>*>,
+          crubit::type_identity_t<void(void*, void*)>*,
+          crubit::type_identity_t<void(void*, void*)>*> {
+ public:
+  // Rust types that are `Copy` get trivial, `default` C++ copy constructor and
+  // assignment operator.
+  Result(const Result&) = default;
+  Result& operator=(const Result&) = default;
+  Result(Result&&) = default;
+  Result& operator=(Result&&) = default;
+
+  Result(::crubit::UnsafeRelocateTag, Result&& value) {
+    ::std::memcpy(this, &value, sizeof(value));
+  }
+
+ public:
+  using base_type = rs_std::ResultBase<
+      rs_std::Result<crubit::type_identity_t<void(void*, void*)>*,
+                     crubit::type_identity_t<void(void*, void*)>*>,
+      crubit::type_identity_t<void(void*, void*)>*,
+      crubit::type_identity_t<void(void*, void*)>*>;
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             !std::is_same_v<std::decay_t<U>, ::std::in_place_t> &&
+             std::is_constructible_v<
+                 crubit::type_identity_t<void(void*, void*)>*, U>)
+  explicit constexpr Result(U&& ok) noexcept
+      : base_type(::std::forward<U>(ok)) {}
+  template <typename U>
+    requires(!std::is_base_of_v<Result, std::decay_t<U>> &&
+             !rs_std::is_unexpected_v<std::decay_t<U>> &&
+             !std::is_same_v<std::decay_t<U>, rs_std::unexpect_t> &&
+             std::is_constructible_v<
+                 crubit::type_identity_t<void(void*, void*)>*, U>)
+  constexpr Result& operator=(U&& ok) noexcept {
+    base_type::operator=(::std::forward<U>(ok));
+    return *this;
+  }
+  template <typename F>
+    requires(std::is_constructible_v<
+             crubit::type_identity_t<void(void*, void*)>*, F>)
+  explicit constexpr Result(rs_std::unexpected<F>&& err) noexcept
+      : base_type(::std::move(err)) {}
+  template <typename F>
+    requires(std::is_constructible_v<
+             crubit::type_identity_t<void(void*, void*)>*, F>)
+  constexpr Result& operator=(rs_std::unexpected<F>&& err) noexcept {
+    base_type::operator=(::std::move(err));
+    return *this;
+  }
+  template <typename... Args>
+  explicit constexpr Result(::std::in_place_t ip, Args&&... args) noexcept
+      : base_type(ip, ::std::forward<Args>(args)...) {}
+  template <typename... Args>
+  explicit constexpr Result(rs_std::unexpect_t u, Args&&... args) noexcept
+      : base_type(u, ::std::forward<Args>(args)...) {}
+  ~Result() noexcept = default;
+
+ private:
+  friend base_type;
+  bool has_value_impl() const noexcept { return tag() == 0; }
+  crubit::type_identity_t<void(void*, void*)>** ok_ptr() noexcept {
+    return reinterpret_cast<crubit::type_identity_t<void(void*, void*)>**>(
+        __storage + 8);
+  }
+  crubit::type_identity_t<void(void*, void*)>* const* ok_const_ptr()
+      const noexcept {
+    return reinterpret_cast<
+        crubit::type_identity_t<void(void*, void*)>* const*>(__storage + 8);
+  }
+  crubit::type_identity_t<void(void*, void*)>** err_ptr() noexcept {
+    return reinterpret_cast<crubit::type_identity_t<void(void*, void*)>**>(
+        __storage + 8);
+  }
+  crubit::type_identity_t<void(void*, void*)>* const* err_const_ptr()
+      const noexcept {
+    return reinterpret_cast<
+        crubit::type_identity_t<void(void*, void*)>* const*>(__storage + 8);
+  }
+  void set_ok_tag() noexcept { set_tag(0); }
+  void set_err_tag() noexcept { set_tag(1); }
+  constexpr ::std::uint64_t tag() const& noexcept;
+  constexpr void set_tag(::std::uint64_t tag) noexcept;
+
+ private:
+  unsigned char __storage[16];
+};
+#endif
+
 namespace result {
 
-rs_std::Result<::std::uint8_t, ::std::uint8_t> return_result_by_value();
+struct CRUBIT_INTERNAL_RUST_TYPE(":: result_golden :: ZStream") alignas(8)
+    [[clang::trivial_abi]] ZStream final {
+ public:
+  // `result_golden::ZStream` doesn't implement the `Default` trait
+  ZStream() = delete;
 
-::std::uint8_t take_result_by_value(
-    rs_std::Result<::std::uint8_t, ::std::uint8_t> r);
+  // No custom `Drop` impl and no custom "drop glue" required
+  ~ZStream() = default;
+  ZStream(ZStream&&) = default;
+  ZStream& operator=(ZStream&&) = default;
+
+  // `result_golden::ZStream` doesn't implement the `Clone` trait
+  ZStream(const ZStream&) = delete;
+  ZStream& operator=(const ZStream&) = delete;
+  ZStream(::crubit::UnsafeRelocateTag, ZStream&& value) {
+    ::std::memcpy(this, &value, sizeof(value));
+  }
+  union {
+    rs_std::Result<crubit::type_identity_t<void(void*, void*)>*,
+                   crubit::type_identity_t<void(void*, void*)>*>
+        zfree;
+  };
+
+ private:
+  static void __crubit_field_offset_assertions();
+};
 
 static_assert(
     sizeof(CloneNoDefault) == 1,
@@ -1274,6 +1905,18 @@ inline void ResultWithSizeTypes::__crubit_field_offset_assertions() {
   static_assert(32 == offsetof(ResultWithSizeTypes, ival_in_ok));
   static_assert(48 == offsetof(ResultWithSizeTypes, ival_in_err));
 }
+static_assert(
+    sizeof(ZStream) == 16,
+    "Verify that ADT layout didn't change since this header got generated");
+static_assert(
+    alignof(ZStream) == 8,
+    "Verify that ADT layout didn't change since this header got generated");
+static_assert(::std::is_trivially_destructible_v<ZStream>);
+static_assert(::std::is_trivially_move_constructible_v<::result::ZStream>);
+static_assert(::std::is_trivially_move_assignable_v<::result::ZStream>);
+inline void ZStream::__crubit_field_offset_assertions() {
+  static_assert(0 == offsetof(ZStream, zfree));
+}
 namespace __crubit_internal {
 extern "C" void __crubit_thunk_return_uresult_uby_uvalue(
     rs_std::Result<::std::uint8_t, ::std::uint8_t>* __ret_ptr);
@@ -1356,95 +1999,6 @@ static_assert(::std::is_trivially_move_constructible_v<
               rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>>);
 static_assert(::std::is_trivially_move_assignable_v<
               rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>>);
-inline rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::Result(
-    ::result::CloneNoDefault&& ok) noexcept {
-  set_tag(0);
-  ::std::construct_at(
-      reinterpret_cast<::result::CloneNoDefault*>(__storage + 1),
-      ::std::move(ok));
-}
-inline rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>&
-rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::operator=(
-    ::result::CloneNoDefault&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(reinterpret_cast<::std::uint8_t*>(__storage + 1));
-    set_tag(0);
-    ::std::construct_at(
-        reinterpret_cast<::result::CloneNoDefault*>(__storage + 1),
-        ::std::move(ok));
-  } else {
-    set_tag(0);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::result::CloneNoDefault*>(__storage + 1),
-        ::std::move(ok));
-  }
-  return *this;
-}
-
-inline rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::Result(
-    rs_std::unexpected<::std::uint8_t>&& err) noexcept {
-  set_tag(1);
-  ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                      ::std::move(err.error()));
-}
-inline rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>&
-rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::operator=(
-    rs_std::unexpected<::std::uint8_t>&& err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage + 1);
-    set_tag(1);
-    ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                        ::std::move(err.error()));
-  } else {
-    set_tag(1);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint8_t*>(__storage + 1),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::Result(
-    std::in_place_t, Args&&... args) {
-  set_tag(0);
-  std::construct_at(__storage + 1, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::Result(
-    rs_std::unexpect_t, Args&&... args) {
-  set_tag(1);
-  std::construct_at(__storage + 1, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool rs_std::Result<
-    ::result::CloneNoDefault, ::std::uint8_t>::has_value() const noexcept {
-  return tag() == 0;
-}
-inline ::result::CloneNoDefault&
-rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::result::CloneNoDefault*>(__storage + 1);
-}
-inline ::result::CloneNoDefault&&
-rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::value() && {
-  check_has_ok();
-  return ::std::move(
-      *reinterpret_cast<::result::CloneNoDefault*>(__storage + 1));
-}
-inline ::std::uint8_t&
-rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::std::uint8_t*>(__storage + 1);
-}
-inline ::std::uint8_t&&
-rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::err() && {
-  check_has_err();
-  return ::std::move(*reinterpret_cast<::std::uint8_t*>(__storage + 1));
-}
 static_assert(::std::is_trivially_destructible_v<
               rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>>);
 inline constexpr ::std::uint8_t rs_std::Result<
@@ -1465,14 +2019,6 @@ rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::set_tag(
   }
 }
 
-inline void
-rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void
-rs_std::Result<::result::CloneNoDefault, ::std::uint8_t>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020CopyNoDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
@@ -1485,94 +2031,6 @@ static_assert(::std::is_trivially_move_constructible_v<
               rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>>);
 static_assert(::std::is_trivially_move_assignable_v<
               rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>>);
-inline rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::Result(
-    ::result::CopyNoDefault&& ok) noexcept {
-  set_tag(0);
-  ::std::construct_at(reinterpret_cast<::result::CopyNoDefault*>(__storage + 1),
-                      ::std::move(ok));
-}
-inline rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>&
-rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::operator=(
-    ::result::CopyNoDefault&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(reinterpret_cast<::std::uint8_t*>(__storage + 1));
-    set_tag(0);
-    ::std::construct_at(
-        reinterpret_cast<::result::CopyNoDefault*>(__storage + 1),
-        ::std::move(ok));
-  } else {
-    set_tag(0);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::result::CopyNoDefault*>(__storage + 1),
-        ::std::move(ok));
-  }
-  return *this;
-}
-
-inline rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::Result(
-    rs_std::unexpected<::std::uint8_t>&& err) noexcept {
-  set_tag(1);
-  ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                      ::std::move(err.error()));
-}
-inline rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>&
-rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::operator=(
-    rs_std::unexpected<::std::uint8_t>&& err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage + 1);
-    set_tag(1);
-    ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                        ::std::move(err.error()));
-  } else {
-    set_tag(1);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint8_t*>(__storage + 1),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::Result(
-    std::in_place_t, Args&&... args) {
-  set_tag(0);
-  std::construct_at(__storage + 1, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::Result(
-    rs_std::unexpect_t, Args&&... args) {
-  set_tag(1);
-  std::construct_at(__storage + 1, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool rs_std::Result<
-    ::result::CopyNoDefault, ::std::uint8_t>::has_value() const noexcept {
-  return tag() == 0;
-}
-inline ::result::CopyNoDefault&
-rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::result::CopyNoDefault*>(__storage + 1);
-}
-inline ::result::CopyNoDefault&&
-rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::value() && {
-  check_has_ok();
-  return ::std::move(
-      *reinterpret_cast<::result::CopyNoDefault*>(__storage + 1));
-}
-inline ::std::uint8_t&
-rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::std::uint8_t*>(__storage + 1);
-}
-inline ::std::uint8_t&&
-rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::err() && {
-  check_has_err();
-  return ::std::move(*reinterpret_cast<::std::uint8_t*>(__storage + 1));
-}
 static_assert(::std::is_trivially_destructible_v<
               rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>>);
 inline constexpr ::std::uint8_t
@@ -1593,106 +2051,13 @@ rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::set_tag(
   }
 }
 
-inline void
-rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void
-rs_std::Result<::result::CopyNoDefault, ::std::uint8_t>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
 #define _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
-inline rs_std::Result<::result::HasDefault, ::std::uint8_t>::Result(
-    ::result::HasDefault&& ok) noexcept {
-  ::std::construct_at(reinterpret_cast<::result::HasDefault*>(__storage),
-                      ::std::move(ok));
-}
-inline rs_std::Result<::result::HasDefault, ::std::uint8_t>&
-rs_std::Result<::result::HasDefault, ::std::uint8_t>::operator=(
-    ::result::HasDefault&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(reinterpret_cast<::std::uint8_t*>(__storage + 8));
-    ::std::construct_at(reinterpret_cast<::result::HasDefault*>(__storage),
-                        ::std::move(ok));
-  } else {
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::result::HasDefault*>(__storage), ::std::move(ok));
-  }
-  return *this;
-}
-
-inline rs_std::Result<::result::HasDefault, ::std::uint8_t>::Result(
-    rs_std::unexpected<::std::uint8_t>&& err) noexcept {
-  set_tag(UINT64_C(18446744073709551615));
-  ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 8),
-                      ::std::move(err.error()));
-}
-inline rs_std::Result<::result::HasDefault, ::std::uint8_t>&
-rs_std::Result<::result::HasDefault, ::std::uint8_t>::operator=(
-    rs_std::unexpected<::std::uint8_t>&& err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage);
-    set_tag(UINT64_C(18446744073709551615));
-    ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 8),
-                        ::std::move(err.error()));
-  } else {
-    set_tag(UINT64_C(18446744073709551615));
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint8_t*>(__storage + 8),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<::result::HasDefault, ::std::uint8_t>::Result(
-    std::in_place_t, Args&&... args) {
-  std::construct_at(__storage, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::result::HasDefault, ::std::uint8_t>::Result(
-    rs_std::unexpect_t, Args&&... args) {
-  set_tag(UINT64_C(18446744073709551615));
-  std::construct_at(__storage + 8, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<::result::HasDefault, ::std::uint8_t>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool rs_std::Result<
-    ::result::HasDefault, ::std::uint8_t>::has_value() const noexcept {
-  return tag() != UINT64_C(18446744073709551615);
-}
-inline ::result::HasDefault&
-rs_std::Result<::result::HasDefault, ::std::uint8_t>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::result::HasDefault*>(__storage);
-}
-inline ::result::HasDefault&&
-rs_std::Result<::result::HasDefault, ::std::uint8_t>::value() && {
-  check_has_ok();
-  return ::std::move(*reinterpret_cast<::result::HasDefault*>(__storage));
-}
-inline ::std::uint8_t&
-rs_std::Result<::result::HasDefault, ::std::uint8_t>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::std::uint8_t*>(__storage + 8);
-}
-inline ::std::uint8_t&&
-rs_std::Result<::result::HasDefault, ::std::uint8_t>::err() && {
-  check_has_err();
-  return ::std::move(*reinterpret_cast<::std::uint8_t*>(__storage + 8));
-}
 inline rs_std::Result<::result::HasDefault,
                       ::std::uint8_t>::~Result() noexcept {
-  if (has_value()) {
-    ::std::destroy_at(reinterpret_cast<::result::HasDefault*>(__storage));
-  } else {
-    ::std::destroy_at(reinterpret_cast<::std::uint8_t*>(__storage + 8));
-  }
+  this->Reset();
 }
 inline constexpr ::std::uint64_t
 rs_std::Result<::result::HasDefault, ::std::uint8_t>::tag() const& noexcept {
@@ -1712,88 +2077,13 @@ rs_std::Result<::result::HasDefault, ::std::uint8_t>::set_tag(
   }
 }
 
-inline void
-rs_std::Result<::result::HasDefault, ::std::uint8_t>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void
-rs_std::Result<::result::HasDefault, ::std::uint8_t>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasNoDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
 #define _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasNoDefault_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
-
-inline rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::Result(
-    rs_std::unexpected<::std::uint8_t>&& err) noexcept {
-  set_tag(UINT64_C(18446744073709551615));
-  ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 8),
-                      ::std::move(err.error()));
-}
-inline rs_std::Result<::result::HasNoDefault, ::std::uint8_t>&
-rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::operator=(
-    rs_std::unexpected<::std::uint8_t>&& err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage);
-    set_tag(UINT64_C(18446744073709551615));
-    ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 8),
-                        ::std::move(err.error()));
-  } else {
-    set_tag(UINT64_C(18446744073709551615));
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint8_t*>(__storage + 8),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::Result(
-    std::in_place_t, Args&&... args) {
-  std::construct_at(__storage, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::Result(
-    rs_std::unexpect_t, Args&&... args) {
-  set_tag(UINT64_C(18446744073709551615));
-  std::construct_at(__storage + 8, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool rs_std::Result<
-    ::result::HasNoDefault, ::std::uint8_t>::has_value() const noexcept {
-  return tag() != UINT64_C(18446744073709551615);
-}
-inline ::result::HasNoDefault&
-rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::result::HasNoDefault*>(__storage);
-}
-inline ::result::HasNoDefault&&
-rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::value() && {
-  check_has_ok();
-  return ::std::move(*reinterpret_cast<::result::HasNoDefault*>(__storage));
-}
-inline ::std::uint8_t&
-rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::std::uint8_t*>(__storage + 8);
-}
-inline ::std::uint8_t&&
-rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::err() && {
-  check_has_err();
-  return ::std::move(*reinterpret_cast<::std::uint8_t*>(__storage + 8));
-}
 inline rs_std::Result<::result::HasNoDefault,
                       ::std::uint8_t>::~Result() noexcept {
-  if (has_value()) {
-    ::std::destroy_at(reinterpret_cast<::result::HasNoDefault*>(__storage));
-  } else {
-    ::std::destroy_at(reinterpret_cast<::std::uint8_t*>(__storage + 8));
-  }
+  this->Reset();
 }
 inline constexpr ::std::uint64_t
 rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::tag() const& noexcept {
@@ -1813,14 +2103,6 @@ rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::set_tag(
   }
 }
 
-inline void
-rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void
-rs_std::Result<::result::HasNoDefault, ::std::uint8_t>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000003e_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000003e
@@ -1837,110 +2119,6 @@ static_assert(
 static_assert(
     ::std::is_trivially_move_assignable_v<rs_std::Result<
         rs_std::Result<::std::uint32_t, ::std::uint32_t>, ::std::uint32_t>>);
-inline rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-                      ::std::uint32_t>::
-    Result(rs_std::Result<::std::uint32_t, ::std::uint32_t>&& ok) noexcept {
-  ::std::construct_at(
-      reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
-          __storage),
-      ::std::move(ok));
-}
-inline rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-                      ::std::uint32_t>&
-rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-               ::std::uint32_t>::
-operator=(rs_std::Result<::std::uint32_t, ::std::uint32_t>&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(reinterpret_cast<::std::uint32_t*>(__storage + 4));
-    ::std::construct_at(
-        reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
-            __storage),
-        ::std::move(ok));
-  } else {
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
-            __storage),
-        ::std::move(ok));
-  }
-  return *this;
-}
-
-inline rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-                      ::std::uint32_t>::
-    Result(rs_std::unexpected<::std::uint32_t>&& err) noexcept {
-  set_tag(UINT32_C(4294967295));
-  ::std::construct_at(reinterpret_cast<::std::uint32_t*>(__storage + 4),
-                      ::std::move(err.error()));
-}
-inline rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-                      ::std::uint32_t>&
-rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-               ::std::uint32_t>::operator=(rs_std::unexpected<::std::uint32_t>&&
-                                               err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage);
-    set_tag(UINT32_C(4294967295));
-    ::std::construct_at(reinterpret_cast<::std::uint32_t*>(__storage + 4),
-                        ::std::move(err.error()));
-  } else {
-    set_tag(UINT32_C(4294967295));
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint32_t*>(__storage + 4),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-                      ::std::uint32_t>::Result(std::in_place_t,
-                                               Args&&... args) {
-  std::construct_at(__storage, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-                      ::std::uint32_t>::Result(rs_std::unexpect_t,
-                                               Args&&... args) {
-  set_tag(UINT32_C(4294967295));
-  std::construct_at(__storage + 4, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<
-    rs_std::Result<::std::uint32_t, ::std::uint32_t>, ::std::uint32_t>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool
-rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-               ::std::uint32_t>::has_value() const noexcept {
-  return tag() != UINT32_C(4294967295);
-}
-inline rs_std::Result<::std::uint32_t, ::std::uint32_t>&
-rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-               ::std::uint32_t>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
-      __storage);
-}
-inline rs_std::Result<::std::uint32_t, ::std::uint32_t>&&
-rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-               ::std::uint32_t>::value() && {
-  check_has_ok();
-  return ::std::move(
-      *reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
-          __storage));
-}
-inline ::std::uint32_t&
-rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-               ::std::uint32_t>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::std::uint32_t*>(__storage + 4);
-}
-inline ::std::uint32_t&&
-rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-               ::std::uint32_t>::err() && {
-  check_has_err();
-  return ::std::move(*reinterpret_cast<::std::uint32_t*>(__storage + 4));
-}
 static_assert(
     ::std::is_trivially_destructible_v<rs_std::Result<
         rs_std::Result<::std::uint32_t, ::std::uint32_t>, ::std::uint32_t>>);
@@ -1963,14 +2141,6 @@ rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
   }
 }
 
-inline void rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-                           ::std::uint32_t>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void rs_std::Result<rs_std::Result<::std::uint32_t, ::std::uint32_t>,
-                           ::std::uint32_t>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000002c_x00000020rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000003e_x00000020_x0000003e
@@ -1987,116 +2157,6 @@ static_assert(
 static_assert(
     ::std::is_trivially_move_assignable_v<rs_std::Result<
         ::std::uint32_t, rs_std::Result<::std::uint32_t, ::std::uint32_t>>>);
-inline rs_std::Result<::std::uint32_t,
-                      rs_std::Result<::std::uint32_t, ::std::uint32_t>>::
-    Result(::std::uint32_t&& ok) noexcept {
-  set_tag(UINT32_C(4294967295));
-  ::std::construct_at(reinterpret_cast<::std::uint32_t*>(__storage + 4),
-                      ::std::move(ok));
-}
-inline rs_std::Result<::std::uint32_t,
-                      rs_std::Result<::std::uint32_t, ::std::uint32_t>>&
-rs_std::Result<::std::uint32_t,
-               rs_std::Result<::std::uint32_t, ::std::uint32_t>>::
-operator=(::std::uint32_t&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(
-        reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
-            __storage));
-    set_tag(UINT32_C(4294967295));
-    ::std::construct_at(reinterpret_cast<::std::uint32_t*>(__storage + 4),
-                        ::std::move(ok));
-  } else {
-    set_tag(UINT32_C(4294967295));
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint32_t*>(__storage + 4), ::std::move(ok));
-  }
-  return *this;
-}
-
-inline rs_std::Result<::std::uint32_t,
-                      rs_std::Result<::std::uint32_t, ::std::uint32_t>>::
-    Result(
-        rs_std::unexpected<rs_std::Result<::std::uint32_t, ::std::uint32_t>>&&
-            err) noexcept {
-  ::std::construct_at(
-      reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
-          __storage),
-      ::std::move(err.error()));
-}
-inline rs_std::Result<::std::uint32_t,
-                      rs_std::Result<::std::uint32_t, ::std::uint32_t>>&
-rs_std::Result<::std::uint32_t,
-               rs_std::Result<::std::uint32_t, ::std::uint32_t>>::
-operator=(rs_std::unexpected<rs_std::Result<::std::uint32_t, ::std::uint32_t>>&&
-              err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage + 4);
-    ::std::construct_at(
-        reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
-            __storage),
-        ::std::move(err.error()));
-  } else {
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
-            __storage),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<
-    ::std::uint32_t,
-    rs_std::Result<::std::uint32_t, ::std::uint32_t>>::Result(std::in_place_t,
-                                                              Args&&... args) {
-  set_tag(UINT32_C(4294967295));
-  std::construct_at(__storage + 4, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::std::uint32_t,
-                      rs_std::Result<::std::uint32_t, ::std::uint32_t>>::
-    Result(rs_std::unexpect_t, Args&&... args) {
-  std::construct_at(__storage, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<
-    ::std::uint32_t, rs_std::Result<::std::uint32_t, ::std::uint32_t>>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool
-rs_std::Result<::std::uint32_t,
-               rs_std::Result<::std::uint32_t, ::std::uint32_t>>::has_value()
-    const noexcept {
-  return tag() == UINT32_C(4294967295);
-}
-inline ::std::uint32_t&
-rs_std::Result<::std::uint32_t,
-               rs_std::Result<::std::uint32_t, ::std::uint32_t>>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::std::uint32_t*>(__storage + 4);
-}
-inline ::std::uint32_t&&
-rs_std::Result<::std::uint32_t,
-               rs_std::Result<::std::uint32_t, ::std::uint32_t>>::value() && {
-  check_has_ok();
-  return ::std::move(*reinterpret_cast<::std::uint32_t*>(__storage + 4));
-}
-inline rs_std::Result<::std::uint32_t, ::std::uint32_t>&
-rs_std::Result<::std::uint32_t,
-               rs_std::Result<::std::uint32_t, ::std::uint32_t>>::err() & {
-  check_has_err();
-  return *reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
-      __storage);
-}
-inline rs_std::Result<::std::uint32_t, ::std::uint32_t>&&
-rs_std::Result<::std::uint32_t,
-               rs_std::Result<::std::uint32_t, ::std::uint32_t>>::err() && {
-  check_has_err();
-  return ::std::move(
-      *reinterpret_cast<rs_std::Result<::std::uint32_t, ::std::uint32_t>*>(
-          __storage));
-}
 static_assert(
     ::std::is_trivially_destructible_v<rs_std::Result<
         ::std::uint32_t, rs_std::Result<::std::uint32_t, ::std::uint32_t>>>);
@@ -2119,16 +2179,6 @@ inline constexpr void rs_std::Result<
   }
 }
 
-inline void rs_std::Result<
-    ::std::uint32_t,
-    rs_std::Result<::std::uint32_t, ::std::uint32_t>>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void rs_std::Result<
-    ::std::uint32_t,
-    rs_std::Result<::std::uint32_t, ::std::uint32_t>>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint32_ut_x00000020_x0000003e
@@ -2141,91 +2191,6 @@ static_assert(::std::is_trivially_move_constructible_v<
               rs_std::Result<::std::uint32_t, ::std::uint32_t>>);
 static_assert(::std::is_trivially_move_assignable_v<
               rs_std::Result<::std::uint32_t, ::std::uint32_t>>);
-inline rs_std::Result<::std::uint32_t, ::std::uint32_t>::Result(
-    ::std::uint32_t&& ok) noexcept {
-  set_tag(0);
-  ::std::construct_at(reinterpret_cast<::std::uint32_t*>(__storage + 4),
-                      ::std::move(ok));
-}
-inline rs_std::Result<::std::uint32_t, ::std::uint32_t>&
-rs_std::Result<::std::uint32_t, ::std::uint32_t>::operator=(
-    ::std::uint32_t&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(reinterpret_cast<::std::uint32_t*>(__storage + 4));
-    set_tag(0);
-    ::std::construct_at(reinterpret_cast<::std::uint32_t*>(__storage + 4),
-                        ::std::move(ok));
-  } else {
-    set_tag(0);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint32_t*>(__storage + 4), ::std::move(ok));
-  }
-  return *this;
-}
-
-inline rs_std::Result<::std::uint32_t, ::std::uint32_t>::Result(
-    rs_std::unexpected<::std::uint32_t>&& err) noexcept {
-  set_tag(1);
-  ::std::construct_at(reinterpret_cast<::std::uint32_t*>(__storage + 4),
-                      ::std::move(err.error()));
-}
-inline rs_std::Result<::std::uint32_t, ::std::uint32_t>&
-rs_std::Result<::std::uint32_t, ::std::uint32_t>::operator=(
-    rs_std::unexpected<::std::uint32_t>&& err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage + 4);
-    set_tag(1);
-    ::std::construct_at(reinterpret_cast<::std::uint32_t*>(__storage + 4),
-                        ::std::move(err.error()));
-  } else {
-    set_tag(1);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint32_t*>(__storage + 4),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<::std::uint32_t, ::std::uint32_t>::Result(
-    std::in_place_t, Args&&... args) {
-  set_tag(0);
-  std::construct_at(__storage + 4, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::std::uint32_t, ::std::uint32_t>::Result(
-    rs_std::unexpect_t, Args&&... args) {
-  set_tag(1);
-  std::construct_at(__storage + 4, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<::std::uint32_t, ::std::uint32_t>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool
-rs_std::Result<::std::uint32_t, ::std::uint32_t>::has_value() const noexcept {
-  return tag() == 0;
-}
-inline ::std::uint32_t&
-rs_std::Result<::std::uint32_t, ::std::uint32_t>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::std::uint32_t*>(__storage + 4);
-}
-inline ::std::uint32_t&&
-rs_std::Result<::std::uint32_t, ::std::uint32_t>::value() && {
-  check_has_ok();
-  return ::std::move(*reinterpret_cast<::std::uint32_t*>(__storage + 4));
-}
-inline ::std::uint32_t&
-rs_std::Result<::std::uint32_t, ::std::uint32_t>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::std::uint32_t*>(__storage + 4);
-}
-inline ::std::uint32_t&&
-rs_std::Result<::std::uint32_t, ::std::uint32_t>::err() && {
-  check_has_err();
-  return ::std::move(*reinterpret_cast<::std::uint32_t*>(__storage + 4));
-}
 static_assert(::std::is_trivially_destructible_v<
               rs_std::Result<::std::uint32_t, ::std::uint32_t>>);
 inline constexpr ::std::uint32_t
@@ -2245,12 +2210,6 @@ inline constexpr void rs_std::Result<::std::uint32_t, ::std::uint32_t>::set_tag(
   }
 }
 
-inline void rs_std::Result<::std::uint32_t, ::std::uint32_t>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void rs_std::Result<::std::uint32_t, ::std::uint32_t>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020CloneNoDefault_x00000020_x0000003e
@@ -2280,95 +2239,6 @@ static_assert(::std::is_trivially_move_constructible_v<
               rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>>);
 static_assert(::std::is_trivially_move_assignable_v<
               rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>>);
-inline rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::Result(
-    ::std::uint8_t&& ok) noexcept {
-  set_tag(0);
-  ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                      ::std::move(ok));
-}
-inline rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>&
-rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::operator=(
-    ::std::uint8_t&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(
-        reinterpret_cast<::result::CloneNoDefault*>(__storage + 1));
-    set_tag(0);
-    ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                        ::std::move(ok));
-  } else {
-    set_tag(0);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint8_t*>(__storage + 1), ::std::move(ok));
-  }
-  return *this;
-}
-
-inline rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::Result(
-    rs_std::unexpected<::result::CloneNoDefault>&& err) noexcept {
-  set_tag(1);
-  ::std::construct_at(
-      reinterpret_cast<::result::CloneNoDefault*>(__storage + 1),
-      ::std::move(err.error()));
-}
-inline rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>&
-rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::operator=(
-    rs_std::unexpected<::result::CloneNoDefault>&& err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage + 1);
-    set_tag(1);
-    ::std::construct_at(
-        reinterpret_cast<::result::CloneNoDefault*>(__storage + 1),
-        ::std::move(err.error()));
-  } else {
-    set_tag(1);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::result::CloneNoDefault*>(__storage + 1),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::Result(
-    std::in_place_t, Args&&... args) {
-  set_tag(0);
-  std::construct_at(__storage + 1, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::Result(
-    rs_std::unexpect_t, Args&&... args) {
-  set_tag(1);
-  std::construct_at(__storage + 1, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool rs_std::Result<
-    ::std::uint8_t, ::result::CloneNoDefault>::has_value() const noexcept {
-  return tag() == 0;
-}
-inline ::std::uint8_t&
-rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::std::uint8_t*>(__storage + 1);
-}
-inline ::std::uint8_t&&
-rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::value() && {
-  check_has_ok();
-  return ::std::move(*reinterpret_cast<::std::uint8_t*>(__storage + 1));
-}
-inline ::result::CloneNoDefault&
-rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::result::CloneNoDefault*>(__storage + 1);
-}
-inline ::result::CloneNoDefault&&
-rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::err() && {
-  check_has_err();
-  return ::std::move(
-      *reinterpret_cast<::result::CloneNoDefault*>(__storage + 1));
-}
 static_assert(::std::is_trivially_destructible_v<
               rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>>);
 inline constexpr ::std::uint8_t rs_std::Result<
@@ -2389,14 +2259,6 @@ rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::set_tag(
   }
 }
 
-inline void
-rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void
-rs_std::Result<::std::uint8_t, ::result::CloneNoDefault>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020CopyNoDefault_x00000020_x0000003e
@@ -2409,94 +2271,6 @@ static_assert(::std::is_trivially_move_constructible_v<
               rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>>);
 static_assert(::std::is_trivially_move_assignable_v<
               rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>>);
-inline rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::Result(
-    ::std::uint8_t&& ok) noexcept {
-  set_tag(0);
-  ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                      ::std::move(ok));
-}
-inline rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>&
-rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::operator=(
-    ::std::uint8_t&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(
-        reinterpret_cast<::result::CopyNoDefault*>(__storage + 1));
-    set_tag(0);
-    ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                        ::std::move(ok));
-  } else {
-    set_tag(0);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint8_t*>(__storage + 1), ::std::move(ok));
-  }
-  return *this;
-}
-
-inline rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::Result(
-    rs_std::unexpected<::result::CopyNoDefault>&& err) noexcept {
-  set_tag(1);
-  ::std::construct_at(reinterpret_cast<::result::CopyNoDefault*>(__storage + 1),
-                      ::std::move(err.error()));
-}
-inline rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>&
-rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::operator=(
-    rs_std::unexpected<::result::CopyNoDefault>&& err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage + 1);
-    set_tag(1);
-    ::std::construct_at(
-        reinterpret_cast<::result::CopyNoDefault*>(__storage + 1),
-        ::std::move(err.error()));
-  } else {
-    set_tag(1);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::result::CopyNoDefault*>(__storage + 1),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::Result(
-    std::in_place_t, Args&&... args) {
-  set_tag(0);
-  std::construct_at(__storage + 1, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::Result(
-    rs_std::unexpect_t, Args&&... args) {
-  set_tag(1);
-  std::construct_at(__storage + 1, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool rs_std::Result<
-    ::std::uint8_t, ::result::CopyNoDefault>::has_value() const noexcept {
-  return tag() == 0;
-}
-inline ::std::uint8_t&
-rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::std::uint8_t*>(__storage + 1);
-}
-inline ::std::uint8_t&&
-rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::value() && {
-  check_has_ok();
-  return ::std::move(*reinterpret_cast<::std::uint8_t*>(__storage + 1));
-}
-inline ::result::CopyNoDefault&
-rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::result::CopyNoDefault*>(__storage + 1);
-}
-inline ::result::CopyNoDefault&&
-rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::err() && {
-  check_has_err();
-  return ::std::move(
-      *reinterpret_cast<::result::CopyNoDefault*>(__storage + 1));
-}
 static_assert(::std::is_trivially_destructible_v<
               rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>>);
 inline constexpr ::std::uint8_t
@@ -2517,106 +2291,13 @@ rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::set_tag(
   }
 }
 
-inline void
-rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void
-rs_std::Result<::std::uint8_t, ::result::CopyNoDefault>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasDefault_x00000020_x0000003e
 #define _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasDefault_x00000020_x0000003e
-inline rs_std::Result<::std::uint8_t, ::result::HasDefault>::Result(
-    ::std::uint8_t&& ok) noexcept {
-  set_tag(UINT64_C(18446744073709551615));
-  ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 8),
-                      ::std::move(ok));
-}
-inline rs_std::Result<::std::uint8_t, ::result::HasDefault>&
-rs_std::Result<::std::uint8_t, ::result::HasDefault>::operator=(
-    ::std::uint8_t&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(reinterpret_cast<::result::HasDefault*>(__storage));
-    set_tag(UINT64_C(18446744073709551615));
-    ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 8),
-                        ::std::move(ok));
-  } else {
-    set_tag(UINT64_C(18446744073709551615));
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint8_t*>(__storage + 8), ::std::move(ok));
-  }
-  return *this;
-}
-
-inline rs_std::Result<::std::uint8_t, ::result::HasDefault>::Result(
-    rs_std::unexpected<::result::HasDefault>&& err) noexcept {
-  ::std::construct_at(reinterpret_cast<::result::HasDefault*>(__storage),
-                      ::std::move(err.error()));
-}
-inline rs_std::Result<::std::uint8_t, ::result::HasDefault>&
-rs_std::Result<::std::uint8_t, ::result::HasDefault>::operator=(
-    rs_std::unexpected<::result::HasDefault>&& err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage + 8);
-    ::std::construct_at(reinterpret_cast<::result::HasDefault*>(__storage),
-                        ::std::move(err.error()));
-  } else {
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::result::HasDefault*>(__storage),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<::std::uint8_t, ::result::HasDefault>::Result(
-    std::in_place_t, Args&&... args) {
-  set_tag(UINT64_C(18446744073709551615));
-  std::construct_at(__storage + 8, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::std::uint8_t, ::result::HasDefault>::Result(
-    rs_std::unexpect_t, Args&&... args) {
-  std::construct_at(__storage, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<::std::uint8_t, ::result::HasDefault>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool rs_std::Result<
-    ::std::uint8_t, ::result::HasDefault>::has_value() const noexcept {
-  return tag() == UINT64_C(18446744073709551615);
-}
-inline ::std::uint8_t&
-rs_std::Result<::std::uint8_t, ::result::HasDefault>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::std::uint8_t*>(__storage + 8);
-}
-inline ::std::uint8_t&&
-rs_std::Result<::std::uint8_t, ::result::HasDefault>::value() && {
-  check_has_ok();
-  return ::std::move(*reinterpret_cast<::std::uint8_t*>(__storage + 8));
-}
-inline ::result::HasDefault&
-rs_std::Result<::std::uint8_t, ::result::HasDefault>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::result::HasDefault*>(__storage);
-}
-inline ::result::HasDefault&&
-rs_std::Result<::std::uint8_t, ::result::HasDefault>::err() && {
-  check_has_err();
-  return ::std::move(*reinterpret_cast<::result::HasDefault*>(__storage));
-}
 inline rs_std::Result<::std::uint8_t,
                       ::result::HasDefault>::~Result() noexcept {
-  if (has_value()) {
-    ::std::destroy_at(reinterpret_cast<::std::uint8_t*>(__storage + 8));
-  } else {
-    ::std::destroy_at(reinterpret_cast<::result::HasDefault*>(__storage));
-  }
+  this->Reset();
 }
 inline constexpr ::std::uint64_t
 rs_std::Result<::std::uint8_t, ::result::HasDefault>::tag() const& noexcept {
@@ -2636,86 +2317,13 @@ rs_std::Result<::std::uint8_t, ::result::HasDefault>::set_tag(
   }
 }
 
-inline void
-rs_std::Result<::std::uint8_t, ::result::HasDefault>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void
-rs_std::Result<::std::uint8_t, ::result::HasDefault>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasNoDefault_x00000020_x0000003e
 #define _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020result_x00000020_x0000003a_x0000003a_x00000020HasNoDefault_x00000020_x0000003e
-inline rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::Result(
-    ::std::uint8_t&& ok) noexcept {
-  set_tag(UINT64_C(18446744073709551615));
-  ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 8),
-                      ::std::move(ok));
-}
-inline rs_std::Result<::std::uint8_t, ::result::HasNoDefault>&
-rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::operator=(
-    ::std::uint8_t&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(reinterpret_cast<::result::HasNoDefault*>(__storage));
-    set_tag(UINT64_C(18446744073709551615));
-    ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 8),
-                        ::std::move(ok));
-  } else {
-    set_tag(UINT64_C(18446744073709551615));
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint8_t*>(__storage + 8), ::std::move(ok));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::Result(
-    std::in_place_t, Args&&... args) {
-  set_tag(UINT64_C(18446744073709551615));
-  std::construct_at(__storage + 8, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::Result(
-    rs_std::unexpect_t, Args&&... args) {
-  std::construct_at(__storage, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::
-operator bool() const noexcept {
-  return has_value();
-}
-inline constexpr bool rs_std::Result<
-    ::std::uint8_t, ::result::HasNoDefault>::has_value() const noexcept {
-  return tag() == UINT64_C(18446744073709551615);
-}
-inline ::std::uint8_t&
-rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::std::uint8_t*>(__storage + 8);
-}
-inline ::std::uint8_t&&
-rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::value() && {
-  check_has_ok();
-  return ::std::move(*reinterpret_cast<::std::uint8_t*>(__storage + 8));
-}
-inline ::result::HasNoDefault&
-rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::result::HasNoDefault*>(__storage);
-}
-inline ::result::HasNoDefault&&
-rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::err() && {
-  check_has_err();
-  return ::std::move(*reinterpret_cast<::result::HasNoDefault*>(__storage));
-}
 inline rs_std::Result<::std::uint8_t,
                       ::result::HasNoDefault>::~Result() noexcept {
-  if (has_value()) {
-    ::std::destroy_at(reinterpret_cast<::std::uint8_t*>(__storage + 8));
-  } else {
-    ::std::destroy_at(reinterpret_cast<::result::HasNoDefault*>(__storage));
-  }
+  this->Reset();
 }
 inline constexpr ::std::uint64_t
 rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::tag() const& noexcept {
@@ -2735,14 +2343,6 @@ rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::set_tag(
   }
 }
 
-inline void
-rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
-}
-inline void
-rs_std::Result<::std::uint8_t, ::result::HasNoDefault>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
-}
 #endif
 
 #ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000002c_x00000020_x0000003a_x0000003a_x00000020std_x00000020_x0000003a_x0000003a_x00000020uint8_ut_x00000020_x0000003e
@@ -2755,89 +2355,6 @@ static_assert(::std::is_trivially_move_constructible_v<
               rs_std::Result<::std::uint8_t, ::std::uint8_t>>);
 static_assert(::std::is_trivially_move_assignable_v<
               rs_std::Result<::std::uint8_t, ::std::uint8_t>>);
-inline rs_std::Result<::std::uint8_t, ::std::uint8_t>::Result(
-    ::std::uint8_t&& ok) noexcept {
-  set_tag(0);
-  ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                      ::std::move(ok));
-}
-inline rs_std::Result<::std::uint8_t, ::std::uint8_t>& rs_std::Result<
-    ::std::uint8_t, ::std::uint8_t>::operator=(::std::uint8_t&& ok) noexcept {
-  if (!has_value()) {
-    ::std::destroy_at(reinterpret_cast<::std::uint8_t*>(__storage + 1));
-    set_tag(0);
-    ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                        ::std::move(ok));
-  } else {
-    set_tag(0);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint8_t*>(__storage + 1), ::std::move(ok));
-  }
-  return *this;
-}
-
-inline rs_std::Result<::std::uint8_t, ::std::uint8_t>::Result(
-    rs_std::unexpected<::std::uint8_t>&& err) noexcept {
-  set_tag(1);
-  ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                      ::std::move(err.error()));
-}
-inline rs_std::Result<::std::uint8_t, ::std::uint8_t>&
-rs_std::Result<::std::uint8_t, ::std::uint8_t>::operator=(
-    rs_std::unexpected<::std::uint8_t>&& err) noexcept {
-  if (has_value()) {
-    ::std::destroy_at(__storage + 1);
-    set_tag(1);
-    ::std::construct_at(reinterpret_cast<::std::uint8_t*>(__storage + 1),
-                        ::std::move(err.error()));
-  } else {
-    set_tag(1);
-    ::crubit::MoveAssignOrDestroyAndConstruct(
-        reinterpret_cast<::std::uint8_t*>(__storage + 1),
-        ::std::move(err.error()));
-  }
-  return *this;
-}
-
-template <typename... Args>
-inline rs_std::Result<::std::uint8_t, ::std::uint8_t>::Result(std::in_place_t,
-                                                              Args&&... args) {
-  set_tag(0);
-  std::construct_at(__storage + 1, std::forward<Args>(args)...);
-}
-template <typename... Args>
-inline rs_std::Result<::std::uint8_t, ::std::uint8_t>::Result(
-    rs_std::unexpect_t, Args&&... args) {
-  set_tag(1);
-  std::construct_at(__storage + 1, std::forward<Args>(args)...);
-}
-inline constexpr rs_std::Result<::std::uint8_t, ::std::uint8_t>::operator bool()
-    const noexcept {
-  return has_value();
-}
-inline constexpr bool
-rs_std::Result<::std::uint8_t, ::std::uint8_t>::has_value() const noexcept {
-  return tag() == 0;
-}
-inline ::std::uint8_t&
-rs_std::Result<::std::uint8_t, ::std::uint8_t>::value() & {
-  check_has_ok();
-  return *reinterpret_cast<::std::uint8_t*>(__storage + 1);
-}
-inline ::std::uint8_t&&
-rs_std::Result<::std::uint8_t, ::std::uint8_t>::value() && {
-  check_has_ok();
-  return ::std::move(*reinterpret_cast<::std::uint8_t*>(__storage + 1));
-}
-inline ::std::uint8_t& rs_std::Result<::std::uint8_t, ::std::uint8_t>::err() & {
-  check_has_err();
-  return *reinterpret_cast<::std::uint8_t*>(__storage + 1);
-}
-inline ::std::uint8_t&&
-rs_std::Result<::std::uint8_t, ::std::uint8_t>::err() && {
-  check_has_err();
-  return ::std::move(*reinterpret_cast<::std::uint8_t*>(__storage + 1));
-}
 static_assert(::std::is_trivially_destructible_v<
               rs_std::Result<::std::uint8_t, ::std::uint8_t>>);
 inline constexpr ::std::uint8_t
@@ -2857,12 +2374,45 @@ inline constexpr void rs_std::Result<::std::uint8_t, ::std::uint8_t>::set_tag(
   }
 }
 
-inline void rs_std::Result<::std::uint8_t, ::std::uint8_t>::check_has_ok() {
-  CRUBIT_CHECK(has_value()) << "Bad value access on rs_std::Result";
+#endif
+
+#ifndef _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020crubit_x00000020_x0000003a_x0000003a_x00000020type_uidentity_ut_x00000020_x0000003c_x00000020void_x00000020_x00000028void_x00000020_x0000002a_x00000020_x0000002c_x00000020void_x00000020_x0000002a_x00000029_x00000020_x0000003e_x00000020_x0000002a_x00000020_x0000002c_x00000020crubit_x00000020_x0000003a_x0000003a_x00000020type_uidentity_ut_x00000020_x0000003c_x00000020void_x00000020_x00000028void_x00000020_x0000002a_x00000020_x0000002c_x00000020void_x00000020_x0000002a_x00000029_x00000020_x0000003e_x00000020_x0000002a_x00000020_x0000003e
+#define _CRUBIT_BINDINGS_FOR_IMPL_rs_ustd_x00000020_x0000003a_x0000003a_x00000020Result_x00000020_x0000003c_x00000020crubit_x00000020_x0000003a_x0000003a_x00000020type_uidentity_ut_x00000020_x0000003c_x00000020void_x00000020_x00000028void_x00000020_x0000002a_x00000020_x0000002c_x00000020void_x00000020_x0000002a_x00000029_x00000020_x0000003e_x00000020_x0000002a_x00000020_x0000002c_x00000020crubit_x00000020_x0000003a_x0000003a_x00000020type_uidentity_ut_x00000020_x0000003c_x00000020void_x00000020_x00000028void_x00000020_x0000002a_x00000020_x0000002c_x00000020void_x00000020_x0000002a_x00000029_x00000020_x0000003e_x00000020_x0000002a_x00000020_x0000003e
+static_assert(::std::is_trivially_copy_constructible_v<
+              rs_std::Result<crubit::type_identity_t<void(void*, void*)>*,
+                             crubit::type_identity_t<void(void*, void*)>*>>);
+static_assert(::std::is_trivially_copy_assignable_v<
+              rs_std::Result<crubit::type_identity_t<void(void*, void*)>*,
+                             crubit::type_identity_t<void(void*, void*)>*>>);
+static_assert(::std::is_trivially_move_constructible_v<
+              rs_std::Result<crubit::type_identity_t<void(void*, void*)>*,
+                             crubit::type_identity_t<void(void*, void*)>*>>);
+static_assert(::std::is_trivially_move_assignable_v<
+              rs_std::Result<crubit::type_identity_t<void(void*, void*)>*,
+                             crubit::type_identity_t<void(void*, void*)>*>>);
+static_assert(::std::is_trivially_destructible_v<
+              rs_std::Result<crubit::type_identity_t<void(void*, void*)>*,
+                             crubit::type_identity_t<void(void*, void*)>*>>);
+inline constexpr ::std::uint64_t rs_std::Result<
+    crubit::type_identity_t<void(void*, void*)>*,
+    crubit::type_identity_t<void(void*, void*)>*>::tag() const& noexcept {
+  std::array<unsigned char, sizeof(::std::uint64_t)> __bytes = {};
+  for (std::size_t i = 0; i < sizeof(::std::uint64_t); ++i) {
+    __bytes[i] = __storage[0 + i];
+  }
+  return std::bit_cast<::std::uint64_t>(__bytes);
 }
-inline void rs_std::Result<::std::uint8_t, ::std::uint8_t>::check_has_err() {
-  CRUBIT_CHECK(!has_value()) << "Bad error access on rs_std::Result";
+inline constexpr void rs_std::Result<
+    crubit::type_identity_t<void(void*, void*)>*,
+    crubit::type_identity_t<void(void*, void*)>*>::set_tag(::std::uint64_t
+                                                               tag) noexcept {
+  auto __bytes =
+      std::bit_cast<std::array<unsigned char, sizeof(::std::uint64_t)>>(tag);
+  for (std::size_t i = 0; i < sizeof(::std::uint64_t); ++i) {
+    __storage[0 + i] = __bytes[i];
+  }
 }
+
 #endif
 
 #pragma clang diagnostic pop

@@ -9,8 +9,7 @@ add_library(crubit_support_rs_std_internal_is_utf8 STATIC
 )
 set_target_properties(crubit_support_rs_std_internal_is_utf8 PROPERTIES LINKER_LANGUAGE CXX)
 
-target_link_libraries(crubit_support_rs_std_internal_is_utf8 PUBLIC
-absl::core_headers
-absl::string_view
+target_include_directories(crubit_support_rs_std_internal_is_utf8 PUBLIC
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../.."
 )
 

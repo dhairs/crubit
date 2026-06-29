@@ -240,6 +240,15 @@ absl::StatusOr<IR> IrFromCc(IrFromCcOptions options) {
       !status.ok()) {
     return status;
   }
+  if (invocation.ir_.UseNestedIr()) {
+    invocation.ir_.BuildTree();
+  }
+  invocation.ir_.reexported_namespaces =
+      std::vector<std::string>(options.reexported_namespaces.begin(),
+                               options.reexported_namespaces.end());
+  invocation.ir_.unstable_rust_features.assign(
+      options.unstable_rust_features.begin(),
+      options.unstable_rust_features.end());
   return invocation.ir_;
 }
 

@@ -31,7 +31,7 @@ unsafe extern "C" fn __crubit_thunk_is_udata_utoo_ulong(
     unsafe { ::enums_golden::qr_error::QrError::is_data_too_long(__self) }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __crubit_thunk_PartialEq_ueq(
+unsafe extern "C" fn __crubit_thunk_PartialEq_ueq_uenums_ugolden_x0000003a_x0000003aqr_uerror_x0000003a_x0000003aQrError_uenums_ugolden_x0000003a_x0000003aqr_uerror_x0000003a_x0000003aQrError(
     __self: &'static ::enums_golden::qr_error::QrError,
     other: &'static ::enums_golden::qr_error::QrError,
 ) -> bool {
@@ -100,7 +100,7 @@ unsafe extern "C" fn __crubit_thunk_SplitMax16(
     }
 }
 #[unsafe(no_mangle)]
-unsafe extern "C" fn __crubit_thunk_PartialEq_ueq(
+unsafe extern "C" fn __crubit_thunk_PartialEq_ueq_uenums_ugolden_x0000003a_x0000003aqr_uerror_x0000003a_x0000003aStructuredQrError_uenums_ugolden_x0000003a_x0000003aqr_uerror_x0000003a_x0000003aStructuredQrError(
     __self: &'static ::enums_golden::qr_error::StructuredQrError,
     other: &'static ::enums_golden::qr_error::StructuredQrError,
 ) -> bool {
@@ -109,6 +109,28 @@ unsafe extern "C" fn __crubit_thunk_PartialEq_ueq(
             ::enums_golden::qr_error::StructuredQrError,
         >>::eq(__self, other)
     }
+}
+const _: () = assert!(::std::mem::size_of::<::enums_golden::repr_128::ReprI128>() == 16);
+const _: () = assert!(::std::mem::align_of::<::enums_golden::repr_128::ReprI128>() == 16);
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_is_umin_ui128(
+    __self: &'static ::enums_golden::repr_128::ReprI128,
+) -> bool {
+    unsafe { ::enums_golden::repr_128::ReprI128::is_min_i128(__self) }
+}
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_is_umax_ui128(
+    __self: &'static ::enums_golden::repr_128::ReprI128,
+) -> bool {
+    unsafe { ::enums_golden::repr_128::ReprI128::is_max_i128(__self) }
+}
+const _: () = assert!(::std::mem::size_of::<::enums_golden::repr_128::ReprU128>() == 16);
+const _: () = assert!(::std::mem::align_of::<::enums_golden::repr_128::ReprU128>() == 16);
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_is_umax_uu128(
+    __self: &'static ::enums_golden::repr_128::ReprU128,
+) -> bool {
+    unsafe { ::enums_golden::repr_128::ReprU128::is_max_u128(__self) }
 }
 const _: () = assert!(::std::mem::size_of::<::enums_golden::repr_c::MyEnum>() == 40);
 const _: () = assert!(::std::mem::align_of::<::enums_golden::repr_c::MyEnum>() == 8);
@@ -148,6 +170,44 @@ extern "C" fn __crubit_thunk_drop(
     __self: &'static mut ::core::mem::MaybeUninit<::enums_golden::repr_c::MyEnum>,
 ) {
     unsafe { __self.assume_init_drop() };
+}
+const _: () =
+    assert!(::std::mem::size_of::<::enums_golden::repr_c::ReprCWithExtremeDiscriminants>() == 4);
+const _: () =
+    assert!(::std::mem::align_of::<::enums_golden::repr_c::ReprCWithExtremeDiscriminants>() == 4);
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_is_uminus_uone(
+    __self: &'static ::enums_golden::repr_c::ReprCWithExtremeDiscriminants,
+) -> bool {
+    unsafe { ::enums_golden::repr_c::ReprCWithExtremeDiscriminants::is_minus_one(__self) }
+}
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_is_uminus_utwo(
+    __self: &'static ::enums_golden::repr_c::ReprCWithExtremeDiscriminants,
+) -> bool {
+    unsafe { ::enums_golden::repr_c::ReprCWithExtremeDiscriminants::is_minus_two(__self) }
+}
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_is_umin_ui32(
+    __self: &'static ::enums_golden::repr_c::ReprCWithExtremeDiscriminants,
+) -> bool {
+    unsafe { ::enums_golden::repr_c::ReprCWithExtremeDiscriminants::is_min_i32(__self) }
+}
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_is_umax_ui32(
+    __self: &'static ::enums_golden::repr_c::ReprCWithExtremeDiscriminants,
+) -> bool {
+    unsafe { ::enums_golden::repr_c::ReprCWithExtremeDiscriminants::is_max_i32(__self) }
+}
+const _: () =
+    assert!(::std::mem::size_of::<::enums_golden::repr_c::ReprCWithSingleNoPayloadVariant>() == 4);
+const _: () =
+    assert!(::std::mem::align_of::<::enums_golden::repr_c::ReprCWithSingleNoPayloadVariant>() == 4);
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_is_usingle_uvariant(
+    __self: &'static ::enums_golden::repr_c::ReprCWithSingleNoPayloadVariant,
+) -> bool {
+    unsafe { ::enums_golden::repr_c::ReprCWithSingleNoPayloadVariant::is_single_variant(__self) }
 }
 const _: () = assert!(
     ::std::mem::size_of::<::enums_golden::repr_c_clone_active_variant::CloneActiveVariant>() == 8
@@ -313,6 +373,34 @@ unsafe extern "C" fn __crubit_thunk_is_uno_upayload2(
 ) -> bool {
     unsafe { ::enums_golden::repr_int::IntReprEnumWithNoPayload::is_no_payload2(__self) }
 }
+const _: () = assert!(
+    ::std::mem::size_of::<::enums_golden::repr_int::IntReprWithSingleNoPayloadVariant>() == 4
+);
+const _: () = assert!(
+    ::std::mem::align_of::<::enums_golden::repr_int::IntReprWithSingleNoPayloadVariant>() == 4
+);
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_is_usingle_uvariant(
+    __self: &'static ::enums_golden::repr_int::IntReprWithSingleNoPayloadVariant,
+) -> bool {
+    unsafe {
+        ::enums_golden::repr_int::IntReprWithSingleNoPayloadVariant::is_single_variant(__self)
+    }
+}
+const _: () = assert!(::std::mem::size_of::<::enums_golden::repr_int::NegReprIntEnum>() == 1);
+const _: () = assert!(::std::mem::align_of::<::enums_golden::repr_int::NegReprIntEnum>() == 1);
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_is_uminus_uone(
+    __self: &'static ::enums_golden::repr_int::NegReprIntEnum,
+) -> bool {
+    unsafe { ::enums_golden::repr_int::NegReprIntEnum::is_minus_one(__self) }
+}
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_is_uminus_utwo(
+    __self: &'static ::enums_golden::repr_int::NegReprIntEnum,
+) -> bool {
+    unsafe { ::enums_golden::repr_int::NegReprIntEnum::is_minus_two(__self) }
+}
 const _: () = assert!(::std::mem::size_of::<::enums_golden::repr_rust::RustReprEnum>() == 12);
 const _: () = assert!(::std::mem::align_of::<::enums_golden::repr_rust::RustReprEnum>() == 4);
 #[unsafe(no_mangle)]
@@ -388,6 +476,24 @@ unsafe extern "C" fn __crubit_thunk_MakeStructPayloadVariant(
             .write(__rs_return_value);
     }
 }
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_get_uvariant_unumber(
+    __self: &'static ::enums_golden::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods,
+) -> i32 {
+    unsafe {
+        ::enums_golden::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods::get_variant_number(__self)
+    }
+}
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_get_uvalue(
+    __self: &'static ::enums_golden::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods,
+) -> i32 {
+    unsafe {
+        ::enums_golden::repr_rust::RustReprWithNamingConflictBetweenCtorsAndMethods::get_value(
+            __self,
+        )
+    }
+}
 const _: () = assert!(
     ::std::mem::size_of::<::enums_golden::repr_rust::RustReprWithSingleTuplePayloadVariant>() == 4
 );
@@ -406,5 +512,13 @@ unsafe extern "C" fn __crubit_thunk_SingleVariant(
             );
         (__ret_ptr as *mut ::enums_golden::repr_rust::RustReprWithSingleTuplePayloadVariant)
             .write(__rs_return_value);
+    }
+}
+#[unsafe(no_mangle)]
+unsafe extern "C" fn __crubit_thunk_get_usingle_uitem_ufrom_utuple_upayload(
+    __self: &'static ::enums_golden::repr_rust::RustReprWithSingleTuplePayloadVariant,
+) -> i32 {
+    unsafe {
+        ::enums_golden::repr_rust::RustReprWithSingleTuplePayloadVariant::get_single_item_from_tuple_payload(__self)
     }
 }

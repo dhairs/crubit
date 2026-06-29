@@ -63,6 +63,51 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
 
 }  // namespace partial_eq::basic_test
 
+namespace partial_eq::tuple_collision {
+
+struct CRUBIT_INTERNAL_RUST_TYPE(
+    ":: partial_eq_golden :: tuple_collision :: MyStruct") alignas(8)
+    [[clang::trivial_abi]] MyStruct final {
+ public:
+  // `partial_eq_golden::tuple_collision::MyStruct` doesn't implement the
+  // `Default` trait
+  MyStruct() = delete;
+
+  // No custom `Drop` impl and no custom "drop glue" required
+  ~MyStruct() = default;
+  MyStruct(MyStruct&&) = default;
+  MyStruct& operator=(MyStruct&&) = default;
+
+  // `partial_eq_golden::tuple_collision::MyStruct` doesn't implement the
+  // `Clone` trait
+  MyStruct(const MyStruct&) = delete;
+  MyStruct& operator=(const MyStruct&) = delete;
+  MyStruct(::crubit::UnsafeRelocateTag, MyStruct&& value) {
+    ::std::memcpy(this, &value, sizeof(value));
+  }
+
+  static ::partial_eq::tuple_collision::MyStruct new_(::std::uintptr_t val);
+
+  // Error generating bindings for implementation
+  // `<partial_eq_golden::tuple_collision::MyStruct as std::cmp::PartialEq<(u64,
+  // bool)>>` defined at
+  // cc_bindings_from_rs/test/known_traits/partial_eq/partial_eq.rs;l=52:
+  // PartialEq implementation for `(u64, bool)` is not supported when
+  // `PartialEq<(usize, bool)>` is implemented as it may overlap.
+
+  bool operator==(rs_std::Tuple<::std::uintptr_t, bool> const& _other) const;
+
+ private:
+  union {
+    ::std::uintptr_t __field0;
+  };
+
+ private:
+  static void __crubit_field_offset_assertions();
+};
+
+}  // namespace partial_eq::tuple_collision
+
 namespace partial_eq::usize_rhs {
 
 struct CRUBIT_INTERNAL_RUST_TYPE(
@@ -129,51 +174,6 @@ struct alignas(8) CRUBIT_INTERNAL_RUST_TYPE(
 };
 #endif
 
-namespace partial_eq::tuple_collision {
-
-struct CRUBIT_INTERNAL_RUST_TYPE(
-    ":: partial_eq_golden :: tuple_collision :: MyStruct") alignas(8)
-    [[clang::trivial_abi]] MyStruct final {
- public:
-  // `partial_eq_golden::tuple_collision::MyStruct` doesn't implement the
-  // `Default` trait
-  MyStruct() = delete;
-
-  // No custom `Drop` impl and no custom "drop glue" required
-  ~MyStruct() = default;
-  MyStruct(MyStruct&&) = default;
-  MyStruct& operator=(MyStruct&&) = default;
-
-  // `partial_eq_golden::tuple_collision::MyStruct` doesn't implement the
-  // `Clone` trait
-  MyStruct(const MyStruct&) = delete;
-  MyStruct& operator=(const MyStruct&) = delete;
-  MyStruct(::crubit::UnsafeRelocateTag, MyStruct&& value) {
-    ::std::memcpy(this, &value, sizeof(value));
-  }
-
-  static ::partial_eq::tuple_collision::MyStruct new_(::std::uintptr_t val);
-
-  // Error generating bindings for implementation
-  // `<partial_eq_golden::tuple_collision::MyStruct as std::cmp::PartialEq<(u64,
-  // bool)>>` defined at
-  // cc_bindings_from_rs/test/known_traits/partial_eq/partial_eq.rs;l=52:
-  // PartialEq implementation for `(u64, bool)` is not supported when
-  // `PartialEq<(usize, bool)>` is implemented as it may overlap.
-
-  bool operator==(rs_std::Tuple<::std::uintptr_t, bool> const& _other) const;
-
- private:
-  union {
-    ::std::uintptr_t __field0;
-  };
-
- private:
-  static void __crubit_field_offset_assertions();
-};
-
-}  // namespace partial_eq::tuple_collision
-
 namespace partial_eq::basic_test {
 
 static_assert(
@@ -200,14 +200,17 @@ inline ::partial_eq::basic_test::MyStruct MyStruct::new_(::std::uintptr_t val) {
 }
 
 namespace __crubit_internal {
-extern "C" bool __crubit_thunk_PartialEq_ueq(
+extern "C" bool
+__crubit_thunk_PartialEq_ueq_upartial_ueq_ugolden_x0000003a_x0000003abasic_utest_x0000003a_x0000003aMyStruct_upartial_ueq_ugolden_x0000003a_x0000003abasic_utest_x0000003a_x0000003aMyStruct(
     ::partial_eq::basic_test::MyStruct const&,
     ::partial_eq::basic_test::MyStruct const&);
 }
 inline bool MyStruct::operator==(
     ::partial_eq::basic_test::MyStruct const& other) const {
   auto&& self = *this;
-  return __crubit_internal::__crubit_thunk_PartialEq_ueq(self, other);
+  return __crubit_internal::
+      __crubit_thunk_PartialEq_ueq_upartial_ueq_ugolden_x0000003a_x0000003abasic_utest_x0000003a_x0000003aMyStruct_upartial_ueq_ugolden_x0000003a_x0000003abasic_utest_x0000003a_x0000003aMyStruct(
+          self, other);
 }
 inline void MyStruct::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(MyStruct, __field0));
@@ -241,14 +244,17 @@ inline ::partial_eq::tuple_collision::MyStruct MyStruct::new_(
 }
 
 namespace __crubit_internal {
-extern "C" bool __crubit_thunk_PartialEq_ueq(
+extern "C" bool
+__crubit_thunk_PartialEq_ueq_upartial_ueq_ugolden_x0000003a_x0000003atuple_ucollision_x0000003a_x0000003aMyStruct_u_x00000028usize_x0000002c_x00000020bool_x00000029(
     ::partial_eq::tuple_collision::MyStruct const&,
     rs_std::Tuple<::std::uintptr_t, bool> const&);
 }
 inline bool MyStruct::operator==(
     rs_std::Tuple<::std::uintptr_t, bool> const& _other) const {
   auto&& self = *this;
-  return __crubit_internal::__crubit_thunk_PartialEq_ueq(self, _other);
+  return __crubit_internal::
+      __crubit_thunk_PartialEq_ueq_upartial_ueq_ugolden_x0000003a_x0000003atuple_ucollision_x0000003a_x0000003aMyStruct_u_x00000028usize_x0000002c_x00000020bool_x00000029(
+          self, _other);
 }
 inline void MyStruct::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(MyStruct, __field0));
@@ -280,12 +286,15 @@ inline ::partial_eq::usize_rhs::MyStruct MyStruct::new_(::std::uintptr_t val) {
 }
 
 namespace __crubit_internal {
-extern "C" bool __crubit_thunk_PartialEq_ueq(
+extern "C" bool
+__crubit_thunk_PartialEq_ueq_upartial_ueq_ugolden_x0000003a_x0000003ausize_urhs_x0000003a_x0000003aMyStruct_uusize(
     ::partial_eq::usize_rhs::MyStruct const&, ::std::uintptr_t const&);
 }
 inline bool MyStruct::operator==(::std::uintptr_t const& other) const {
   auto&& self = *this;
-  return __crubit_internal::__crubit_thunk_PartialEq_ueq(self, other);
+  return __crubit_internal::
+      __crubit_thunk_PartialEq_ueq_upartial_ueq_ugolden_x0000003a_x0000003ausize_urhs_x0000003a_x0000003aMyStruct_uusize(
+          self, other);
 }
 inline void MyStruct::__crubit_field_offset_assertions() {
   static_assert(0 == offsetof(MyStruct, __field0));

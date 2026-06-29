@@ -2,7 +2,7 @@
 // Exceptions. See /LICENSE for license information.
 // SPDX-License-Identifier: Apache-2.0 WITH LLVM-exception
 
-use crate::generate_function::fn_arg_idents;
+use crate::generate_function::{fn_arg_idents, get_async_future_output_ty};
 use crate::{
     does_type_implement_trait, format_cc_ident, format_param_types_for_cc, is_bridged_type,
     is_c_abi_compatible_by_value, liberate_and_deanonymize_late_bound_regions, BridgedBuiltin,
@@ -115,13 +115,27 @@ pub fn generate_thunk_decl<'tcx>(
     thunk_name: &Ident,
     has_self_param: bool,
     is_constructor: bool,
+    within_template: bool,
+    is_async: bool,
 ) -> Result<CcSnippet<'tcx>> {
     let tcx = db.tcx();
     let mut prereqs = CcPrerequisites::default();
-    let main_api_ret_type = db
-        .format_ty_for_cc(sig_mid.output(), TypeLocation::FnReturn { is_constructor })
-        .with_context(|| format!("Error formatting function return type `{}`", sig_mid.output()))?
-        .into_tokens(&mut prereqs);
+    let actual_output_ty = if is_async {
+        get_async_future_output_ty(tcx, sig_mid.output())?
+    } else {
+        sig_mid.output()
+    };
+    let main_api_ret_type = if is_async {
+        let CcSnippet { tokens: cc_ret_ty, prereqs: ret_prereqs } =
+            db.format_ty_for_cc(actual_output_ty, TypeLocation::FnReturn { is_constructor })?;
+        prereqs += ret_prereqs;
+        prereqs.includes.insert(db.support_header("rs_std/dyn_erased_future.h"));
+        quote! { ::crubit::DynErasedFuture<#cc_ret_ty> }
+    } else {
+        db.format_ty_for_cc(actual_output_ty, TypeLocation::FnReturn { is_constructor })
+            .with_context(|| format!("Error formatting function return type `{actual_output_ty}`"))?
+            .into_tokens(&mut prereqs)
+    };
 
     let mut thunk_params = {
         let cpp_types = format_param_types_for_cc(db, sig_mid, has_self_param)?;
@@ -180,7 +194,13 @@ pub fn generate_thunk_decl<'tcx>(
     // TODO: b/ 459482188 - The order of this check must align with the order in `cc_return_value_from_c_abi`.
     // We should centralize this logic so that the order exists in a singular location used by both
     // places.
-    let thunk_ret_type = if is_constructor && is_bridged_layout_compat_type(db, sig_mid.output()) {
+    let thunk_ret_type = if is_async {
+        let cc_ret_ty = db
+            .format_ty_for_cc(actual_output_ty, TypeLocation::FnReturn { is_constructor })?
+            .tokens;
+        thunk_params.push(quote! { ::crubit::DynErasedFuture<#cc_ret_ty>* __ret_ptr });
+        quote! { void }
+    } else if is_constructor && is_bridged_layout_compat_type(db, sig_mid.output()) {
         thunk_params.push(quote! { #main_api_ret_type* __ret_ptr });
         quote! { void }
     } else if let Some(briging) = is_bridged_type(db, sig_mid.output())? {
@@ -215,14 +235,18 @@ pub fn generate_thunk_decl<'tcx>(
         attributes.push(quote! {[[noreturn]]});
     }
 
-    Ok(CcSnippet {
-        prereqs,
-        tokens: quote! {
+    let mut tokens = quote! {
+        extern "C" #(#attributes)* #thunk_ret_type #thunk_name ( #( #thunk_params ),* );
+    };
+    if !within_template {
+        tokens = quote! {
             namespace __crubit_internal {
-                extern "C" #(#attributes)* #thunk_ret_type #thunk_name ( #( #thunk_params ),* );
+                #tokens
             }
-        },
-    })
+        }
+    }
+
+    Ok(CcSnippet { prereqs, tokens })
 }
 
 /// Creates Rust code to convert a bridged type from a C ABI type to a Rust type.
@@ -562,6 +586,7 @@ pub fn generate_thunk_impl<'tcx>(
     thunk_name: &str,
     fully_qualified_fn_name: TokenStream,
     is_constructor: bool,
+    is_async: bool,
 ) -> Result<RsSnippet> {
     let tcx = db.tcx();
 
@@ -601,7 +626,20 @@ pub fn generate_thunk_impl<'tcx>(
     let output_is_bridged = is_bridged_type(db, sig.output())?;
     let thunk_return_type;
     let thunk_return_expression;
-    if output_is_bridged.is_none() && is_c_abi_compatible_by_value(tcx, sig.output()) {
+    if is_async {
+        let return_ptr_ident = format_ident!("__ret_ptr");
+        thunk_return_type = quote! { () };
+        thunk_params.push(quote! {
+            #return_ptr_ident: *mut ::dyn_erased_future::DynErasedFuture<'_>
+        });
+        thunk_return_expression = quote! {
+            // SAFETY: `__ret_ptr` points to a valid, uninitialized crubit::Slot.
+            ::core::ptr::write(
+                #return_ptr_ident,
+                ::dyn_erased_future::DynErasedFuture::new(#fully_qualified_fn_name( #( #fn_args ),* ))
+            );
+        };
+    } else if output_is_bridged.is_none() && is_c_abi_compatible_by_value(tcx, sig.output()) {
         // The output is not bridged and is C ABI compatible by-value, so we can just return
         // the result directly, and no out-param is needed.
         thunk_return_type = db.format_ty_for_rs(sig.output())?;
@@ -693,6 +731,7 @@ pub struct TraitThunks<'tcx> {
     pub rs_thunk_impls: RsSnippet,
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn generate_trait_thunks<'tcx>(
     db: &BindingsGenerator<'tcx>,
     trait_id: DefId,
@@ -702,6 +741,7 @@ pub fn generate_trait_thunks<'tcx>(
     def_id: Option<DefId>,
     rs_fully_qualified_name: TokenStream,
     is_constructor: bool,
+    within_template: bool,
 ) -> Result<TraitThunks<'tcx>> {
     let tcx = db.tcx();
     assert!(tcx.is_trait(trait_id));
@@ -819,12 +859,15 @@ pub fn generate_trait_thunks<'tcx>(
         let sig_mid = liberate_and_deanonymize_late_bound_regions(tcx, sig_mid, method.def_id);
 
         let thunk_name_cc_ident = format_cc_ident(db, &thunk_name)?;
+        let is_async = tcx.asyncness(method.def_id).is_async();
         cc_thunk_decls.add_assign(generate_thunk_decl(
             db,
             &sig_mid,
             &thunk_name_cc_ident,
             /*has_self_param=*/ method.is_method(),
             is_constructor,
+            within_template,
+            is_async,
         )?);
         method_name_to_cc_thunk_name.insert(method.name(), thunk_name_cc_ident);
 
@@ -881,6 +924,7 @@ pub fn generate_trait_thunks<'tcx>(
                     &thunk_name,
                     fully_qualified_fn_name,
                     is_constructor,
+                    is_async,
                 )?
             }
         };

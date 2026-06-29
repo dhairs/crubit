@@ -17,13 +17,19 @@
 #include "support/annotations_internal.h"
 #include "support/internal/slot.h"
 #include "support/rs_std/char.h"
+#include "support/rs_std/traits.h"
 
 #include <array>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
+#include <ostream>
+#include <string_view>
 #include <type_traits>
 #include <utility>
+
+#include "support/rs_std/rs_alloc.h"
+#include "support/rs_std/rs_core.h"
 
 namespace structs::abi_classification {
 
@@ -207,6 +213,58 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
 ::std::int32_t get_x(::structs::default_repr::Point p);
 
 }  // namespace structs::default_repr
+
+namespace structs::display {
+
+// CRUBIT_ANNOTATE: must_bind=
+struct CRUBIT_INTERNAL_RUST_TYPE(
+    ":: structs_golden :: display :: DisplayStruct") alignas(4)
+    [[clang::trivial_abi]] DisplayStruct final {
+ public:
+  // `structs_golden::display::DisplayStruct` doesn't implement the `Default`
+  // trait
+  DisplayStruct() = delete;
+
+  // No custom `Drop` impl and no custom "drop glue" required
+  ~DisplayStruct() = default;
+  DisplayStruct(DisplayStruct&&) = default;
+  DisplayStruct& operator=(DisplayStruct&&) = default;
+
+  // `structs_golden::display::DisplayStruct` doesn't implement the `Clone`
+  // trait
+  DisplayStruct(const DisplayStruct&) = delete;
+  DisplayStruct& operator=(const DisplayStruct&) = delete;
+  DisplayStruct(::crubit::UnsafeRelocateTag, DisplayStruct&& value) {
+    ::std::memcpy(this, &value, sizeof(value));
+  }
+  // AbslStringify and std::ostream support via std::fmt::Display
+  template <typename Sink, typename Str = rs::alloc::string::String>
+  friend void AbslStringify(Sink& sink, const DisplayStruct& self) {
+    crubit::Slot<Str> s;
+    __crubit_thunk_to_ustring(self, s.Get());
+    AbslStringify(sink, ::std::move(s).AssumeInitAndTakeValue().as_str());
+  }
+  template <typename Str = rs::alloc::string::String>
+  friend ::std::ostream& operator<<(::std::ostream& os,
+                                    const DisplayStruct& self) {
+    crubit::Slot<Str> s;
+    __crubit_thunk_to_ustring(self, s.Get());
+    return os << ::std::string_view(
+               ::std::move(s).AssumeInitAndTakeValue().as_str());
+  }
+
+  union {
+    ::std::int32_t value;
+  };
+
+ private:
+  static void __crubit_field_offset_assertions();
+};
+
+// CRUBIT_ANNOTATE: must_bind=
+::structs::display::DisplayStruct create(::std::int32_t value);
+
+}  // namespace structs::display
 
 namespace structs::dynamically_sized_type {
 
@@ -593,14 +651,11 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
   union {
     ::std::int32_t value;
   };
-  // Skipped bindings for field `zst1`: ZST fields are not supported
-  // (b/258259459)
+  // Field `zst1` omitted: C++ does not support zero-sized types.
 
-  // Skipped bindings for field `zst2`: ZST fields are not supported
-  // (b/258259459)
+  // Field `zst2` omitted: C++ does not support zero-sized types.
 
-  // Skipped bindings for field `zst3`: ZST fields are not supported
-  // (b/258259459)
+  // Field `zst3` omitted: C++ does not support zero-sized types.
  private:
   static void __crubit_field_offset_assertions();
 };
@@ -612,6 +667,32 @@ struct CRUBIT_INTERNAL_RUST_TYPE(
 ::std::int32_t get_value(::structs::zst_fields::ZstFields x);
 
 }  // namespace structs::zst_fields
+
+template <>
+struct rs_std::impl<::structs::display::DisplayStruct,
+                    ::rs::core::fmt::Display> {
+  static constexpr bool kIsImplemented = true;
+
+  // Error generating bindings for associated function
+  // `<structs_golden::display::DisplayStruct as std::fmt::Display>::fmt`
+  // defined at
+  // cc_bindings_from_rs/test/structs/structs.rs;l=410:
+  // Error formatting function return type `std::result::Result<(),
+  // std::fmt::Error>`: Generic types are not supported yet (b/259749095)
+};
+
+template <>
+struct rs_std::impl<::structs::interior_mutability::SomeStruct,
+                    ::rs::core::fmt::Debug> {
+  static constexpr bool kIsImplemented = true;
+
+  // Error generating bindings for associated function
+  // `<structs_golden::interior_mutability::SomeStruct as std::fmt::Debug>::fmt`
+  // defined at
+  // cc_bindings_from_rs/test/structs/structs.rs;l=358:
+  // Error formatting function return type `std::result::Result<(),
+  // std::fmt::Error>`: Generic types are not supported yet (b/259749095)
+};
 
 namespace structs::abi_classification {
 
@@ -809,6 +890,38 @@ inline ::std::int32_t get_x(::structs::default_repr::Point p) {
 }
 
 }  // namespace structs::default_repr
+
+namespace structs::display {
+
+static_assert(
+    sizeof(DisplayStruct) == 4,
+    "Verify that ADT layout didn't change since this header got generated");
+static_assert(
+    alignof(DisplayStruct) == 4,
+    "Verify that ADT layout didn't change since this header got generated");
+static_assert(::std::is_trivially_destructible_v<DisplayStruct>);
+static_assert(::std::is_trivially_move_constructible_v<
+              ::structs::display::DisplayStruct>);
+static_assert(
+    ::std::is_trivially_move_assignable_v<::structs::display::DisplayStruct>);
+extern "C" void __crubit_thunk_to_ustring(
+    ::structs::display::DisplayStruct const&,
+    ::rs::alloc::string::String* __ret_ptr);
+inline void DisplayStruct::__crubit_field_offset_assertions() {
+  static_assert(0 == offsetof(DisplayStruct, value));
+}
+namespace __crubit_internal {
+extern "C" void __crubit_thunk_create(
+    ::std::int32_t, ::structs::display::DisplayStruct* __ret_ptr);
+}
+inline ::structs::display::DisplayStruct create(::std::int32_t value) {
+  crubit::Slot<::structs::display::DisplayStruct> __return_value_ret_val_holder;
+  auto* __return_value_storage = __return_value_ret_val_holder.Get();
+  __crubit_internal::__crubit_thunk_create(value, __return_value_storage);
+  return ::std::move(__return_value_ret_val_holder).AssumeInitAndTakeValue();
+}
+
+}  // namespace structs::display
 
 namespace structs::interior_mutability {
 

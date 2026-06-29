@@ -9,6 +9,7 @@
 use arc_anyhow::{bail, ensure, Context, Error, Result};
 use code_gen_utils::make_rs_ident;
 use crubit_feature::CrubitFeature;
+use itertools::Itertools;
 use proc_macro2::{Ident, TokenStream};
 use quote::{quote, ToTokens};
 use serde::{Deserialize, Serialize};
@@ -90,6 +91,7 @@ pub fn make_ir_from_parts<CrubitFeatures>(
     top_level_item_ids: BTreeMap<BazelLabel, Vec<ItemId>>,
     crate_root_path: Option<Rc<str>>,
     crubit_features: BTreeMap<BazelLabel, CrubitFeatures>,
+    reexported_namespaces: Vec<Rc<str>>,
 ) -> IR
 where
     CrubitFeatures: Into<flagset::FlagSet<CrubitFeature>>,
@@ -106,10 +108,13 @@ where
                 (label, crubit_feature::SerializedCrubitFeatures(features.into()))
             })
             .collect(),
+        reexported_namespaces,
+        unstable_rust_features: vec![],
+        top_level_items: BTreeMap::new(),
     })
 }
 
-pub fn make_ir(flat_ir: FlatIR) -> IR {
+fn make_ir_impl(flat_ir: FlatIR) -> IR {
     let mut used_decl_ids = HashMap::new();
     for item in &flat_ir.items {
         if let Some(existing_decl) = used_decl_ids.insert(item.id(), item) {
@@ -185,6 +190,25 @@ pub fn make_ir(flat_ir: FlatIR) -> IR {
         reopened_namespace_id_to_idx,
         function_name_to_functions,
     }
+}
+
+// TODO(b/523265360): Implement tree-traversal equivalent of make_ir
+fn make_ir_from_tree(flat_ir: FlatIR) -> IR {
+    // For now, this is a no-op fallback to the flat IR logic.
+    make_ir_impl(flat_ir)
+}
+
+pub fn make_ir(flat_ir: FlatIR) -> IR {
+    let use_nested_ir = flat_ir
+        .crubit_features
+        .get(&flat_ir.current_target)
+        .is_some_and(|features| features.0.contains(CrubitFeature::UseNestedIr));
+
+    if use_nested_ir {
+        return make_ir_from_tree(flat_ir);
+    }
+
+    make_ir_impl(flat_ir)
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Clone, Deserialize)]
@@ -324,6 +348,18 @@ macro_rules! define_typed_tokens_enum {
                     $(
                         Self::$Variant => quote! { $($cpp_spelling)+ }.to_tokens(tokens),
                     )+
+                }
+            }
+        }
+
+        impl std::str::FromStr for $Type {
+            type Err = ::arc_anyhow::Error;
+            fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
+                match s {
+                    $(
+                        stringify!($($cpp_spelling)+) => Ok($Type::$Variant),
+                    )+
+                    _ => ::arc_anyhow::bail!("Unknown {} spelling: {:?}", stringify!($Type), s),
                 }
             }
         }
@@ -735,6 +771,7 @@ pub enum UnqualifiedIdentifier {
     Operator(Operator),
     Constructor,
     Destructor,
+    ConversionOperator,
 }
 
 impl UnqualifiedIdentifier {
@@ -768,6 +805,7 @@ impl Debug for UnqualifiedIdentifier {
             UnqualifiedIdentifier::Operator(op) => Debug::fmt(op, f),
             UnqualifiedIdentifier::Constructor => f.write_str("Constructor"),
             UnqualifiedIdentifier::Destructor => f.write_str("Destructor"),
+            UnqualifiedIdentifier::ConversionOperator => f.write_str("ConversionOperator"),
         }
     }
 }
@@ -959,6 +997,7 @@ pub struct Field {
     // TODO(kinuko): Consider removing this, it is a duplicate of the same information
     // in `Record`.
     pub is_inheritable: bool,
+    pub is_mutable: bool,
 
     /// The `[[deprecated("...")]]` string. If `[[deprecated]]`, then the empty
     /// string is used.
@@ -1226,6 +1265,7 @@ pub struct Record {
     pub must_bind: bool,
     /// Whether this type has an overload of `operator delete`.
     pub overloads_operator_delete: bool,
+    pub has_private_or_deleted_operator_delete: bool,
     // Lifetime variable names bound by this record.
     #[serde(default)]
     pub lifetime_inputs: Vec<Rc<str>>,
@@ -1237,6 +1277,10 @@ pub struct Record {
     /// Whether this type is annotated as thread-safe (CRUBIT_THREAD_SAFE).
     #[serde(default)]
     pub is_thread_safe: bool,
+    #[serde(default)]
+    pub is_explicit_class_template_instantiation_definition: bool,
+    #[serde(default)]
+    pub children: Vec<Item>,
 }
 
 impl GenericItem for Record {
@@ -1375,6 +1419,9 @@ impl Record {
                     && self.destructor == SpecialMemberFunc::Trivial
                     && self.check_by_value().is_ok()
                     && self.trait_derives.clone != TraitImplPolarity::Negative
+                    // Mutable fields become `Cell<T>` in Rust, which prevents
+                    // the struct from deriving `Copy`.
+                    && self.fields.iter().all(|f| !f.is_mutable)
             }
         }
     }
@@ -1845,6 +1892,8 @@ pub struct Namespace {
     pub deprecated: Option<Rc<str>>,
     #[serde(default)]
     pub doc_comment: Option<Rc<str>>,
+    #[serde(default)]
+    pub children: Vec<Item>,
 }
 
 impl GenericItem for Namespace {
@@ -2239,6 +2288,12 @@ pub struct FlatIR {
     pub crate_root_path: Option<Rc<str>>,
     #[serde(default)]
     pub crubit_features: BTreeMap<BazelLabel, crubit_feature::SerializedCrubitFeatures>,
+    #[serde(default)]
+    pub unstable_rust_features: Vec<String>,
+    #[serde(default)]
+    pub reexported_namespaces: Vec<Rc<str>>,
+    #[serde(default)]
+    pub top_level_items: BTreeMap<BazelLabel, Vec<Item>>,
 }
 
 /// A custom debug impl that wraps the HashMap in rustfmt-friendly notation.
@@ -2266,6 +2321,10 @@ impl Debug for FlatIR {
             top_level_item_ids,
             crate_root_path,
             crubit_features,
+            unstable_rust_features,
+            reexported_namespaces,
+            // TODO(rrijadi): Use `top_level_items` in `Debug` impl.
+            top_level_items: _,
         } = self;
         f.debug_struct("FlatIR")
             .field("public_headers", public_headers)
@@ -2274,6 +2333,8 @@ impl Debug for FlatIR {
             .field("top_level_item_ids", &DebugBTreeMap(top_level_item_ids))
             .field("crate_root_path", crate_root_path)
             .field("crubit_features", &DebugBTreeMap(crubit_features))
+            .field("unstable_rust_features", unstable_rust_features)
+            .field("reexported_namespaces", reexported_namespaces)
             .finish()
     }
 }
@@ -2295,6 +2356,10 @@ pub struct IR {
 impl IR {
     pub fn flat_ir(&self) -> &FlatIR {
         &self.flat_ir
+    }
+
+    pub fn unstable_rust_features(&self) -> &[String] {
+        &self.flat_ir.unstable_rust_features
     }
 
     pub fn item_id_to_item_idx(&self) -> &HashMap<ItemId, usize> {
@@ -2319,6 +2384,10 @@ impl IR {
 
     pub fn items_mut(&mut self) -> impl Iterator<Item = &mut Item> {
         self.flat_ir.items.iter_mut()
+    }
+
+    pub fn reexported_namespaces(&self) -> &[Rc<str>] {
+        &self.flat_ir.reexported_namespaces
     }
 
     pub fn public_headers(&self) -> impl Iterator<Item = &HeaderName> {
@@ -2491,7 +2560,7 @@ pub fn rs_imported_crate_name(owning_target: &BazelLabel, ir: &IR) -> Option<Ide
 #[cfg(test)]
 mod tests {
     use super::*;
-    use googletest::prelude::*;
+    use googletest::gtest;
 
     #[gtest]
     fn test_identifier_debug_print() {
@@ -2527,6 +2596,9 @@ mod tests {
             items: vec![],
             crate_root_path: None,
             crubit_features: Default::default(),
+            unstable_rust_features: vec![],
+            reexported_namespaces: vec![],
+            top_level_items: BTreeMap::new(),
         };
         assert_eq!(ir.flat_ir, expected);
     }

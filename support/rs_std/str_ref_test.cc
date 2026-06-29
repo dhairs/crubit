@@ -8,6 +8,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <sstream>
 #include <string>
 #include <type_traits>
 
@@ -57,8 +58,6 @@ static_assert(std::is_standard_layout_v<StrRef>);
 static_assert(std::is_constructible_v<StrRef, absl::string_view>);
 static_assert(std::is_constructible_v<StrRef, std::string_view>);
 static_assert(std::is_constructible_v<StrRef, const char*>);
-static_assert(std::is_constructible_v<StrRef, std::string&>);
-static_assert(std::is_constructible_v<StrRef, const std::string&>);
 
 TEST(StrTest, Comparison) {
   static constexpr absl::string_view kStr = "12345";
@@ -129,6 +128,13 @@ TEST(StrTest, StrCat) {
   EXPECT_EQ(absl::StrCat(kStrRef), kStr);
 }
 
+TEST(StrTest, OStream) {
+  static constexpr StrRef kStrRef = "12345";
+  std::ostringstream os;
+  os << kStrRef;
+  EXPECT_EQ(os.str(), "12345");
+}
+
 TEST(StrTest, FromUtf8OnNonUtf8ReturnsNullopt) {
   // Uncomment to see compiler error.
   // static constexpr StrRef kStrRef = "a\x80";
@@ -146,6 +152,12 @@ TEST(ImplicitConversionTest, FromConstCharPtr) {
   static constexpr const char* kConstCharPtr = "12";
   static constexpr StrRef kStrRef = kConstCharPtr;
   EXPECT_EQ(kStrRef, "12");
+}
+
+TEST(ImplicitConversionTest, ToAbslStringView) {
+  rs_std::StrRef str = "hello";
+  absl::string_view view = str;
+  EXPECT_EQ(view, "hello");
 }
 
 void Fuzzer(std::string data) {

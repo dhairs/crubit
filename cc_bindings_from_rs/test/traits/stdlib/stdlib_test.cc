@@ -15,13 +15,16 @@
 #include "gtest/gtest.h"
 #include "support/rs_std/iterator_adapter.h"
 #include "support/rs_std/rs_core.h"
+#include "support/rs_std/rs_std.h"
 
 namespace crubit {
 namespace {
 
-TEST(StdlibTraitTest, IteratorItem) {
-  using impl = rs::core::iter::Iterator::impl<stdlib::MyStruct>;
-  static_assert(std::is_same_v<impl::Item, std::int32_t>);
+TEST(StdlibTraitTest, Default) {
+  auto my_struct = stdlib::MyStruct::new_(42);
+  auto str =
+      rs::std::string::ToString::impl<stdlib::MyStruct>::to_string(my_struct);
+  EXPECT_EQ(str.as_str(), "MyStruct(42)");
 }
 
 TEST(StdlibTraitTest, IteratorNext) {
@@ -81,18 +84,15 @@ static_assert(std::input_iterator<rs::IteratorAdapter<stdlib::RefIterator>>);
 using RefIterator = rs::IteratorAdapter<stdlib::RefIterator>;
 using RefTraits = std::iterator_traits<RefIterator>;
 static_assert(std::is_same_v<typename RefTraits::value_type, const int32_t*>);
-static_assert(
-    std::is_same_v<typename RefTraits::reference, const int32_t* const&>);
+static_assert(std::is_same_v<typename RefTraits::reference, const int32_t*&>);
 
 TEST(StdlibTraitTest, RefIteratorAdapter) {
   std::vector<int32_t> data = {10, 20, 30};
   auto s = stdlib::RefIterator::new_(rs_std::SliceRef<const int32_t>(data));
   std::vector<int32_t> v;
-  std::ranges::copy(
-      std::ranges::subrange(rs::IteratorAdapter(std::move(s)),
-                            rs::IteratorEnd{}) |
-          std::views::transform([](const int32_t* p) { return *p; }),
-      std::back_inserter(v));
+  for (const int32_t*& ele : s) {
+    v.push_back(*ele);
+  }
   EXPECT_THAT(v, testing::ElementsAre(10, 20, 30));
 }
 

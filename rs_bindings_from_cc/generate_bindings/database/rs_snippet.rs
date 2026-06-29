@@ -367,6 +367,9 @@ impl UniformReprTemplateType {
                 ensure!(element_type.is_destructible(),
                     "`{}` can't be used in a Rust std::unique_ptr<T> because it has a deleted or non-public destructor",
                     element_type.display(db));
+                ensure!(!element_type.has_private_or_deleted_operator_delete(),
+                    "`{}` can't be used in a Rust std::unique_ptr<T> because it has a deleted or non-public operator delete",
+                    element_type.display(db));
                 Ok(Some(Rc::new(UniformReprTemplateType::StdUniquePtr { element_type })))
             }
             Some(TemplateSpecializationKind::StdVector { raw_element_type }) => {
@@ -599,7 +602,15 @@ impl ToTokens for FnTrait {
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
 pub struct Callable {
     pub backing_type: BackingType,
-    pub fn_trait: FnTrait,
+    /// The trait bound that should be used when spelling out the C++ function type.
+    pub cpp_fn_trait: FnTrait,
+    /// The trait bound that should be used when spelling out the Rust function type.
+    ///
+    /// This may differ from `cpp_fn_trait` in cases where we need to convert a C++ non-const
+    /// qualified function into a Rust `Fn`. This is because C++ does not maintain the same safety
+    /// guarantees that Rust FnMut needs to be called, e.g. an exclusive mutable reference. C++
+    /// allows for non-exclusive calls to mutable function objects.
+    pub rust_fn_trait: FnTrait,
     pub return_type: Rc<RsTypeKind>,
     pub param_types: Rc<[RsTypeKind]>,
     pub invoker_ident: Ident,
@@ -622,7 +633,7 @@ impl Callable {
         let rust_return_type_fragment = self.rust_return_type_fragment(db);
         let param_type_tokens =
             self.param_types.iter().map(|param_ty| param_ty.to_token_stream(db));
-        let fn_trait = self.fn_trait;
+        let fn_trait = self.rust_fn_trait;
         quote! {
             dyn #fn_trait(#(#param_type_tokens),*) #rust_return_type_fragment + ::core::marker::Send + ::core::marker::Sync + 'static
         }
@@ -741,9 +752,20 @@ impl BridgeRsTypeKind {
                             ),
                         },
                     },
-                    fn_trait: match fn_trait {
+                    cpp_fn_trait: match fn_trait {
                         ir::FnTrait::Fn => FnTrait::Fn,
                         ir::FnTrait::FnMut => FnTrait::FnMut,
+                        ir::FnTrait::FnOnce => FnTrait::FnOnce,
+                    },
+                    rust_fn_trait: match fn_trait {
+                        ir::FnTrait::Fn => FnTrait::Fn,
+                        ir::FnTrait::FnMut => {
+                            // C++ doesn't require exclusive access to invoke a mutable function,
+                            // so to be safe we use the more conservative `Fn` trait in Rust, which
+                            // because we mark it with Send + Sync, is safe to call anywhere in
+                            // parallel.
+                            FnTrait::Fn
+                        }
                         ir::FnTrait::FnOnce => FnTrait::FnOnce,
                     },
                     return_type: Rc::new(db.rs_type_kind(return_type.clone())?),
@@ -838,7 +860,9 @@ impl RsTypeKind {
                 RsTypeKind::new_record(db, record, options, template_args, lifetimes)
             }
             Item::Enum(enum_) => RsTypeKind::new_enum(db, enum_),
-            Item::TypeAlias(type_alias) => RsTypeKind::new_type_alias(db, type_alias, lifetimes),
+            Item::TypeAlias(type_alias) => {
+                RsTypeKind::new_type_alias(db, type_alias, options, lifetimes)
+            }
             Item::ExistingRustType(existing_rust_type) => {
                 RsTypeKind::new_existing_rust_type(db, existing_rust_type)
             }
@@ -849,10 +873,17 @@ impl RsTypeKind {
     fn new_type_alias(
         db: &BindingsGenerator,
         type_alias: Rc<TypeAlias>,
+        options: &LifetimeOptions,
         lifetimes: &[Lifetime],
     ) -> Result<Self> {
         let ir = db.ir();
-        let underlying_type = db.rs_type_kind(type_alias.underlying_type.clone())?;
+        let mut underlying_cc_type = type_alias.underlying_type.clone();
+        if underlying_cc_type.explicit_lifetimes.is_empty() {
+            underlying_cc_type.explicit_lifetimes =
+                lifetimes.iter().map(|lt| lt.0.clone()).collect();
+        }
+        let underlying_type =
+            db.rs_type_kind_with_lifetime_elision(underlying_cc_type, *options)?;
         // Note: we don't need to call `.unalias()` for these checks, because we already checked
         // this, recursively.
 
@@ -1640,6 +1671,14 @@ impl RsTypeKind {
         }
     }
 
+    pub fn has_private_or_deleted_operator_delete(&self) -> bool {
+        match self.unalias() {
+            RsTypeKind::Record { record, .. } => record.has_private_or_deleted_operator_delete,
+            RsTypeKind::IncompleteRecord { .. } => true,
+            _ => false,
+        }
+    }
+
     /// Returns the passing convention for this `RsTypeKind`.
     ///
     /// This is used to determine how the type should be passed across the FFI boundary.
@@ -2160,7 +2199,8 @@ mod tests {
     use super::*;
     use arc_anyhow::Result;
     use error_report::anyhow;
-    use googletest::prelude::*;
+    use googletest::matchers::eq;
+    use googletest::{expect_that, gtest};
     use token_stream_matchers::assert_rs_matches;
 
     fn make_existing_rust_type(name: Rc<str>, is_same_abi: bool) -> RsTypeKind {

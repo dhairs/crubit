@@ -43,14 +43,14 @@ pub fn has_bindings(db: &BindingsGenerator, item: Item) -> Result<BindingsInfo, 
         }
 
         if let Item::Record(parent_record) = parent {
-            if item.is_type_definition() {
+            if item.is_type_definition()
                 // If we have an ancestor that is a template specialization, we can't generate bindings.
                 // The parent check ensures that all ancestors are checked as well.
-                if parent_record.template_specialization.is_some() {
-                    return Err(NoBindingsReason::Unsupported(anyhow!(
-                        "b/485949049: type definitions nested inside templated records are not yet supported"
-                    )));
-                }
+                && parent_record.template_specialization.is_some()
+            {
+                return Err(NoBindingsReason::Unsupported(anyhow!(
+                    "b/485949049: type definitions nested inside templated records are not yet supported"
+                )));
             }
 
             if item.place_in_nested_module_if_nested_in_record() {
@@ -222,6 +222,14 @@ fn func_has_bindings(
     let target = &func.owning_target;
     let enabled_features = ir.target_crubit_features(target);
 
+    if matches!(func.cc_name, ir::UnqualifiedIdentifier::ConversionOperator)
+        && !enabled_features.contains(CrubitFeature::AssumeThisLifetimes)
+    {
+        return Err(NoBindingsReason::Unsupported(anyhow!(
+            "Conversion operators are only supported when AssumeThisLifetimes is enabled"
+        )));
+    }
+
     let mut missing_features = vec![];
 
     if func.is_member_or_descendant_of_class_template
@@ -317,22 +325,23 @@ fn intersect_target_restrictions(
     old_restriction: &mut Option<TargetRestriction>,
     new_restriction: Option<TargetRestriction>,
 ) -> Result<()> {
-    if let (Some(old_restriction), Some(new_restriction)) = (&old_restriction, &new_restriction) {
-        let old_target = &old_restriction.target;
-        let new_target = &new_restriction.target;
-        if old_target != new_target {
-            let original_type = original_type.display(db);
-            let old_type = old_restriction.exemplar_type.display(db);
-            let new_type = new_restriction.exemplar_type.display(db);
-            // The top-line error message is built in the caller, with these as
-            // a list of causes.
-            return Err(anyhow!(
-                "`{original_type}` depends on `pub(crate)` types from other targets:\n\
-                  {old_type} is `pub(crate)` in {old_target}\n\
-                  {new_type} is `pub(crate)` in {new_target}\n\
-                  See http://crubit.rs/errors/visibility"
-            ));
-        }
+    if let Some(old_restriction) = old_restriction.as_ref()
+        && let Some(new_restriction) = new_restriction.as_ref()
+        && let old_target = &old_restriction.target
+        && let new_target = &new_restriction.target
+        && old_target != new_target
+    {
+        let original_type = original_type.display(db);
+        let old_type = old_restriction.exemplar_type.display(db);
+        let new_type = new_restriction.exemplar_type.display(db);
+        // The top-line error message is built in the caller, with these as
+        // a list of causes.
+        return Err(anyhow!(
+            "`{original_type}` depends on `pub(crate)` types from other targets:\n\
+              {old_type} is `pub(crate)` in {old_target}\n\
+              {new_type} is `pub(crate)` in {new_target}\n\
+              See http://crubit.rs/errors/visibility"
+        ));
     }
     if old_restriction.is_none() {
         *old_restriction = new_restriction;
