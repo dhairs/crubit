@@ -10,12 +10,12 @@ index 1a3c4ebf..0a1c2f2c 100644
  """Rust rule implementations"""
 
 -load("@bazel_skylib//lib:paths.bzl", "paths")
+load(
+    "@@//rs_bindings_from_cc/bazel_support:rust_bindings_from_cc_aspect.bzl",
+    "rust_bindings_from_cc_aspect",
+)
 +load(
-+    "@@//rs_bindings_from_cc/bazel_support:rust_bindings_from_cc_aspect.bzl",
-+    "rust_bindings_from_cc_aspect",
-+)
-+load(
-+    "@@//bazel/rules_rust:collect_deps.bzl",
++    "@rules_crubit//bazel/rules_rust:collect_deps.bzl",
 +    "collect_transformed_deps",
 +    "get_cc_import_namespace_variable",
 +    "get_namespace_json_files",

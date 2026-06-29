@@ -1,5 +1,6 @@
 load("@rules_cc//cc:cc_binary.bzl", "cc_binary")
 load("@rules_rust//rust:rust_library.bzl", "rust_library")
+load("@rules_rust//rust:rust_static_library.bzl", "rust_static_library")
 load(
     "@rules_crubit//cc_bindings_from_rs/bazel_support:cc_bindings_from_rust_rule.bzl",
     "cc_bindings_from_rust",
@@ -8,7 +9,17 @@ load(
 cc_binary(
     name = "hello-world",
     srcs = ["hello-world.cpp"],
-    deps = [":lib_cc_api"],
+    deps = [
+      ":lib_cc_api",
+      ":lib_static",
+    ],
+)
+
+# We need a rust_static_library in the dependency graph of the cc_binary
+# to ensure that the Rust allocator shims and runtime are linked in.
+rust_static_library(
+  name = "lib_static",
+  srcs = ["lib.rs"],
 )
 
 rust_library(
@@ -20,4 +31,3 @@ cc_bindings_from_rust(
     name = "lib_cc_api",
     crate = ":lib",
 )
-

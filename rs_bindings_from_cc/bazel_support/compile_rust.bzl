@@ -67,11 +67,13 @@ def compile_rust(ctx, attr, src, extra_srcs, deps, crate_name, include_coverage,
 
     output_hash = repr(hash(src.path))
 
+    extension = ".rlib"
+
     lib_name = "{prefix}{name}-{lib_hash}{extension}".format(
         prefix = "lib",
         name = crate_name,
         lib_hash = output_hash,
-        extension = ".rlib",
+        extension = extension,
     )
 
     rmeta_name = "{prefix}{name}-{lib_hash}{extension}".format(
@@ -113,7 +115,7 @@ def compile_rust(ctx, attr, src, extra_srcs, deps, crate_name, include_coverage,
             aliases = aliases,
             output = lib,
             metadata = rmeta,
-            edition = "2021",
+            edition = "2024",
             is_test = False,
             rustc_env = {},
             compile_data = depset([]),
