@@ -554,12 +554,6 @@ private_common_attrs = {
             "//support/rs_std:slice_ref",
             "//support/rs_std:str_ref",
             "//support:bridge_cpp",
-<<<<<<< HEAD
-            "//support/rs_std:traits",
-            "//support/rs_std:option",
-            "//support/rs_std:result",
-            "//support/rs_std:tuple",
-=======
             "//support/public:traits",
             "//support/public:option",
             "//support/public:result",
@@ -567,7 +561,6 @@ private_common_attrs = {
             "//support/public:vec",
             "//support/public:iterator_adapter",
             "//support/rs_std:dyn_erased_future_cc",
->>>>>>> abdbdbd1c032491d0988d14aa5e14d539bd5da2e
         ],
     ),
     "_process_wrapper": attr.label(
