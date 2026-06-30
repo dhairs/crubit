@@ -19,7 +19,7 @@ cc_library(
     aspect_hints = ["//features:experimental"],
     compatible_with = ["//buildenv/target:non_prod"],
     tags = [
-        "alt_dep=//support/public:char",
+        "alt_dep=//support/rs_std:char",
         "avoid_dep",
     ],
     visibility = ["//visibility:public"],
@@ -76,7 +76,6 @@ cc_library(
     compatible_with = ["//buildenv/target:non_prod"],
     visibility = [
         "//:__subpackages__",
-        "//google_internal/release:crubit_support_lib_visibility",
     ],
 )
 
@@ -86,7 +85,6 @@ rust_library(
     compatible_with = ["//buildenv/target:non_prod"],
     visibility = [
         "//:__subpackages__",
-        "//google_internal/release:crubit_support_lib_visibility",
     ],
 )
 
@@ -109,7 +107,6 @@ rust_library(
     ],
     visibility = [
         "//:__subpackages__",
-        "//google_internal/release:crubit_support_lib_visibility",
     ],
     deps = [
         ":erased_future",
@@ -122,7 +119,6 @@ cc_library(
     compatible_with = ["//buildenv/target:non_prod"],
     visibility = [
         "//:__subpackages__",
-        "//google_internal/release:crubit_support_lib_visibility",
     ],
     deps = [":waker"],
 )
@@ -134,7 +130,7 @@ cc_library(
     aspect_hints = ["//features:experimental"],
     compatible_with = ["//buildenv/target:non_prod"],
     tags = [
-        "alt_dep=//support/public:slice_ref",
+        "alt_dep=//support/rs_std:slice_ref",
         "avoid_dep",
     ],
     visibility = [
@@ -170,7 +166,7 @@ cc_library(
     aspect_hints = ["//features:experimental"],
     compatible_with = ["//buildenv/target:non_prod"],
     tags = [
-        "alt_dep=//support/public:str_ref",
+        "alt_dep=//support/rs_std:str_ref",
         "avoid_dep",
     ],
     visibility = [
@@ -221,7 +217,7 @@ cc_library(
     ],
     compatible_with = ["//buildenv/target:non_prod"],
     tags = [
-        "alt_dep=//support/public:dyn_callable",
+        "alt_dep=//support/rs_std:dyn_callable",
         "avoid_dep",
     ],
     visibility = ["//visibility:public"],
@@ -250,7 +246,7 @@ cc_library(
     aspect_hints = ["//features:experimental"],
     compatible_with = ["//buildenv/target:non_prod"],
     tags = [
-        "alt_dep=//support/public:traits",
+        "alt_dep=//support/rs_std:traits",
         "avoid_dep",
     ],
     visibility = [
@@ -265,7 +261,7 @@ cc_library(
     aspect_hints = ["//features:experimental"],
     compatible_with = ["//buildenv/target:non_prod"],
     tags = [
-        "alt_dep=//support/public:iterator_adapter",
+        "alt_dep=//support/rs_std:iterator_adapter",
         "avoid_dep",
     ],
     visibility = [
@@ -292,7 +288,7 @@ cc_library(
     aspect_hints = ["//features:experimental"],
     compatible_with = ["//buildenv/target:non_prod"],
     tags = [
-        "alt_dep=//support/public:option",
+        "alt_dep=//support/rs_std:option",
         "avoid_dep",
     ],
     visibility = [
@@ -307,7 +303,7 @@ cc_library(
     aspect_hints = ["//features:experimental"],
     compatible_with = ["//buildenv/target:non_prod"],
     tags = [
-        "alt_dep=//support/public:result",
+        "alt_dep=//support/rs_std:result",
         "avoid_dep",
     ],
     visibility = [
@@ -322,7 +318,7 @@ cc_library(
     aspect_hints = ["//features:experimental"],
     compatible_with = ["//buildenv/target:non_prod"],
     tags = [
-        "alt_dep=//support/public:vec",
+        "alt_dep=//support/rs_std:vec",
         "avoid_dep",
     ],
     visibility = [
