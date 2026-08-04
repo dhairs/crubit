@@ -31,7 +31,6 @@ set(CRUBIT_SUBDIRS
 )
 
 include_directories(${CMAKE_CURRENT_SOURCE_DIR})
-
 set(ALL_TARGETS "")
 foreach(subdir IN LISTS CRUBIT_SUBDIRS)
   add_subdirectory(${subdir})
